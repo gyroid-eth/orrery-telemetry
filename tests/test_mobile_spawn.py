@@ -177,6 +177,25 @@ def local_catalog():
     }
 
 
+@pytest.mark.parametrize('mode', ['off', 'temporary', 'personal'])
+def test_mobile_receipt_forwards_only_modes_offered_for_that_harness(mode):
+    source = {**local_catalog(), 'browser_modes': {'hermes': ['off', 'temporary', 'personal'], 'dsh': ['off']}}
+    submitted = []
+    def launch(values):
+        submitted.append(values)
+        return {'ok': True, 'child_name': 'FixtureCurie'}
+    store = MobileSpawn(lambda:source, launch, lambda _: {})
+    catalog = store.catalog('a'*32, configurable=True)
+    value = payload(catalog)
+    value.pop('browser')
+    value.update(harness='hermes', effort=None, browser_mode=mode)
+    with pytest.raises(relay.mobile_spawn.SpawnError, match='invalid_launch'):
+        store.launch('a'*32, {**value, 'harness':'dsh', 'browser_mode':'personal'})
+    assert store.launch('a'*32, value)['state'] == 'ready'
+    assert submitted[0]['tools'] == {'mcp':['cua-driver'],'browser_mode':mode}
+    assert 'base' not in submitted[0]
+
+
 @pytest.mark.parametrize('harness', ['dsh', 'hermes'])
 @pytest.mark.parametrize('directory,desired,expected', [
     (0, None, ['cua-driver']),

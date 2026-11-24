@@ -12,6 +12,22 @@
   const modelName = $('spawn-model-name'), effortMark = $('spawn-model-effort');
   const computer = $('spawn-computer'), browser = $('spawn-browser');
   const browserTool = browser.closest('.spawn-tool');
+  const browserMenu = $('spawn-browser-menu');
+  const browserLabels = {off:'Off', temporary:'Temporary Chrome', personal:'My Chrome'};
+  let browserMode = 'off';
+  const browserChoices = Object.entries(browserLabels).map(([mode, label]) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.onclick = () => {
+      browserMode = mode;
+      syncBrowser(chosenRoute());
+      browserMenu.hidePopover();
+      browser.focus({preventScroll:true});
+    };
+    browserMenu.append(button);
+    return [mode, button];
+  });
   const mobileControls = window.OrrerySpawnControls;
   const selects = new Map([
     [harness, mobileControls?.mountDropdown(harness, {inline:true})],
@@ -82,6 +98,7 @@
     if (view === 'editor') {
       canReview();
     } else {
+      if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
       if (settings.open) settings.close();
       for (const control of selects.values()) control?.close();
       dismissToolHelp();
@@ -203,7 +220,42 @@
       (!['dsh', 'hermes'].includes(next.key) || catalog.directories[Number(directory.value)]?.native_browser === true);
   }
 
+  function browserModes(next = chosenRoute()) {
+    return catalog?.configurable && Array.isArray(next?.browser_modes) ? next.browser_modes : null;
+  }
+
   function syncBrowser(next, reset = false) {
+    const modes = browserModes(next);
+    if (modes) {
+      if (reset || !modes.includes(browserMode)) browserMode = modes.includes('personal') ? 'personal' : 'off';
+      browserTool.hidden = false;
+      browser.dataset.browserMode = browserMode;
+      browser.removeAttribute('role');
+      browser.removeAttribute('aria-checked');
+      browser.removeAttribute('aria-describedby');
+      browser.setAttribute('aria-controls', browserMenu.id);
+      browser.setAttribute('aria-expanded', String(browserMenu.matches(':popover-open')));
+      browser.setAttribute('aria-disabled', String(!modes.length));
+      const extra = next.launch_blocked ? 'Antigravity needs a parent agent and declared resources.'
+        : !modes.length ? 'Browser modes are unavailable for this harness.' : '';
+      browser.title = extra || 'Browser: ' + browserLabels[browserMode]
+        + (modes.length < browserChoices.length ? '. Other modes need a compatible Chrome setup.' : '');
+      browser.setAttribute('aria-label', browser.title);
+      for (const [mode, button] of browserChoices) {
+        button.hidden = !modes.includes(mode);
+        button.setAttribute('aria-pressed', String(mode === browserMode));
+      }
+      if (!modes.length && browserMenu.matches(':popover-open')) browserMenu.hidePopover();
+      return;
+    }
+    if ('browserMode' in browser.dataset) {
+      delete browser.dataset.browserMode;
+      browser.setAttribute('role', 'switch');
+      browser.setAttribute('aria-label', 'Browser');
+      browser.setAttribute('aria-describedby', 'spawn-browser-help');
+      for (const attr of ['aria-expanded', 'aria-controls', 'aria-disabled', 'title']) browser.removeAttribute(attr);
+      reset = true;
+    }
     const available = Boolean(browserAvailable(next));
     if (reset || browserTool.hidden === available) {
       browser.setAttribute('aria-checked', String(available && next.key !== 'dsh'));
@@ -399,11 +451,13 @@
     const selectedDirectory = catalog.directories[Number(directory.value)];
     const checked = control => control.getAttribute('aria-checked') === 'true';
     const canUseBrowser = browserAvailable(route);
+    const modes = browserModes(route);
     selection = {
       catalog:catalog.catalog, model:modelIndex, harness:harness.value, directory:Number(directory.value),
       task:task.value.trim(), role:catalog.configurable ? role.value.trim() : '',
       effort:effort.value || null, computer:catalog.configurable && checked(computer),
-      ...(canUseBrowser || !catalog.configurable ? {browser:Boolean(canUseBrowser) && checked(browser)} : {}),
+      ...(modes ? (modes.includes(browserMode) ? {browser_mode:browserMode} : {})
+        : canUseBrowser || !catalog.configurable ? {browser:Boolean(canUseBrowser) && checked(browser)} : {}),
     };
     const item = selectedModel(), source = modelSource(item);
     const name = modelLabel(item) + (source ? ' on ' + source : '');
@@ -415,7 +469,8 @@
     if (selection.role) labels.push(summaryValue('Role', 'agents', selection.role));
     if (catalog.configurable) {
       labels.push(summaryValue('Computer use', 'launch-computer', selection.computer ? 'On' : 'Off'));
-      if (canUseBrowser) labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));
+      if (selection.browser_mode) labels.push(summaryValue('Browser', 'launch-browser', browserLabels[selection.browser_mode]));
+      else if (!modes && canUseBrowser) labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));
     }
     $('spawn-summary').replaceChildren(...labels);
     $('spawn-task-copy').textContent = selection.task;
@@ -458,6 +513,7 @@
   };
   $('spawn-close').onclick = () => sheet.close();
   sheet.addEventListener('close', () => {
+    if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
     if (settings.open) settings.close();
     catalogRequest?.abort();
     clearTimeout(timer);
@@ -552,11 +608,25 @@
       if (event.pointerType === 'mouse') delete tool.dataset.hint;
     });
     control.onclick = event => {
+      if (control === browser && browserModes()) {
+        if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
+        else if (control.getAttribute('aria-disabled') !== 'true') {
+          browserMenu.showPopover({source:control});
+          const anchor = browser.getBoundingClientRect(), bounds = browserMenu.getBoundingClientRect();
+          browserMenu.style.left = Math.max(12, Math.min(anchor.left, innerWidth - bounds.width - 12)) + 'px';
+          browserMenu.style.top = Math.max(12, anchor.top - bounds.height - 6) + 'px';
+          browserMenu.querySelector('[aria-pressed=true]:not([hidden])')?.focus({preventScroll:true});
+        }
+        return;
+      }
       control.setAttribute('aria-checked', String(control.getAttribute('aria-checked') !== 'true'));
       dismissToolHelp();
       if (event.pointerType === 'touch' || matchMedia('(hover: none)').matches) tool.dataset.hint = 'shown';
     };
   }
+  browserMenu.addEventListener('toggle', () => {
+    if (browserModes()) browser.setAttribute('aria-expanded', String(browserMenu.matches(':popover-open')));
+  });
   modelSearch.oninput = renderModels;
   harness.onchange = updateRoute;
   directory.onchange = () => syncBrowser(chosenRoute());

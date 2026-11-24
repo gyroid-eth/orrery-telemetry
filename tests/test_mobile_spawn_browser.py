@@ -6,9 +6,9 @@ from mobile_reader_browser import phone  # noqa: F401
 from test_mobile_spawn import local_catalog
 
 
-def open_local_editor(phone):
+def open_local_editor(phone, source=local_catalog):
     _, js, wait, state = phone
-    state['spawn_catalog'] = MobileSpawn(lambda: local_catalog(), None, None).catalog('fixture', configurable=True)
+    state['spawn_catalog'] = MobileSpawn(source, None, None).catalog('fixture', configurable=True)
     js("OrreryMobileTerminal.close();document.querySelector('#mobile-new-agent').click()")
     wait("!document.querySelector('#spawn-editor').hidden")
     js("""document.querySelector('#spawn-model-chip').click();
@@ -48,3 +48,22 @@ def test_local_tool_selection_and_launch_failure(phone, reason, message):
     js("document.querySelector('#spawn-result button').click()")
     wait("!document.querySelector('#spawn-editor').hidden")
     assert js("document.querySelector('#spawn-task').value") == posted[0]['task']
+
+
+def test_browser_icon_opens_three_modes_and_posts_the_choice(phone):
+    _, js, wait, state = phone
+    open_local_editor(phone, lambda: {**local_catalog(), 'browser_modes':{'hermes':['off','temporary','personal']}})
+    assert js("document.querySelector('#spawn-browser').getAttribute('aria-label')") == 'Browser: My Chrome'
+    js("document.querySelector('#spawn-browser').click()")
+    wait("document.querySelector('#spawn-browser-menu').matches(':popover-open')")
+    assert js("[...document.querySelectorAll('#spawn-browser-menu button:not([hidden])')].map(b=>b.textContent)") == [
+        'Off','Temporary Chrome','My Chrome']
+    js("document.querySelectorAll('#spawn-browser-menu button')[1].click()")
+    assert js("document.querySelector('#spawn-browser').dataset.browserMode") == 'temporary'
+    js("document.querySelector('#spawn-editor').requestSubmit()")
+    assert js("document.querySelector('#spawn-summary').textContent.includes('Temporary Chrome')")
+    state['spawn_receipt'] = {'state':'ready','name':'FixtureCurie'}
+    js("document.querySelector('#spawn-confirm').click()")
+    wait("document.querySelector('#spawn-notice').textContent.includes('is ready')")
+    posted = [body for operation, body in state['calls'] if operation == 'spawn']
+    assert posted[0]['browser_mode'] == 'temporary' and 'browser' not in posted[0]

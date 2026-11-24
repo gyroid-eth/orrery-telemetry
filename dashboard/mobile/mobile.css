@@ -367,6 +367,20 @@ html[data-color-theme=light] .graph-status-flag.question{color:#076c80}
 #spawn-tools .om-toggle-track{position:absolute;inset:auto auto 4px;transform:scale(.45);transform-origin:center bottom}
 .mobile #spawn-tools .icon-button[aria-checked=true]{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 55%,var(--hair));background:var(--control-active)}
 .mobile #spawn-tools .mobile-icon{width:17px;height:17px}
+.mobile #spawn-tools [data-browser-mode] .om-toggle-track{display:none}
+.mobile #spawn-tools [data-browser-mode] .mobile-icon{margin-top:0}
+.mobile #spawn-tools [data-browser-mode=personal]{color:var(--amber);background:var(--control-active)}
+.mobile #spawn-tools [data-browser-mode=temporary]::after{content:"";position:absolute;right:7px;bottom:7px;
+  width:5px;height:5px;border-radius:50%;background:var(--amber)}
+.mobile .spawn-browser-menu{position:fixed;inset:auto;margin:0;padding:4px;min-width:156px;
+  border:1px solid var(--hair);border-radius:9px;background:var(--elev);color:var(--ink);
+  box-shadow:0 8px 24px color-mix(in srgb,var(--shade) 40%,transparent)}
+.spawn-browser-menu button{display:block;width:100%;padding:9px 11px;border:0;border-radius:5px;
+  color:inherit;background:transparent;text-align:start;font:13px/1.35 system-ui,sans-serif;cursor:pointer}
+.spawn-browser-menu button:is(:hover,:focus-visible,[aria-pressed=true]){background:var(--control-active)}
+.spawn-browser-menu button[aria-pressed=true]::after{content:"✓";float:right;padding-left:12px;color:var(--amber)}
+.spawn-browser-menu button[hidden]{display:none}
+.mobile #spawn-browser[data-browser-mode]+.spawn-tool-help{display:none}
 .spawn-tool-help{
   display:none;position:absolute;z-index:3;right:0;bottom:calc(100% + 8px);width:min(250px,70vw);padding:8px 10px;
   border:1px solid var(--hair);border-radius:8px;color:var(--ink);background:var(--elev);

@@ -64,6 +64,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import runpy
 import subprocess
 import sys
@@ -75,7 +76,8 @@ from typing import Any
 
 BASES = ("default", "mail-only")
 ACCESS = ("read", "operate")
-TOOL_KINDS = ("browser", "browser_off", "chrome_extension", "screen", "mcp", "approve_all")
+BROWSER_MODES = ("off", "temporary", "personal")
+TOOL_KINDS = ("browser", "browser_mode", "browser_off", "chrome_extension", "screen", "mcp", "approve_all")
 CODEX_CHROME_PLUGIN = "chrome@openai-bundled"
 CODEX_NATIVE_CUA_PLUGIN = "unified-computer-use@openai-bundled"
 SERVER_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -262,6 +264,11 @@ def normalize_selection(base: Any = None, tools: Any = None) -> dict:
     if unknown:
         raise ToolsError(f"unknown tools: {', '.join(unknown)}")
     result: dict[str, Any] = {}
+    if "browser_mode" in tools:
+        mode = tools["browser_mode"]
+        if mode not in BROWSER_MODES or any(key in tools for key in ("browser", "browser_off", "chrome_extension")):
+            raise ToolsError("Select one Browser mode")
+        result["browser_mode"] = mode
 
     if "browser" in tools:
         browser = tools["browser"]
@@ -312,8 +319,8 @@ def normalize_selection(base: Any = None, tools: Any = None) -> dict:
         checked = [_server_name(name, "tools.mcp entry") for name in names]
         if len(set(checked)) != len(checked):
             raise ToolsError("tools.mcp lists a server twice")
-        if result.get("browser_off") and "chrome-devtools" in checked:
-            raise ToolsError("Browser Off cannot be combined with chrome-devtools")
+        if (result.get("browser_off") or "browser_mode" in result) and "chrome-devtools" in checked:
+            raise ToolsError("A Browser mode cannot be combined with an explicit chrome-devtools MCP")
         screen_server = (result.get("screen") or {}).get("server")
         if screen_server in checked:
             raise ToolsError(
@@ -380,6 +387,10 @@ def parse_cli(values: list[str]) -> dict:
                 if "browser" in tools:
                     raise ToolsError("--tools browser given twice")
                 tools["browser"] = {"device": rest}
+            elif kind == "browser-mode" and rest in BROWSER_MODES:
+                if "browser_mode" in tools:
+                    raise ToolsError("Select one Browser mode")
+                tools["browser_mode"] = rest
             elif item == "no-browser":
                 tools["browser_off"] = True
             elif item == "chrome-extension":
@@ -439,7 +450,7 @@ def check_provider(spec: dict, provider: str) -> None:
     elif provider in ("gemini", "antigravity", "agy") and sys.platform == "darwin":
         names = tools.get("mcp", [])
         screen = tools.get("screen")
-        if (spec["base"] != "default" or set(tools) - {"screen", "mcp"}
+        if (spec["base"] != "default" or set(tools) - {"screen", "mcp", "browser_mode"}
                 or (screen and screen["server"] != SCREEN_SERVER)
                 or any(name != SCREEN_SERVER for name in names)):
             raise ToolsError("Antigravity supports only the managed Computer use selection")
@@ -448,13 +459,16 @@ def check_provider(spec: dict, provider: str) -> None:
             raise ToolsError(f"base and tools are not supported for provider: {provider}")
 
 
-def merge_chrome(spec: dict, chrome: bool, device: str) -> tuple[bool, str]:
+def merge_chrome(spec: dict, chrome: bool, device: str, *, provider="claude") -> tuple[bool, str]:
     """Combine the older claude_chrome fields with tools.browser.
 
     Both may be given only when they agree on the deviceId."""
     browser = spec["tools"].get("browser")
-    if spec["tools"].get("browser_off") and (chrome or device):
+    mode = spec["tools"].get("browser_mode")
+    if (spec["tools"].get("browser_off") or mode in ("off", "temporary")) and (chrome or device):
         raise ToolsError("Browser Off cannot be combined with Claude in Chrome")
+    if mode == "personal" and provider == "claude":
+        return True, device
     if browser is None:
         return chrome, device
     if chrome and device and browser["device"] and device != browser["device"]:
@@ -660,7 +674,8 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
     platform = platform or sys.platform
     spec = normalize(spec["base"], spec["tools"], platform=platform)
     tools = spec["tools"]
-    chrome = chrome or "browser" in tools
+    mode = tools.get("browser_mode")
+    chrome = chrome or "browser" in tools or mode == "personal"
     mail_only = spec["base"] == "mail-only"
     settings = _load_claude_settings(claude_json)
     servers: dict[str, dict] = {}
@@ -685,6 +700,8 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
                 servers[name] = managed_screen
             continue
         servers[name] = _copyable_definition(name, settings, cwd)
+        if mode and _codex_chrome_server(name, servers[name]):
+            raise ToolsError("Select one browser server")
         _check_screen_source(spec, name, servers[name], platform=platform)
 
     for name in names:
@@ -702,7 +719,12 @@ def claude_plan(spec: dict, *, cwd: str, chrome: bool, claude_json: str,
         allowed += [f"mcp__{name}__{tool}" for tool in exposed]
         disallowed += [f"mcp__{name}__{tool}" for tool in hidden]
 
-    if (mail_only or tools.get("browser_off")) and not chrome:
+    if mode == "temporary":
+        name, definition = _browser_mcp(mode)
+        if name in servers:
+            raise ToolsError("Select one browser server")
+        servers[name] = definition
+    if (mail_only or tools.get("browser_off") or mode in ("off", "temporary")) and not chrome:
         flags.append("--no-chrome")
     if allowed:
         flags += ["--allowed-tools", ",".join(allowed)]
@@ -745,6 +767,58 @@ def _native_codex_browser(config: dict, *, explicit: bool = False) -> tuple[str,
     return name, copy.deepcopy({key: value for key, value in definition.items() if key != 'enabled'})
 
 
+def _personal_chrome(definition):
+    args = definition.get("args", ())
+    return (isinstance(args, list) and any(arg in ("--autoConnect", "--auto-connect", "--autoConnect=true",
+                                                  "--auto-connect=true") for arg in args)
+            and "false" not in args
+            and not any(arg.split("=", 1)[0] in ("--isolated", "--userDataDir", "--user-data-dir",
+                "--browserUrl", "--browser-url", "--wsEndpoint", "--ws-endpoint", "--config", "-u", "-w")
+                        for arg in args if isinstance(arg, str)))
+
+
+def _browser_mcp(mode, codex_config=None):
+    if mode == "personal" and codex_config is not None:
+        configured = _native_codex_browser(codex_config, explicit=True)
+        if configured:
+            if not _personal_chrome(configured[1]):
+                raise ToolsError("My Chrome requires Chrome DevTools with autoConnect")
+            return configured
+    npx = shutil.which("npx")
+    if not npx:
+        raise ToolsError("Install Node.js to use Chrome DevTools")
+    switch = "--isolated" if mode == "temporary" else "--autoConnect"
+    return "chrome-devtools", {"command": npx, "args": ["-y", "chrome-devtools-mcp@latest",
+                                                       switch, "--no-usage-statistics"]}
+
+
+def launch_browser_modes(codex_config, *, home=None):
+    choices = {key: ["off"] for key in ("claude-code", "codex", "dsh", "hermes")}
+    if shutil.which("npx"):
+        for modes in choices.values():
+            modes.append("temporary")
+    choices["claude-code"].append("personal")
+    for key in ("codex", "dsh"):
+        try:
+            if key == "codex":
+                codex_apply(copy.deepcopy(codex_config), normalize(tools={"browser_mode": "personal"}))
+            else:
+                _browser_mcp("personal", codex_config)
+        except ToolsError:
+            continue
+        choices[key].append("personal")
+    choices["hermes"] = list(choices["dsh"])
+    choices["antigravity"] = []
+    if sys.platform == "darwin":
+        try:
+            inherited = _agy_inherited_servers(home or Path.home())
+        except ToolsError:
+            return choices
+        if not _agy_managed_browser_conflict(inherited):
+            choices["antigravity"] = ["off", "temporary", "personal"] if shutil.which("npx") else ["off"]
+    return choices
+
+
 def native_plan(spec: dict, *, cwd: str, claude_json: str,
                 codex_config: dict | None = None,
                 transports=("stdio", "http"),
@@ -759,6 +833,7 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
         raise ToolsError('native_mcp_selection_unsupported: built-in computer use')
     names = list(tools.get('mcp', ()))
     servers, approved, enabled = {}, {}, {}
+    mode = tools.get('browser_mode')
     # The plain native MCP selection copies the transport without requesting
     # per-tool auto-approval, which these clients cannot express.
     plain_chrome = 'chrome-devtools' in names and 'chrome-devtools' not in tools.get('approve_all', ())
@@ -766,8 +841,13 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
     if selected_chrome and selected_chrome[0] != 'chrome-devtools' and selected_chrome[0] in names:
         raise ToolsError('native_mcp_selection_unsupported: Chrome selected twice')
     codex_browser = None
-    if (spec['base'] == 'default' and not tools.get('browser_off')) or 'browser' in tools:
+    if (spec['base'] == 'default' and mode is None and not tools.get('browser_off')) or 'browser' in tools:
         codex_browser = _native_codex_browser(codex_config or {})
+    if mode in ('temporary', 'personal'):
+        name, definition = _browser_mcp(mode, codex_config)
+        if name in names:
+            raise ToolsError("Select one browser server")
+        servers[name] = definition
     if spec['base'] == 'default' and codex_browser:
         servers[codex_browser[0]] = codex_browser[1]
     if not tools:
@@ -802,6 +882,8 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
             definition = codex_browser[1]
         else:
             definition = _copyable_definition(name, settings, cwd)
+        if mode and _codex_chrome_server(name, definition):
+            raise ToolsError("Select one browser server")
         _check_screen_source(spec, name, definition, platform=platform)
         if definition.get('type','stdio') not in transports:
             raise ToolsError('native_mcp_transport_unsupported')
@@ -851,15 +933,13 @@ def agy_config(mail_command, spec, *, runtime, project, child, mail_env, home=No
         home = Path.home()
     # Antigravity loads global servers alongside workspace entries even when
     # the workspace disables the same name. Detect this before launching.
-    inherited_path = home / ".gemini" / "config" / "mcp_config.json"
-    try:
-        inherited = json.loads(inherited_path.read_text()).get("mcpServers", {})
-    except FileNotFoundError:
-        inherited = {}
-    except (ValueError, AttributeError) as exc:
-        raise ToolsError("Cannot check Antigravity's inherited MCP servers") from exc
-    if not isinstance(inherited, dict):
-        raise ToolsError("Cannot check Antigravity's inherited MCP servers")
+    inherited = _agy_inherited_servers(home)
+    mode = spec["tools"].get("browser_mode")
+    if mode and _agy_managed_browser_conflict(inherited):
+        raise ToolsError("Disable the global Antigravity browser MCP before selecting a Browser mode")
+    if mode in ("temporary", "personal"):
+        name, definition = _browser_mcp(mode)
+        servers[name] = definition
     for name, definition in inherited.items():
         if (isinstance(definition, dict) and definition.get("disabled") is not True
                 and (_cua_server(name, definition) or _native_desktop_server(name, definition))):
@@ -869,6 +949,24 @@ def agy_config(mail_command, spec, *, runtime, project, child, mail_env, home=No
     if screen is not None:
         servers[SCREEN_SERVER] = {**screen, "enabledTools": list(_screen_state()["TOOLS"])}
     return {"mcpServers": servers}
+
+
+def _agy_inherited_servers(home):
+    inherited_path = home / ".gemini" / "config" / "mcp_config.json"
+    try:
+        inherited = json.loads(inherited_path.read_text()).get("mcpServers", {})
+    except FileNotFoundError:
+        inherited = {}
+    except (ValueError, AttributeError) as exc:
+        raise ToolsError("Cannot check Antigravity's inherited MCP servers") from exc
+    if not isinstance(inherited, dict):
+        raise ToolsError("Cannot check Antigravity's inherited MCP servers")
+    return inherited
+
+
+def _agy_managed_browser_conflict(servers):
+    return any(isinstance(value, dict) and value.get("disabled") is not True
+               and _codex_chrome_server(name, value) for name, value in servers.items())
 
 
 def claude_config(proxy: dict, *, claude_json: str, servers: dict | None = None) -> dict:
@@ -953,12 +1051,14 @@ def change_permission(tools: dict, permission: dict, definitions: dict | None) -
             removed.discard(direct)
     elif permission["browser_use"]:
         changed.pop("browser_off", None)
+        changed.pop("browser_mode", None)
         changed.setdefault("browser", {})
         return changed
     else:
         if tools.get("chrome_extension"):
             raise ToolsError("Disable the separately configured Chrome extension before setting Browser Off")
         changed.pop("browser", None)
+        changed.pop("browser_mode", None)
         removed = {name for name in mcp if _codex_chrome_server(name, definition(name))}
 
     for key, values in (("mcp", mcp), ("approve_all", tools.get("approve_all", ()))):
@@ -1000,6 +1100,7 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
     the task starts. A server-wide approval is never written."""
     spec = normalize(spec["base"], spec["tools"])
     tools = spec["tools"]
+    mode = tools.get("browser_mode")
     check_provider(spec, "codex")
     mac = sys.platform == "darwin"
     servers = config.get("mcp_servers")
@@ -1015,6 +1116,8 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
                 raise ToolsError("Use orrery-screen for Computer use on macOS")
             servers[name] = {**server, "enabled": False}
         elif name in names:
+            if mode and isinstance(server, dict) and _codex_chrome_server(name, server):
+                raise ToolsError("Select one browser server")
             _check_screen_source(spec, name, server)
         elif isinstance(server, dict) and (
                 _cua_server(name, server) or _codex_chrome_server(name, server)):
@@ -1052,8 +1155,25 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
             }
             config["mcp_servers"] = servers
     browser_server = None
-    if "browser" in tools:
-        browser_server = codex_browser_server(servers)
+    if mode == "temporary":
+        temp_name, definition = _browser_mcp(mode)
+        servers[temp_name] = definition
+        config["mcp_servers"] = servers
+        names.append(temp_name)
+    if "browser" in tools or mode == "personal":
+        if mode == "personal":
+            try:
+                browser_server = codex_browser_server(servers)
+            except ToolsError:
+                if any(isinstance(value, dict) and _codex_chrome_server(name, value) for name, value in servers.items()):
+                    raise
+                browser_server, definition = _browser_mcp(mode)
+                servers[browser_server] = definition
+                config["mcp_servers"] = servers
+            if not _personal_chrome(servers[browser_server]):
+                raise ToolsError("My Chrome requires Chrome DevTools with autoConnect")
+        else:
+            browser_server = codex_browser_server(servers)
         entry = table_entry(servers[browser_server])
         if entry is None or entry[0] not in NAME_CLASSIFIED:
             raise ToolsError(
@@ -1195,10 +1315,13 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
                 + ", ".join(given) + ".")
     else:
         head = "Tools: the harness's standard tool configuration is in use."
-    if spec["base"] == "mail-only" or spec["tools"].get("browser_off"):
+    mode = spec["tools"].get("browser_mode")
+    if spec["base"] == "mail-only" or spec["tools"].get("browser_off") or mode == "off":
         head += " Use the harness's built-in tools, including web search or fetch when available."
-    if spec["tools"].get("browser_off"):
+    if spec["tools"].get("browser_off") or mode == "off":
         head += " The browser integration is off for this launch."
+    elif mode:
+        head += " The Browser setting is " + ("Temporary Chrome." if mode == "temporary" else "My Chrome.")
     screen = spec["tools"].get("screen")
     if screen_mode(spec) is not None:
         head += " The operator can change the orrery-screen permission while this child is running."
@@ -1209,7 +1332,7 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
         head += (" Every tool of " + ", ".join(spec["tools"]["approve_all"])
                  + " is approved, including tools that run arbitrary code on that "
                  "host: use only what the task needs.")
-    if provider == "codex" and "browser" in spec["tools"]:
+    if provider == "codex" and ("browser" in spec["tools"] or mode == "personal"):
         head += (" Browser approves all known chrome-devtools tools, including "
                  "arbitrary JavaScript, saving host files and uploading local files.")
     return (head + " If a tool you need is missing, report it to " + report_to
@@ -1262,7 +1385,7 @@ def resolve_defaults(selection: str, provider: str, *, cwd: str,
             if screen_mode(candidate) is not None:
                 raise ToolsError("orrery-screen requires an explicit child selection")
             check_provider(candidate, provider)
-            merge_chrome(candidate, chrome, chrome_device)
+            merge_chrome(candidate, chrome, chrome_device, provider=provider)
             if provider == "codex":
                 codex_apply(copy.deepcopy(codex_config or {}), candidate)
             elif provider in ("dsh", "hermes"):
@@ -1278,7 +1401,7 @@ def resolve_defaults(selection: str, provider: str, *, cwd: str,
             continue
         accepted.append(item)
         spec = candidate
-    merged_chrome, device = merge_chrome(spec, chrome, chrome_device)
+    merged_chrome, device = merge_chrome(spec, chrome, chrome_device, provider=provider)
     return {"spec": spec, "chrome": merged_chrome, "device": device,
             "omitted": omitted}
 
@@ -1404,7 +1527,7 @@ def main(argv: list[str]) -> int:
             tools = parse_cli(args.tools)
             spec = normalize(args.base or None, tools)
             check_provider(spec, args.provider)
-            chrome, device = merge_chrome(spec, args.chrome == "1", args.chrome_device)
+            chrome, device = merge_chrome(spec, args.chrome == "1", args.chrome_device, provider=args.provider)
             sys.stdout.write(json.dumps(spec, sort_keys=True, separators=(",", ":"))
                              + "\t" + ("1" if chrome else "0") + "\t" + device + "\n")
             return 0

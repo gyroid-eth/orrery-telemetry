@@ -45,6 +45,7 @@ def _harness_key(value):
 
 _NATIVE_HARNESSES = {'dsh', 'hermes'}
 _TOOLS_HARNESSES = {'claude-code', 'codex'} | _NATIVE_HARNESSES
+_BROWSER_MODES = ('off', 'temporary', 'personal')
 
 
 def _effort_policy(provider, model, harness):
@@ -71,6 +72,7 @@ def _catalog_choices(value):
     if not isinstance(value.get('providers'), list) or not isinstance(value.get('dirs'), list):
         raise SpawnError('catalog_unavailable', 503)
     models = []
+    browser_modes = value.get('browser_modes')
     for provider in value['providers']:
         if not isinstance(provider, dict) or not _text(provider.get('id'), 96):
             continue
@@ -103,10 +105,16 @@ def _catalog_choices(value):
                 routes.append({'id': harness_id, 'key': key,
                                'label': route_label if _text(route_label, 96) else harness_id,
                                'default': harness.get('default') is True, **effort})
+                if isinstance(browser_modes, dict):
+                    modes = browser_modes.get(key)
+                    routes[-1]['browser_modes'] = [mode for mode in _BROWSER_MODES
+                                                    if isinstance(modes, list) and mode in modes]
                 # The mobile form submits standalone launches. Antigravity
                 # requires an explicit parent and a resource declaration.
                 if antigravity:
                     routes[-1]['launch_blocked'] = True
+                    if 'browser_modes' in routes[-1]:
+                        routes[-1]['browser_modes'] = []
             if not routes:
                 continue
             index, url_key = model.get('url_index'), model.get('url_key')
@@ -132,7 +140,7 @@ def _catalog_choices(value):
     return models, dirs
 
 
-def _options(model, route, directory, task, role, effort, computer, browser, configurable):
+def _options(model, route, directory, task, role, effort, computer, browser, configurable, *, browser_mode=None):
     payload = {'task':task, 'model':model['model'], 'provider':model['provider'],
                'dir':directory['path'], 'standalone':True, 'headless':True, 'async':True}
     legacy = {'claude':'claude-code', 'codex':'codex'}
@@ -151,15 +159,18 @@ def _options(model, route, directory, task, role, effort, computer, browser, con
     native = route['key'] in _NATIVE_HARNESSES
     browser = browser and (not native or directory.get('native_browser') is True)
     mcp = ['cua-driver'] if computer else []
-    if browser and native:
-        mcp.append('chrome-devtools')
     payload['tools'] = {}
+    if browser_mode is not None:
+        payload['tools']['browser_mode'] = browser_mode
+    elif browser:
+        if native:
+            mcp.append('chrome-devtools')
+        else:
+            payload['tools']['browser'] = {}
+    else:
+        payload['tools']['browser_off'] = True
     if mcp:
         payload['tools']['mcp'] = mcp
-    if browser and not native:
-        payload['tools']['browser'] = {}
-    if not browser:
-        payload['tools']['browser_off'] = True
     return payload
 
 
@@ -179,6 +190,8 @@ def _failure_reason(response):
     lines = detail.splitlines() if isinstance(detail, str) else []
     if error == 'unsupported_mcp_selection' or 'Harness prepare failed: unsupported_mcp_selection' in lines:
         return 'unsupported_tools'
+    if error.startswith(('My Chrome requires ', 'Install Node.js to use Chrome DevTools')):
+        return 'browser_setup'
     if any(line.startswith('child_resume: tools.browser for a Codex child needs ') for line in [error, *lines]):
         return 'browser_setup'
     if error.startswith(('configured URL/model selection is unavailable', 'model not allowed', 'unsupported model')):
@@ -240,9 +253,13 @@ class MobileSpawn:
         }
 
     def launch(self, epoch, value):
-        if set(value) - {'browser'} != {'catalog','receipt','model','harness','directory','task','computer','effort','role'}:
+        if (set(value) - {'browser', 'browser_mode'} != {'catalog','receipt','model','harness','directory','task','computer','effort','role'}
+                or 'browser' in value and 'browser_mode' in value):
             raise SpawnError('invalid_launch', 400)
         browser = value.get('browser', False)
+        mode = value.get('browser_mode')
+        if 'browser_mode' in value and mode not in _BROWSER_MODES:
+            raise SpawnError('invalid_launch', 400)
         receipt_id, catalog_id = value['receipt'], value['catalog']
         if (not isinstance(receipt_id, str) or not RECEIPT.fullmatch(receipt_id)
                 or not isinstance(catalog_id, str) or not RECEIPT.fullmatch(catalog_id)):
@@ -274,7 +291,8 @@ class MobileSpawn:
             route = next((item for item in model['harnesses'] if item['id'] == value['harness']), None)
             if (route is None or route.get('launch_blocked') or (effort is None and route['effort_required'])
                     or (effort is not None and effort not in route['efforts'])
-                    or (not configurable and (role or value['computer'] or browser))):
+                    or (mode is not None and mode not in route.get('browser_modes', ()))
+                    or (not configurable and (role or value['computer'] or browser or mode is not None))):
                 raise SpawnError('invalid_launch', 400)
             if len(self._receipts) >= RECEIPT_LIMIT:
                 raise SpawnError('launch_unavailable', 503)
@@ -285,7 +303,7 @@ class MobileSpawn:
         try:
             result = self._launch(_options(model, route, directory, task.strip(), role.strip(),
                                            effort or route['default_effort'],
-                                           value['computer'], browser, configurable))
+                                           value['computer'], browser, configurable, browser_mode=mode))
             if result.get('ok') is False:
                 state, name = 'failed', None
                 failure_reason = _failure_reason(result)
