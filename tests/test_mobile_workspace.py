@@ -1,4 +1,6 @@
 """The responsive layout and theme use the packaged mobile page."""
+import json
+
 import pytest
 
 from mobile_reader_browser import phone  # noqa: F401
@@ -153,7 +155,8 @@ def test_workspace_keeps_the_same_reader_and_private_draft_across_layouts(phone)
     js("document.dispatchEvent(new Event('visibilitychange'))")
     wait("!!document.querySelector('#gsvg [data-name=Peer]')")
     wait("document.querySelector('.conversation-steps-heading')?.textContent === 'Working…'")
-    assert js("document.querySelectorAll('.conversation-step').length") == 2
+    # Inline includes the unmatched tool in the active tail as an observed step.
+    assert js("document.querySelector('.conversation-steps-count').textContent") == '3 steps'
     assert js("document.querySelector('.workspace-home-divider').offsetHeight") == 24
     baseline = js("document.querySelector('.mobile-sidebar').offsetHeight")
     js("document.querySelector('.workspace-home-divider').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp'}))")
@@ -174,7 +177,7 @@ def test_workspace_keeps_the_same_reader_and_private_draft_across_layouts(phone)
     wait("""['SampleAgent','Peer'].every(name => paneDoc(name)?.querySelector('.conversation-mode [data-id=question]')
         && paneDoc(name).querySelector('#terminal-title').textContent===name
         && paneDoc(name).documentElement.dataset.workspaceComposer==='collapsed')""", timeout=12)
-    assert js("paneDoc('SampleAgent').querySelectorAll('.conversation-step').length") == 2
+    assert js("paneDoc('SampleAgent').querySelector('.conversation-steps-count').textContent") == '3 steps'
     assert js("paneDoc('SampleAgent').querySelector('.conversation-steps-heading').textContent") == 'Working…'
     assert js("paneDoc('Peer').querySelector('.conversation-steps-heading').textContent") == 'Waiting for you'
     assert js("Array.from(document.querySelectorAll('.workspace-reader-frame'), f=>new URL(f.src).search).every(s=>!s)")
@@ -300,23 +303,20 @@ def test_model_list_opens_inside_tablet_sheet(phone):
     js("document.querySelector('.spawn-folder .om-select-option:last-child').click()")
     assert js("document.querySelector('.spawn-folder .om-select-slot:not([aria-hidden])').textContent") == '~'
     js("document.getElementById('spawn-model-chip').click()")
-    js("document.querySelector('#spawn-model + .om-select .om-select-trigger').click()")
     wait("""(() => {
         const sheet = document.getElementById('spawn-settings');
-        const host = document.querySelector('#spawn-model + .om-select');
-        const menu = host.querySelector('.om-select-menu');
-        const popup = host.querySelector('.om-select-popup').getBoundingClientRect();
+        const menu = document.getElementById('spawn-model-list');
+        const listBounds = menu.getBoundingClientRect();
         const bounds = sheet.getBoundingClientRect(), viewport = visualViewport;
-        const trigger = host.querySelector('.om-select-trigger').getBoundingClientRect();
-        const row = menu.querySelectorAll('[role=option]')[2].getBoundingClientRect();
+        const row = menu.querySelectorAll('.spawn-model-choice')[2].getBoundingClientRect();
         const hit = document.elementFromPoint(row.x + row.width/2, row.y + row.height/2);
         return bounds.top >= viewport.offsetTop && bounds.bottom <= viewport.offsetTop + viewport.height
-            && popup.top >= trigger.bottom - 1 && popup.bottom <= bounds.bottom
-            && popup.height >= menu.clientHeight && menu.scrollHeight > menu.clientHeight
-            && hit?.closest('[role=option]')?.textContent === 'Model 3';
+            && listBounds.top >= bounds.top && listBounds.bottom <= bounds.bottom
+            && menu.scrollHeight > menu.clientHeight
+            && hit?.closest('.spawn-model-choice')?.textContent === 'Model 3';
     })()""")
     point = js("""(() => {
-        const row = document.querySelectorAll('#spawn-model + .om-select [role=option]')[2].getBoundingClientRect();
+        const row = document.querySelectorAll('#spawn-model-list .spawn-model-choice')[2].getBoundingClientRect();
         return {x: row.x + row.width/2, y: row.y + row.height/2};
     })()""")
     client.call('Emulation.setTouchEmulationEnabled', enabled=True)
@@ -324,6 +324,68 @@ def test_model_list_opens_inside_tablet_sheet(phone):
     client.call('Input.dispatchTouchEvent', type='touchEnd', touchPoints=[])
     wait("document.getElementById('spawn-model-name').textContent === 'Model 3'")
     assert js("document.getElementById('spawn-directory').value") == '1'
+
+
+def test_model_picker_search_and_local_connections_preserve_exact_launch_selection(phone):
+    _, js, wait, state = phone
+    claude = dict(id='claude-code', key='claude-code', label='Claude Code', efforts=[], default=True)
+    codex = dict(id='codex-cli', key='codex', label='Codex', efforts=[], default=True)
+    dsh = dict(id='dsh', key='dsh', label='DSH', efforts=[], default=True)
+    hermes = dict(id='hermes', key='hermes', label='Hermes', efforts=[], default=False)
+    agy = dict(id='antigravity', key='antigravity', label='Antigravity', efforts=['medium'],
+               default=True, effort_required=True, launch_blocked=True)
+    state['spawn_catalog'] = dict(
+        catalog='a'*32, configurable=True,
+        models=[
+            dict(provider='claude', provider_label='Claude', model='claude-fixture', default=True, harnesses=[claude]),
+            dict(provider='codex', provider_label='Codex', model='codex-fixture', harnesses=[codex]),
+            dict(provider='gemini', provider_label='Antigravity', model='gemini-fixture', harnesses=[agy]),
+            dict(provider='deepseek', provider_label='DeepSeek', model='deepseek-fixture', harnesses=[dsh, hermes]),
+            dict(provider='cache-local', provider_label='Cache lab', locality='local', model='code-fixture',
+                 url_index=0, harnesses=[dsh, hermes]),
+            dict(provider='search-local', provider_label='Search lab', locality='local', model='code-fixture',
+                 url_index=0, harnesses=[dsh, hermes]),
+            dict(provider='custom', provider_label='Custom', model='custom-fixture', harnesses=[hermes]),
+        ],
+        directories=[dict(path='/workspace', label='Workspace')],
+    )
+    state['spawn_receipt'] = dict(state='ready', name='SampleAgent')
+    js("OrreryMobileTerminal.close();document.getElementById('mobile-new-agent').click()")
+    wait("!document.getElementById('spawn-editor').hidden")
+    js("const task=document.getElementById('spawn-task');task.value='Review the sample';task.dispatchEvent(new Event('input'))")
+    js("document.getElementById('spawn-model-chip').click()")
+    tabs = "#spawn-provider-tabs button"
+    assert js(f"[...document.querySelectorAll('{tabs}')].map(tab=>tab.getAttribute('aria-label'))") == [
+        'Claude', 'Codex', 'Antigravity', 'DeepSeek', 'Local', 'Custom']
+    for provider in ('Claude', 'Codex', 'DeepSeek', 'Custom', 'Antigravity'):
+        js(f"document.querySelector('{tabs}[aria-label={provider}]').click()")
+        assert js("document.querySelectorAll('#spawn-model-list input').length") == 1
+        expected = ('gemini' if provider == 'Antigravity' else provider.lower())+'-fixture'
+        assert js("document.getElementById('spawn-model-name').textContent") == expected
+    assert js("!document.getElementById('spawn-model-notice').hidden&&document.getElementById('spawn-review-button').disabled")
+    js(f"document.querySelector('{tabs}[aria-label=Local]').click()")
+    assert js("document.querySelectorAll('#spawn-model-list input').length") == 2
+    def search(query):
+        js(f"""(() => {{
+          const search=document.getElementById('spawn-model-search');
+          search.value={json.dumps(query)};
+          search.dispatchEvent(new Event('input'));
+        }})()""")
+    search('no-match')
+    assert js("!document.getElementById('spawn-model-empty').hidden")
+    search('SEARCH LAB')
+    assert js("[...document.querySelectorAll('#spawn-model-list input')].map(input=>input.value)") == ['5']
+    js("document.querySelector('#spawn-model-list input').click()")
+    assert js("!document.getElementById('spawn-harness-field').hidden")
+    js("const h=document.getElementById('spawn-harness');h.value='hermes';h.dispatchEvent(new Event('change'))")
+    js("document.getElementById('spawn-settings-close').click()")
+    wait("document.activeElement===document.getElementById('spawn-model-chip')")
+    js("document.getElementById('spawn-review-button').click()")
+    wait("document.getElementById('spawn-summary').textContent.includes('code-fixture (URL 1) on Search lab with Hermes')")
+    js("document.getElementById('spawn-confirm').click()")
+    wait("document.getElementById('spawn-notice').textContent==='SampleAgent is ready.'")
+    [sent] = [payload for op,payload in state['calls'] if op=='spawn']
+    assert (sent['model'], sent['harness'], sent['directory']) == (5, 'hermes', 0)
 
 
 @pytest.mark.parametrize('phone', [(390, 844), (820, 1180), (1180, 820)], indirect=True)

@@ -653,6 +653,7 @@ class Element{
  set id(value){this._id=value;elements.set('#'+value,this);}get id(){return this._id;}
  append(...values){this.children.push(...values);}replaceChildren(...values){this.children=[...values];}
  setAttribute(){}addEventListener(){}focus(){}querySelectorAll(){return [];}querySelector(){return null;}closest(){return null;}after(value){this.afterValue=value;}remove(){}
+ getBoundingClientRect(){return {top:0,right:300,width:300};}
  showModal(){this.open=true;}close(){this.open=false;}
 }
 const q=s=>{if(!elements.has(s))elements.set(s,new Element());return elements.get(s);};

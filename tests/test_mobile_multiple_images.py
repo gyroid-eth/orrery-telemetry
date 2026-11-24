@@ -133,7 +133,7 @@ def test_attachment_only_reference_keeps_thread_until_the_record(phone, theme):
     js("document.querySelector('#terminal-review').click()")
     wait("!!document.querySelector('.reader-review')")
     js("[...document.querySelectorAll('button')].find(button=>button.textContent==='Send once').click()")
-    wait("Boolean(releaseCommit&&document.querySelector('.conversation-pending img')?.naturalWidth===240)")
+    wait("Boolean(releaseCommit&&document.querySelector('.conversation-pending .conversation-thumbnail-image')?.naturalWidth===240)")
     js("window.sendingRow=document.querySelector('.conversation-pending')")
     assert js("sendingRow.dataset.state") == 'sending'
     assert js("!!sendingRow.querySelector('.conversation-reply-reference')")

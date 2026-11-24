@@ -147,6 +147,8 @@ def phone(request):
             payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
             operation = self.path.rsplit('/', 1)[-1]
             state['calls'].append((operation, payload))
+            if self.path == '/view/spawn' and state.get('spawn_receipt'):
+                return self.send(state['spawn_receipt'])
             selected = next((t for t in state.get('targets', [choice]) if t['choice'] == payload.get('choice')), choice)
             if operation == 'targets':
                 targets = state.get('targets', [choice])
