@@ -89,7 +89,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":45}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":46}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -693,13 +693,19 @@ The request below selects Claude in Chrome with a device ID and starts `orrery-s
 {"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
 ```
 
-API 45 adds `permission` to a legacy `/api/jump` for a retained, stopped Claude or Codex CLI child with a saved tool selection. Use the roster's bound `history_session_id` and exactly one of `computer_use` (`off`, `view`, `control`) or `browser_use` (boolean). The same request may include `open`. The server verifies the conversation and the absence of a tmux session and live launch lease, even for a row previously displayed as finished. Exit the child and any remaining shell before submitting this request.
+API 45 accepts `permission` on a legacy `/api/jump` for a stopped, retained Claude or Codex CLI child with a saved tool selection. API 46 also supports agents spawned without a parent when they meet the same conditions. Direct launches, persistent agents, Codex App, conversation-only resumes, and fresh and global modes are ineligible. Legacy roster rows report `permission_resume_supported` and a short English `permission_resume_reason`. A direct launch or other agent with no saved settings reports `No saved launch settings; use Resume`.
+
+Before stopping a running agent, add `check_only:true` to the request. Use the roster's bound `history_session_id` and exactly one of `computer_use` (`off`, `view`, `control`) or `browser_use` (boolean). A successful check returns `{"ok":true,"action":"validated"}` without changing the saved selection or Mail registration.
 
 ```json
-{"session":"SampleAgent","open":false,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_use":true}}
+{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_use":true}}
 ```
 
-The server reads and updates the saved selection under the child's tools-change lock. The original base and unrelated tools and approvals are preserved. `permission` cannot be combined with `base` or `tools`. Standalone, persistent, conversation-only, and non-CLI children are ineligible. A shared screen/browser MCP configuration or an unavailable requested tool returns a reason and leaves the selection intact. Browser Off turns off Claude in Chrome even when the saved base is `default`. A separately configured Codex Chrome extension must be disabled separately before setting Browser Off. Success includes `tools_changed: true`, `base`, and the resulting `tools`.
+Send the same `session` and `history_session_id` to `POST /api/exit`. Both requests verify the conversation, Mail registration, and saved launch origin. Cockpit waits for the agent to stop and sends the same jump request with `check_only` omitted. The server rechecks the conversation and registration and requires the tmux session and live launch lease to be absent. Set `open:false` to resume detached.
+
+The tools-change lock protects the original `base` and unrelated tools and approvals. `permission` cannot be combined with `base` or `tools`. A shared screen/browser MCP or an unavailable tool returns a reason and preserves the selection. Browser Off disables Claude in Chrome even with the `default` base. Disable any separately configured Codex Chrome extension before setting Browser Off.
+
+Success includes `action:"resumed"`, `tools_changed:true`, `base`, and the resulting `tools`. For Codex, the server waits up to 15 seconds for the conversation binding and idle prompt. If the restart cannot be confirmed and the agent has stopped, the previous selection is restored. When neither restart nor stop can be confirmed, the server returns `ok:false`, `error`, and `resume_confirmation_pending:true`. Inspect the session before retrying.
 
 ## POST `/api/exit`
 
@@ -716,6 +722,8 @@ Response:
 ```
 
 Only a real tmux session in the `running / finished` category is eligible. `warm-*` / `pending-*` are rejected. An attached session is not interrupted and gets `warn-attached` added to `actions`.
+
+On legacy API 46, optional `history_session_id` requires the current tmux session to agree with the saved conversation, registration, and launch origin before exit.
 
 ## POST `/api/kill`
 
