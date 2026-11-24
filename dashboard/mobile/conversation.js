@@ -279,9 +279,13 @@ const WAIT=20000;
 /* Poll and Show older each own a controller, so neither aborts the other. */
 const controllers={poll:null,older:null,preview:null};
 let panel=null,saveUrl='',previewFocus=null,previewRequest=null,previewRetry=false;
-let events=[],seen=new Set(),older=null,pending=[],failures=0,loadingOlder=false,following=true,savedTop=0;
+let events=[],seen=new Set(),older=null,pending=[],failures=0,olderLoad=null,following=true,savedTop=0;
 let lastRecordPoll=null;
 let recordVersion=0,recordConfirmed=false,replySelection=null;
+const referenceCards=new WeakMap();
+const referenceClock=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+const missingReference='The quoted message is not in the loaded part of this conversation.';
+let referenceSerial=0,referenceJump=null,referenceFlash=null,referenceTimer=0;
 function dismissReferenceSelection(){replySelection?.remove();replySelection=null;}
 function selectionInRecord(){const selection=window.getSelection?.();return !!(selection?.toString()&&list?.contains(selection.anchorNode));}
 function selectionReply(){
@@ -441,6 +445,79 @@ function body(text,assistant=false,images){
  else if(m)m.renderText(text,box);else box.textContent=text;
  return box;
 }
+function replyReference(text){
+ if(typeof text!=='string'||!text.startsWith('Reference: '))return null;
+ const lines=text.replace(/\r\n?/g,'\n').split('\n');
+ const fields=lines[0].slice(11).split(' · '),[agent,role,ts]=fields;
+ const id=/^Recorded message: (\S+)$/.exec(lines[1]||'')?.[1];
+ if(!id||!agent||agent.trim()!==agent||!/^\S+$/.test(role||'')||fields.length<2||fields.length>3)return null;
+ if(fields.length===3&&(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(ts)||!Number.isFinite(Date.parse(ts))))return null;
+ let end=2;
+ while(lines[end]?.startsWith('> '))end++;
+ if(end===2||lines[end]!=='')return null;
+ const quote=lines.slice(2,end).map(line=>line.slice(2)).join('\n'),reply=lines.slice(end+1).join('\n');
+ return quote.trim()&&reply.trim()?{agent,ts,id,quote,reply}:null;
+}
+function referenceRow(id){
+ const target=list?.querySelector('[data-id="'+CSS.escape(id)+'"]');
+ return target&&(!target.closest('[hidden]')||toolGroupFor.has(id))?target:null;
+}
+function updateReferenceCards(){
+ for(const card of list.querySelectorAll('.conversation-reply-reference')){
+  const ref=referenceCards.get(card);
+  const available=recordConfirmed&&(referenceRow(ref.id)||older&&events.length<MAX_KEPT&&older!==ref.failedCursor);
+  card.setAttribute('aria-disabled',String(!available));
+  card.title=ref.label+'\n'+ref.quote+(available?'':'\n\n'+missingReference);
+  card.setAttribute('aria-label',available?'Jump to '+ref.label:ref.label+'. '+missingReference);
+ }
+}
+function clearReferenceFlash(){
+ clearTimeout(referenceTimer);referenceFlash?.classList.remove('conversation-reference-target');referenceFlash=null;
+}
+async function jumpReference(card,ref){
+ if(referenceJump||card.getAttribute('aria-disabled')==='true')return;
+ const g=gen,version=recordVersion,cursors=new Set();
+ const current=()=>g===gen&&version===recordVersion&&recordConfirmed&&list?.isConnected&&list.contains(card);
+ referenceJump=card;card.setAttribute('aria-busy','true');
+ try{
+  let target=referenceRow(ref.id);
+  while(!target&&older&&events.length<MAX_KEPT&&!cursors.has(older)&&cursors.size<MAX_KEPT){
+   cursors.add(older);
+   const loaded=await loadOlder();
+   if(!current())return;
+   target=referenceRow(ref.id);
+   if(!loaded)break;
+  }
+  if(!current())return;
+  if(!target){ref.failedCursor=older;return;}
+  const group=toolGroupFor.get(ref.id);if(group&&!group.open)setToolGroupOpen(group,true);
+  const inset=parseFloat(getComputedStyle(list).scrollPaddingTop)||0;
+  list.scrollTop+=target.getBoundingClientRect().top-list.getBoundingClientRect().top-inset;
+  following=atBottom();savedTop=list.scrollTop;
+  target.tabIndex=-1;target.focus({preventScroll:true});
+  clearReferenceFlash();referenceFlash=target;target.classList.add('conversation-reference-target');
+  referenceTimer=setTimeout(clearReferenceFlash,1550);
+ }finally{
+  if(referenceJump===card)referenceJump=null;
+  card.removeAttribute('aria-busy');if(current())updateReferenceCards();
+ }
+}
+function referenceCard(ref){
+ const card=make('button','conversation-reply-reference');
+ card.type='button';
+ const at=ref.ts?referenceClock.format(Date.parse(ref.ts)):'';
+ const portrait=/^[A-Za-z0-9_-]{1,64}$/.test(ref.agent)&&window.OrreryMobileProfile?.face(ref.agent);
+ const avatar=portrait||make('span','face');
+ if(!portrait)avatar.append(make('span','initials',Array.from(ref.agent)[0]));
+ avatar.classList.add('conversation-avatar');avatar.setAttribute('aria-hidden','true');
+ const name=make('span','conversation-reply-reference-agent',ref.agent);
+ const quote=make('span','conversation-reply-reference-quote',ref.quote.trimStart().split('\n',1)[0].trimEnd());
+ quote.id='reader-reply-quote-'+(++referenceSerial);card.setAttribute('aria-describedby',quote.id);
+ const arrow=make('span','conversation-reply-reference-icon','↗');arrow.setAttribute('aria-hidden','true');
+ ref.label='quoted message from '+ref.agent+(at?' at '+at+' JST':'');
+ referenceCards.set(card,ref);card.append(avatar,name,quote,arrow);card.onclick=()=>jumpReference(card,ref);
+ return card;
+}
 function mailCard(m,ts,images){
  const card=make('div','conversation-mail '+m.direction);
  const head=make('div','conversation-mail-head'),route=make('div','conversation-mail-route');
@@ -482,13 +559,26 @@ function row(e){
  if(e.kind==='tool'){const r=make('div','conversation-tool');r.append(make('span','conversation-tool-label',e.text));r.dataset.id=e.id;files(e,r);if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
  if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
  const command=e.role==='user'&&markdown()?.commandRecord(e.text);
+ const human=e.kind==='text'&&e.role==='user'&&!command;
  const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
- if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}else{if(e.role==='assistant')r.append(speaker(e));r.append(body(e.text,e.role==='assistant',e.markdown_images));}
+ const time=clock(e.ts);
+ if(human)r.title=time?'You · '+time:'You';
+ if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}
+ else{
+  const reference=human&&!e.truncated&&replyReference(e.text);
+  if(e.role==='assistant')r.append(speaker(e));
+  const text=body(reference?reference.reply:e.text,e.role==='assistant',e.markdown_images);
+  if(reference){
+   r.classList.add('conversation-has-reference');
+   const wash=make('div','conversation-reference-body');wash.append(text);
+   r.append(referenceCard(reference),wash);
+  }else r.append(text);
+ }
  if(command||e.role==='assistant')window.OrreryReaderReplyMotion?.enhanceCopies?.(r);
 
  if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));
  files(e,r);
- const meta=[e.role==='assistant'&&!command?'':clock(e.ts),e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
+ const meta=[human||e.role==='assistant'&&!command?'':time,e.truncated?'shortened':''].filter(Boolean).join(' · ');if(meta)r.append(make('small','conversation-time',meta));
  return r;
 }
 function chip(x){
@@ -831,7 +921,16 @@ function prepend(page,omitted){
  list.scrollTop+=list.scrollHeight-before;following=false;savedTop=list.scrollTop;
  loadThumbnails();
 }
-function reset(){stepView?.reset();provider='';lastRecordPoll=null;recordVersion++;dismissReferenceSelection();closePreview();forgetThumbnails();clearToolGroups();events=[];seen.clear();older=null;list.querySelectorAll(':scope > .conversation-shown-files').forEach(x=>x.remove());list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());window.OrreryMobileTerminal?.refreshReference?.();}
+function reset(){
+ stepView?.reset();provider='';lastRecordPoll=null;recordVersion++;
+ controllers.older?.abort();olderLoad=null;referenceJump=null;clearReferenceFlash();
+ dismissReferenceSelection();closePreview();forgetThumbnails();clearToolGroups();
+ events=[];seen.clear();older=null;
+ list.querySelectorAll(':scope > .conversation-shown-files').forEach(x=>x.remove());
+ list.querySelectorAll(':scope > [data-id]').forEach(x=>x.remove());
+ list.querySelectorAll(':scope > .conversation-omitted').forEach(x=>x.remove());
+ window.OrreryMobileTerminal?.refreshReference?.();
+}
 function slow(on){if(retryButton)retryButton.hidden=!on;if(on)setStatus(messages.history_slow);}
 function showError(v){
  const code=typeof v?.error==='string'?v.error:'history_unavailable';
@@ -859,26 +958,33 @@ async function poll(){
    if(events.length&&v.events.some(e=>e.id===events[0].id))older=v.older;
    if(atBottom())setStatus(v.events.length?(v.tail_only?'Latest record · updating':'Read-only record · updating'):'No messages in the record yet.');
    if(v.limited&&!events.length)setStatus('The latest record was shortened.');
-   olderButton.hidden=!older||loadingOlder;
+   olderButton.hidden=!older||Boolean(olderLoad);
    selectionReply();window.OrreryMobileTerminal?.refreshReference?.();
   }
+  updateReferenceCards();
  }catch(e){if(g!==gen||e?.superseded)return;failures++;if(e?.slow)slow(true);else setStatus('History unavailable. Retrying.');}
  if(g===gen&&root&&!document.hidden)timer=setTimeout(poll,failures?Math.min(30000,POLL*2**failures):POLL);
 }
-async function loadOlder(){
- if(!older||loadingOlder)return;const g=gen,token=older;loadingOlder=true;olderButton.hidden=true;
- try{
-  const v=await request(token,'older');if(g!==gen)return;
-  if(v.ok!==true&&v.error==='page_expired'){
-   // Start again from the latest page, which brings a fresh token.
-   reset();loadingOlder=false;await poll();if(g===gen)setStatus(messages.page_expired);return;
-  }
-  // A slow answer keeps the token, so Show older can simply be tapped again.
-  if(v.ok===true){older=v.older;prepend(v.events,v.omitted===true);}
-  else if(v.error==='history_slow')setStatus(messages.older_slow);
-  else{showError(v);older=null;}
- }catch(e){if(g===gen&&!e?.superseded)setStatus(e?.slow?messages.older_slow:'Older messages unavailable.');}
- finally{if(g===gen){loadingOlder=false;olderButton.hidden=!older;}}
+function loadOlder(){
+ if(olderLoad||!older)return olderLoad;
+ const g=gen,version=recordVersion,token=older;olderButton.hidden=true;
+ const current=()=>g===gen&&version===recordVersion;
+ const load=(async()=>{
+  try{
+   const v=await request(token,'older');if(!current())return false;
+   if(v.ok!==true&&v.error==='page_expired'){
+    // Start again from the latest page, which brings a fresh token.
+    reset();await poll();if(g===gen)setStatus(messages.page_expired);return false;
+   }
+   // A slow answer keeps the token, so Show older can simply be tapped again.
+   if(v.ok===true){older=v.older;prepend(v.events,v.omitted===true);return true;}
+   if(v.error==='history_slow')setStatus(messages.older_slow);
+   else{showError(v);older=null;}
+  }catch(e){if(current()&&!e?.superseded)setStatus(e?.slow?messages.older_slow:'Older messages unavailable.');}
+  finally{if(olderLoad===load){olderLoad=null;olderButton.hidden=!older;updateReferenceCards();}}
+  return false;
+ })();
+ olderLoad=load;return load;
 }
 function mount(n){
  unmount();name=n;root=make('div','conversation');root.id='conversation';
@@ -897,12 +1003,12 @@ function element(){return root;}
 function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now(),before:new Set(seen)});renderPending();following=true;restore();}
 function unmount(){
  stepView?.reset();stepView=null;provider='';
- recordVersion++;recordConfirmed=false;lastRecordPoll=null;dismissReferenceSelection();
+ recordVersion++;recordConfirmed=false;lastRecordPoll=null;referenceJump=null;clearReferenceFlash();dismissReferenceSelection();
  gen++;clearTimeout(timer);timer=0;closePreview();forgetThumbnails();for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
  mailResize?.disconnect();mailResize=null;mailWidth=0;
  clearToolGroups();
  root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
- events=[];seen=new Set();older=null;pending=[];failures=0;loadingOlder=false;following=true;savedTop=0;name='';
+ events=[];seen=new Set();older=null;pending=[];failures=0;olderLoad=null;following=true;savedTop=0;name='';
 }
 document.addEventListener('visibilitychange',()=>{
  if(document.hidden){
@@ -912,7 +1018,7 @@ document.addEventListener('visibilitychange',()=>{
   if(controllers.preview&&previewRequest)previewRetry=true;
   for(const item of thumbnails.values())item.controller?.abort();
   for(const k in controllers){controllers[k]?.abort();controllers[k]=null;}
-  loadingOlder=false;if(olderButton)olderButton.hidden=!older;
+  referenceJump=null;clearReferenceFlash();olderLoad=null;if(olderButton)olderButton.hidden=!older;
  }else if(root){
   if(previewRetry&&previewRequest&&panel){const x=previewRequest,focus=previewFocus;openPreview(x);previewFocus=focus;}
   restore();poll();
