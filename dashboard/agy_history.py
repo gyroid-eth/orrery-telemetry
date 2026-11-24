@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from contextlib import contextmanager
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -58,6 +57,7 @@ def _receipt(index, launch):
 
 @contextmanager
 def _receipt_lock(path):
+    import fcntl  # The receipt writer is POSIX-only; keep Windows imports of the dashboard safe.
     descriptor = os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX)
