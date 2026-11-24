@@ -370,7 +370,8 @@ class Handler(BaseHTTPRequestHandler):
                            {'ok':False,'error':exc.code,'reason_code':exc.reason_code})
             except Exception:self._send(503,{'ok':False,'error':'history_unavailable','reason_code':''})
             return
-        if parts.path in {'/view/conversation/preview','/view/conversation/diff'} and self.server.mobile_config.history_enabled:
+        if parts.path in {'/view/conversation/preview','/view/conversation/diff',
+                          '/view/conversation/detail'} and self.server.mobile_config.history_enabled:
             # Only a roster name and an ID this relay issued on a history page.
             # The request never contains a cockpit reference or path.
             kind=parts.path.rsplit('/',1)[1]
@@ -388,7 +389,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 options={'thumbnail':True} if 'thumbnail' in query else {}
                 client=self.server.mobile_history
-                value=client.diff(nm,ref) if kind=='diff' else client.preview(nm,ref,**options)
+                value=getattr(client,kind)(nm,ref,**options)
                 self._send(200,mobile_history.encode(value))
             except LookupError:self._send(410,{'ok':False,'error':kind+'_expired'})
             except mobile_history.HistoryUnavailable as exc:
