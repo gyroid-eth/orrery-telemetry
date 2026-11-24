@@ -494,7 +494,7 @@ function body(text,assistant=false,images){
  const box=make('div','conversation-text'),m=markdown();
  if(m&&assistant){
   m.renderDocument(text,box,{codeControls:true});
-  renderMarkdownImages(box,images,m);
+  renderMarkdownImages(box,images,m,{barePaths:true});
  }
  else if(m)m.renderText(text,box);else box.textContent=text;
  return box;
@@ -702,7 +702,7 @@ function observeThumbnail(button){
   thumbnailObserver.observe(button);
  }
 }
-function renderMarkdownImages(host,images,renderer){
+function renderMarkdownImages(host,images,renderer,{barePaths=false}={}){
  const refs=new Map();
  if(Array.isArray(images))for(const item of images.slice(0,8)){
   if(typeof item?.target==='string'&&typeof item.ref==='string'&&REF.test(item.ref))refs.set(item.target,item.ref);
@@ -728,6 +728,22 @@ function renderMarkdownImages(host,images,renderer){
   if(ref){
    marker.replaceWith(thumbnail({ref,label,markdown:true},alt||label,caption));
   }else marker.textContent=caption;
+ }
+ if(!barePaths||!refs.size)return;
+ // Use the same path candidates as the desktop. Match a whole line of
+ // assistant prose, even when Markdown combines it with adjacent lines.
+ for(const marker of host.querySelectorAll(':scope > p > span[data-path-candidate]')){
+  const target=marker.dataset.pathCandidate,ref=refs.get(target);
+  if(!ref||marker.dataset.pathLabel||!target.startsWith('/')||target.startsWith('//'))continue;
+  let before=marker.previousSibling,after=marker.nextSibling;
+  while(before&&/^[ \t]*$/.test(before.textContent))before=before.previousSibling;
+  while(after&&/^[ \t]*$/.test(after.textContent))after=after.nextSibling;
+  if((before&&!/\n[ \t]*$/.test(before.textContent))||(after&&!/^[ \t]*\n/.test(after.textContent)))continue;
+  const label=target.split('/').pop();
+  const button=make('button','conversation-path-preview',target);
+  button.type='button';button.setAttribute('aria-label','Preview image: '+label);
+  button.onclick=()=>openPreview({ref,label,markdown:true});
+  marker.replaceWith(button);
  }
 }
 function forgetThumbnails(node){

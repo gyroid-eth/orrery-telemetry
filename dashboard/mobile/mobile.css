@@ -733,6 +733,11 @@ html.graph-fullscreen #settings{z-index:40}
 .reader-fullscreen .conversation-text :is(h1,h2,h3,h4,h5,h6),#message-body .markdown-heading{font:600 14px/1.6 var(--mono);margin:12px 0 8px}
 .conversation-text ul,.conversation-text ol{padding-left:22px;margin:8px 0}.conversation-text li p{margin:0}.conversation-text blockquote{margin:8px 0;padding-left:12px;border-left:2px solid var(--hair);color:var(--ink-dim)}
 .conversation-text a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}.conversation-text code{font-family:var(--mono);background:color-mix(in srgb,var(--hair) 40%,transparent);border-radius:3px}
+.mobile .conversation-path-preview{
+  max-width:100%;padding:2px 0;border:0;background:none;color:var(--ink);font:inherit;
+  text-align:left;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere;cursor:pointer;
+}
+.conversation-path-preview:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 .mobile .reader-fullscreen .conversation-code,.mobile #message-body .conversation-code{padding:0;margin:8px 0;background:var(--bg);border:1px solid var(--hair);border-radius:6px;overflow:hidden;white-space:normal}
 .conversation-code-head{display:flex;align-items:center;gap:8px;padding:5px 9px;border-bottom:1px solid var(--hair);color:var(--ink-dim);font:9.5px var(--mono)}
 .conversation-code-language{flex:1}.mobile .conversation-code-copy,.mobile .conversation-table-copy,.mobile .conversation-output-toggle,.mobile .conversation-dismiss{border:0;background:none;color:var(--ink-dim);font:9.5px var(--mono);min-height:28px;padding:3px 5px;text-transform:uppercase}
