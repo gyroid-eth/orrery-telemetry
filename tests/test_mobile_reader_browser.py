@@ -962,18 +962,88 @@ def test_unselected_pane_shows_guidance_with_disabled_persistent_input(phone):
     wait("!document.querySelector('#terminal-sheet').open")
 
 
-def test_review_without_tail_still_invalidates_confirmation_on_preview_failure(phone):
+@pytest.mark.parametrize('reviewed',[False,True])
+def test_single_preview_failure_keeps_input_available(phone,reviewed):
     _,js,wait,state=phone
     wait("document.querySelector('#terminal-text')?.disabled===false")
-    js("document.querySelector('#terminal-text').focus();const field=document.querySelector('#terminal-text');field.value='Keep this draft';field.dispatchEvent(new Event('input',{bubbles:true}))")
+    js("""const fetchTerminal=fetch;window.fetch=async(...args)=>{
+      const response=await fetchTerminal(...args);
+      if(args[0]==='/view/terminal/preview'&&response.status===503)
+        window.failedPreview=performance.now();
+      return response;
+    };
+    const field=document.querySelector('#terminal-text');
+    field.value='Keep this draft';field.dispatchEvent(new Event('input',{bubbles:true}));""")
     wait("!document.querySelector('#terminal-review').disabled")
-    js("document.querySelector('#terminal-review').click()")
+    if reviewed:
+        js("document.querySelector('#terminal-review').click()")
+        wait("document.querySelector('.reader-review')!==null")
+    state['preview_failures']=1
+    wait("window.failedPreview!==undefined")
+    js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))")
+    assert js("document.querySelector('.terminal-message').textContent===''&&document.querySelector('.reader-pane-recovery')===null")
+    if not reviewed:
+        assert js("document.querySelector('#terminal-text').value==='Keep this draft'&&!document.querySelector('#terminal-review').disabled")
+        js("document.querySelector('#terminal-review').click()")
     wait("document.querySelector('.reader-review')!==null")
-    state['preview_error']=True
-    wait("document.querySelector('.reader-review')===null&&document.querySelector('.terminal-message').innerText.includes('Preview unavailable')",8)
-    assert js("document.querySelector('#terminal-text').value==='Keep this draft'&&document.querySelector('#terminal-review').disabled")
-    assert any(op=='cancel' for op,_ in state['calls'])
+    assert js("document.querySelector('.terminal-exact').textContent==='Keep this draft'")
+    js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Send once').click()")
+    wait("document.querySelector('.reader-receipt.accepted')!==null")
+    assert [op for op,_ in state['calls'] if op in {'prepare','commit','cancel'}]==['prepare','commit']
+
+
+@pytest.mark.parametrize('restart',['relay','cockpit','background','healthy-background','prepare'])
+def test_preview_renews_capability_and_pane_after_restart(phone,restart):
+    _,js,wait,state=phone
+    wait("document.querySelector('#terminal-text')?.disabled===false")
+    js("""const fetchTerminal=fetch;window.fetch=async(url,options)=>{
+      const response=await fetchTerminal(url,options);
+      if(url==='/view/terminal/preview'&&response.ok)
+        window.verifiedChoice=JSON.parse(options.body).choice;
+      return response;
+    };
+    const field=document.querySelector('#terminal-text');
+    field.value='Keep this draft';field.dispatchEvent(new Event('input',{bubbles:true}));""")
+    wait("!document.querySelector('#terminal-review').disabled")
+    if restart!='prepare':
+        js("document.querySelector('#terminal-review').click()")
+        wait("document.querySelector('.reader-review')!==null")
+    background=restart in {'background','healthy-background'}
+    if background:
+        js("""window.fixtureHidden=true;
+        Object.defineProperty(document,'hidden',{configurable:true,get:()=>fixtureHidden});
+        document.dispatchEvent(new Event('visibilitychange'));""")
+    epoch='fixture-epoch' if restart in {'relay','healthy-background','prepare'} else 'new-epoch'
+    state.update(reject_stale_terminal=True, terminal_epoch=epoch,
+                 targets=[dict(choice='renewed-choice',name='SampleAgent',pane_label='Window 0 · pane 0',
+                               revision='fixture-revision')])
+    if restart=='healthy-background':
+        state['receipt_state']='prepared'
+    if background:
+        js("fixtureHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
+    if restart=='prepare':
+        js("document.querySelector('#terminal-review').click()")
+    wait("window.verifiedChoice==='renewed-choice'",12)
+    assert state['get_calls'].count('/view/terminal')>=3
     assert not any(op=='commit' for op,_ in state['calls'])
+    if restart=='healthy-background':
+        wait("document.querySelector('.terminal-confirm')?.disabled===false")
+        assert any(op=='status' for op,_ in state['calls'])
+    else:
+        wait("document.querySelector('#terminal-review')?.disabled===false",12)
+        assert js("document.querySelector('#terminal-text').value==='Keep this draft'")
+        if restart=='prepare':
+            assert [p['choice'] for op,p in state['calls'] if op=='prepare']==['fixture-choice']
+        else:
+            assert js("document.querySelector('.terminal-message').textContent.includes('Review input again')")
+        js("document.querySelector('#terminal-review').click()")
+        wait("document.querySelector('.terminal-exact')?.textContent==='Keep this draft'")
+        prepared=[payload for op,payload in state['calls'] if op=='prepare'][-1]
+        assert (prepared['epoch'],prepared['choice'])==(epoch,'renewed-choice')
+    wait("document.querySelector('.terminal-exact')?.textContent==='Keep this draft'")
+    js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Send once').click()")
+    wait("document.querySelector('.reader-receipt.accepted')!==null")
+    assert [payload['epoch'] for op,payload in state['calls'] if op=='commit']==[epoch]
 
 
 def test_metadata_shrink_cannot_release_paused_near_tail(phone):
