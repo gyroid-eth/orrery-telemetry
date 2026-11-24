@@ -1,4 +1,5 @@
 """Recorded references in the real mobile Reader, with synthetic pages."""
+import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -54,6 +55,19 @@ def test_recorded_reply_separates_literal_quote_and_preserves_body(phone):
                             noClock='Jump to quoted message from SampleAgent')
 
 
+def test_recorded_one_line_reply_preserves_escaped_quote_and_reply_delimiter(phone):
+    _, js, _, _ = phone
+    quote = 'Keep "quoted text" | Reply: inside the quote.\nSecond line.'
+    body = 'Check again | Reply: this is still the reply.'
+    text = ('Reference: SampleAgent · assistant · 2026-11-24T00:35:14Z | Recorded message: result'
+            f' | Quote: {json.dumps(quote)} | Reply: {body}')
+    publish(phone, event('reply', text, 'user'))
+    assert js(CARD + '.querySelector(".conversation-reply-reference-quote").textContent') == quote.splitlines()[0]
+    assert js(CARD + '.title').endswith(quote)
+    assert js('document.querySelector("[data-id=reply] .conversation-text").textContent') == body
+    assert js(CARD + '.getAttribute("aria-disabled")') == 'false'
+
+
 def test_incomplete_or_non_user_replies_stay_literal(phone):
     _, js, _, _ = phone
     valid = reply('result')
@@ -61,7 +75,7 @@ def test_incomplete_or_non_user_replies_stay_literal(phone):
                valid.replace('\n> ', '\n>'), valid.replace('\n\n', '\n'),
                valid.replace('2026-11-24T00:35:14.342Z', 'not a time'), 'Leading text\n'+valid,
                reply('result', quote=' '), reply('result', body=' \n'), valid.rsplit('\n', 2)[0],
-               'Reference: SampleAgent · assistant · 2026-11-24T00:35:14Z | Recorded message: result | Quote: "sample" | Reply: answer']
+               'Reference: SampleAgent · assistant · 2026-11-24T00:35:14Z | Recorded message: result | Quote: "\\q" | Reply: answer']
     events = [event(f'bad-{i}', text, 'user') for i, text in enumerate(invalid)]
     events += [event('bad-assistant', valid), event('bad-truncated', valid, 'user', truncated=True)]
     publish(phone, *events)

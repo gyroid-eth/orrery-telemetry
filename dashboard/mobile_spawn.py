@@ -92,17 +92,20 @@ def _catalog_choices(value):
                     continue
                 harness_id = harness['id']
                 key = _harness_key(harness_id)
-                # These are the tools-aware launch paths supported by the
-                # mobile form. The desktop retains the other provider options.
-                if key not in _TOOLS_HARNESSES:
+                antigravity = provider_id == 'gemini' and key == 'antigravity'
+                if key not in _TOOLS_HARNESSES and not antigravity:
                     continue
                 effort = _effort_policy(provider, model, harness)
                 if effort['effort_required'] and not effort['efforts']:
                     continue
-                route_label = harness.get('label')
+                route_label = label if antigravity else harness.get('label')
                 routes.append({'id': harness_id, 'key': key,
                                'label': route_label if _text(route_label, 96) else harness_id,
                                'default': harness.get('default') is True, **effort})
+                # The mobile form submits standalone launches. Antigravity
+                # requires an explicit parent and a resource declaration.
+                if antigravity:
+                    routes[-1]['launch_blocked'] = True
             if not routes:
                 continue
             index, url_key = model.get('url_index'), model.get('url_key')
@@ -110,7 +113,9 @@ def _catalog_choices(value):
                 continue
             if url_key is not None and not _text(url_key, 256):
                 continue
+            locality = model.get('locality') or provider.get('locality')
             models.append({'provider': provider_id, 'provider_label': label,
+                           **({'locality': 'local'} if locality == 'local' else {}),
                            'model': model['id'], 'default': model.get('default') is True,
                            'harnesses': routes, 'url_index': index, 'url_key': url_key})
     dirs = []
@@ -196,7 +201,7 @@ class MobileSpawn:
             'catalog':token,
             'configurable':configurable,
             'models':[{key:value for key, value in model.items()
-                       if key in {'model','provider','provider_label','default','harnesses','url_index'}} for model in models],
+                       if key in {'model','provider','provider_label','locality','default','harnesses','url_index'}} for model in models],
             'directories':directories,
         }
 
@@ -232,7 +237,7 @@ class MobileSpawn:
                 raise SpawnError('invalid_launch', 400)
             model, directory = models[model_index], directories[dir_index]
             route = next((item for item in model['harnesses'] if item['id'] == value['harness']), None)
-            if (route is None or (effort is None and route['effort_required'])
+            if (route is None or route.get('launch_blocked') or (effort is None and route['effort_required'])
                     or (effort is not None and effort not in route['efforts'])
                     or (not configurable and (role or value['computer'] or value['browser']))):
                 raise SpawnError('invalid_launch', 400)

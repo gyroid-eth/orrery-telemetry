@@ -41,6 +41,9 @@ def test_steps_add_finish_toggle_demo_and_keep_reference(phone, provider, theme)
     js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
     wait("document.querySelectorAll('.conversation-step').length===1")
     wait("document.querySelector('.conversation-steps-heading').textContent==='Working…'")
+    assert js("document.querySelector('.conversation-steps-toggle').getAttribute('aria-expanded')") == 'false'
+    assert js("document.querySelector('.conversation-steps-toggle').getAttribute('aria-label').startsWith('Working… 1 step, ')")
+    js("document.querySelector('.conversation-steps-toggle').click()")
     assert js("document.querySelector('.conversation-steps-toggle').getAttribute('aria-expanded')") == 'true'
     before = js("document.querySelector('.conversation-steps-time').textContent")
     wait("document.querySelector('.conversation-steps-time').textContent!=="+json.dumps(before), timeout=3)
@@ -58,44 +61,47 @@ def test_steps_add_finish_toggle_demo_and_keep_reference(phone, provider, theme)
     # Native pairing/IDs arrive through project_event, not an alternative renderer.
     state['events'] = project(provider, ongoing)
     js("document.dispatchEvent(new Event('visibilitychange'))")
-    wait("document.querySelectorAll('.conversation-step').length===2")
+    wait("document.querySelectorAll('.conversation-step').length===3")
     assert js("document.querySelectorAll('.conversation-steps').length") == 1
     assert js("document.querySelectorAll('.conversation-step-record:not([hidden]) .conversation-chip').length") == 1
     assert js("getComputedStyle(document.querySelector('.conversation-step-record'),'::before').display") == 'none'
-    assert js("document.querySelectorAll('.conversation-tool-group').length") == 1
+    assert js("document.querySelectorAll('.conversation-tool-group').length") == 0
     assert js("document.querySelector('[data-id=unknown]').hidden")
-    assert js("document.querySelectorAll('.conversation-step-outcome')[1].textContent") == ('Failed' if provider == 'claude' else 'Observed')
+    assert js("[...document.querySelectorAll('.conversation-step-outcome')].at(-1).textContent") == ('Failed' if provider == 'claude' else 'Observed')
     if theme == 'demo':
         wait("!document.querySelector('.conversation-step-target').textContent.includes('report')")
         assert js("document.querySelector('.conversation-step-tool').textContent") == 'Read'
     else:
         assert js("document.querySelector('.conversation-step-target').textContent") == 'report.md'
-    assert js("getComputedStyle(document.querySelector('.conversation-step-target')).textOverflow") == 'ellipsis'
+    assert js("getComputedStyle(document.querySelector('.conversation-step-target')).overflowWrap") == 'anywhere'
+    assert js("""(() => {
+        const style=getComputedStyle(document.querySelector('.conversation-steps'));
+        return style.borderTopWidth==='0px'&&style.backgroundColor==='rgba(0, 0, 0, 0)';
+    })()""")
     assert js("document.querySelector('.conversation-steps').scrollWidth<=document.querySelector('.conversation-list').clientWidth")
     capture('working')
     if provider == 'codex':
         state['events'] = project(provider, sequence)
     js("stepsActivity.state='wait';OrreryMobileConversation.refreshActivity();document.dispatchEvent(new Event('visibilitychange'))")
     wait("document.querySelector('.conversation-steps-toggle').getAttribute('aria-expanded')==='false'")
-    assert js("document.querySelector('.conversation-steps-heading').textContent.startsWith('Worked for ')")
+    assert js("document.querySelector('.conversation-steps-toggle').getAttribute('aria-label').startsWith('2 tool calls, ')")
     capture('collapsed')
     js("document.querySelector('.conversation-steps-toggle').click()")
     wait("document.querySelector('.conversation-steps-toggle').getAttribute('aria-expanded')==='true'")
     capture('opened')
-    # Past turns stay collapsed when newly loaded; a later active turn opens.
+    # The later active turn also starts collapsed.
     second = (raw('next', 'text', 'user', step_boundary=True) if provider == 'claude' else
               raw('next', 'system', 'system', step_turn=dict(id='d'*32, phase='start')))
     state['events'] = project(provider, sequence+[second])
     js("stepsActivity.state='work';document.dispatchEvent(new Event('visibilitychange'))")
     wait("document.querySelectorAll('.conversation-steps').length===2")
-    assert js("document.querySelectorAll('.conversation-steps-toggle')[1].getAttribute('aria-expanded')") == 'true'
+    assert js("document.querySelectorAll('.conversation-steps-toggle')[1].getAttribute('aria-expanded')") == 'false'
     # The prior manually opened card remains user-controlled; remount defaults to collapsed.
     js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
     wait("document.querySelectorAll('.conversation-steps').length===2")
     assert js("document.querySelector('.conversation-steps-toggle').getAttribute('aria-expanded')") == 'false'
-    # OS motion preference disables the selected A transitions and line pseudo element.
+    # OS motion preference disables the disclosure transition.
     client.call('Emulation.setEmulatedMedia', features=[dict(name='prefers-reduced-motion', value='reduce')])
-    assert js("getComputedStyle(document.querySelector('.conversation-step'),'::before').animationName") == 'none'
     assert js("getComputedStyle(document.querySelector('.conversation-steps-expansion')).transitionDuration") == '0s'
     # A hidden tab pauses the local step clock; unmount removes all cards.
     js("Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))")
@@ -105,6 +111,31 @@ def test_steps_add_finish_toggle_demo_and_keep_reference(phone, provider, theme)
     js("OrreryMobileTerminal.close()")
     assert js("document.querySelector('.conversation-steps')===null")
     assert not any(op in {'prepare', 'commit'} for op, _ in state['calls'])
+
+
+@pytest.mark.parametrize('provider', ['claude', 'codex'])
+def test_active_request_stays_in_the_same_inline_step(phone, provider):
+    _, js, wait, state = phone
+    js("window.stepsActivity={running:true,stale:false,state:'work',workDisplay:'2s'};window.OrreryMobileAgent={forName:()=>stepsActivity}")
+    sequence = fixtures(provider)
+    if provider == 'claude':
+        start = sequence[:2]
+    else:
+        start = [sequence[0], raw('call', tool_call_id='a'*32)]
+    state.update(provider=provider, events=project(provider, start))
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('.conversation-steps-count')?.textContent==='1 step'")
+    js("window.firstStep=document.querySelector('.conversation-step');document.querySelector('.conversation-steps-toggle').click()")
+    assert js("document.querySelector('.conversation-tool-group')===null")
+    if provider == 'claude':
+        js("stepsActivity.state='wait';OrreryMobileConversation.refreshActivity()")
+        assert js("firstStep.querySelector('.conversation-step-outcome').textContent") == 'Observed'
+        assert js("document.querySelector('.conversation-tool-group')===null")
+    state['events'] = project(provider, start+[sequence[2]])
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("firstStep.querySelector('.conversation-step-icon').classList.contains('done')")
+    assert js("document.querySelectorAll('.conversation-step').length===1&&document.querySelector('.conversation-step')===firstStep")
+    assert js("document.querySelector('.conversation-tool-group')===null")
 
 
 @pytest.mark.parametrize('theme', ['light', 'dark'])

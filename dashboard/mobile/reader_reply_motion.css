@@ -111,4 +111,7 @@
 
 .reader-reference-feedback[data-confirmed='true'] .reader-reference-cue { opacity: 1; }
 
-.reader-reply-word { position: relative; }
+.reader-reply-word,.reader-mail-word { position: relative; top: 0; }
+.conversation-text [data-reply-queued] { opacity: 0; }
+.conversation-list .conversation-pending { opacity: 1; border-style: none; }
+.reader-sent-ack { display: inline-block; color: var(--accent-control); margin-inline-start: 5px; }

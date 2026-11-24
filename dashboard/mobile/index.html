@@ -72,6 +72,7 @@
   <symbol id="icon-new-agent" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v2M19 7v8m-4-4h8"/></symbol>
   <symbol id="icon-launch-folder" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/></symbol>
   <symbol id="icon-launch-model" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9 3v4m6-4v4M9 17v4m6-4v4M3 9h4m-4 6h4m10-6h4m-4 6h4"/></symbol>
+  <symbol id="icon-launch-local" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/></symbol>
   <symbol id="icon-launch-computer" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4m-4 0h8"/></symbol>
   <symbol id="icon-launch-browser" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01m3 0h.01"/></symbol>
 </svg>
@@ -231,8 +232,17 @@
     <button class="icon-button" id="spawn-settings-close" type="button" aria-label="Close model settings" title="Close" autofocus><svg class="mobile-icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
   </header>
   <div class="spawn-body">
-    <div class="spawn-field spawn-select-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-launch-model"/></svg><select id="spawn-model" aria-label="Model" title="Model"></select></div>
-    <div class="spawn-field spawn-select-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-terminal"/></svg><select id="spawn-harness" aria-label="Harness" title="Harness"></select></div>
+    <div class="spawn-model-picker">
+      <div id="spawn-provider-tabs" class="spawn-provider-tabs" role="group" aria-label="Providers"></div>
+      <label class="spawn-model-search">
+        <svg class="mobile-icon" aria-hidden="true"><use href="#icon-search"/></svg>
+        <input type="search" id="spawn-model-search" placeholder="Find a model" aria-label="Find a model" aria-controls="spawn-model-list" autocomplete="off" spellcheck="false">
+      </label>
+      <div id="spawn-model-list" class="spawn-model-list" role="radiogroup" aria-label="Models"></div>
+      <p id="spawn-model-empty" class="spawn-model-note" role="status" hidden>No matching models.</p>
+    </div>
+    <p id="spawn-model-notice" class="spawn-model-note" role="status" hidden></p>
+    <div class="spawn-field spawn-select-field" id="spawn-harness-field"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-terminal"/></svg><select id="spawn-harness" aria-label="Harness" title="Harness"></select></div>
     <div class="spawn-field" id="spawn-effort-field">
       <svg class="mobile-icon" aria-hidden="true"><use href="#icon-working"/></svg>
       <select id="spawn-effort" aria-label="Effort" title="Effort"></select>

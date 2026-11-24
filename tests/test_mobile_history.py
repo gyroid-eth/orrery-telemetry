@@ -438,10 +438,15 @@ def test_phone_tool_group_range_uses_earliest_and_latest_when_middle_arrives_lat
 def test_conversation_source_has_no_html_sinks():
     import re
     source = re.sub(r'/\*.*?\*/', '', (ROOT / 'dashboard/mobile/conversation.js').read_text(), flags=re.S)
-    # Preview and thumbnails share the checked PNG source and cleanup.
-    assert source.count('.src=') == 2 and "img.src=pngSource(v);" in source and "img.src='';" in source
+    # Preview and thumbnails share the checked PNG source and cleanup. The
+    # pending bubble also shows the image the person just picked, from an
+    # object URL of that local File only.
+    assert source.count('.src=') == 3 and "img.src=pngSource(v);" in source and "img.src='';" in source
     assert source.count("'data:image/png;base64,'+v.data") == 1
+    assert source.count('const url=URL.createObjectURL(attachment.file)') == 1
+    assert "img.src=url;" in source
     source = source.replace('img.src=pngSource(v);', '').replace("img.src='';", '')
+    source = source.replace('const url=URL.createObjectURL(attachment.file)', '').replace('img.src=url;', '')
     # The one link is Save's hidden download anchor to the object URL it made
     # from the bytes the preview already shows.
     assert source.count('.href') == 1 and source.count('createObjectURL') == 1
@@ -536,7 +541,9 @@ def run_sheet(body, terminal=True):
         ("vm.runInNewContext(SOURCE,context);", """let convRoot=null;const mounted=[],pend=[];let unmounts=0;
 context.queueMicrotask=queueMicrotask;
 context.OrreryMobileConversation={enabled:async()=>true,mount(n){convRoot=new Element('div','conversation');convRoot.id='conversation';mounted.push(n);return convRoot;},
- element(){return convRoot;},unmount(){if(convRoot)unmounts++;convRoot=null;},addPending(t){pend.push(t);},restore(){}};
+ element(){return convRoot;},unmount(){if(convRoot)unmounts++;convRoot=null;},
+ beginPending(text,origin){const item={text,origin:{...origin},beforeCommit:!calls.some(c=>c.op==='commit')};pend.push(item);return item;},
+ finishPending(item,accepted){item.accepted=accepted;},restore(){}};
 vm.runInNewContext(SOURCE,context);"""),
         ("(async()=>{await settle();await open();BODY;context.OrreryMobileTerminal.close();console.log('ok');})()",
          "(async()=>{await settle();BODY;console.log('ok');})()"),
@@ -545,7 +552,6 @@ vm.runInNewContext(SOURCE,context);"""),
         harness = harness.replace(old, new)
     harness = harness.replace("setAttribute(){}", "setAttribute(k,v){this[k]=v;}")
     harness = harness.replace("setProperty(key,value){this[key]=value;}", "setProperty(key,value){this[key]=value;},getPropertyValue(key){return this[key]||'';}")
-    harness = harness.replace("focus(){}", "focus(){}getBoundingClientRect(){return {height:80};}")
     harness = harness.replace("createElement:t=>new Element(t)", "createElement:t=>new Element(t),createElementNS:(_ns,t)=>new Element(t)")
     harness = harness.replace("document:doc,console", "history:{state:null,pushState(v){this.state=v;},back(){}},document:doc,console")
     source = (ROOT / 'dashboard/mobile/mobile.js').read_text()
@@ -575,7 +581,8 @@ def test_sheet_opens_on_conversation_and_sends_only_through_the_reviewed_termina
       assert.ok(!calls.some(c=>c.op==='commit'),'nothing is sent before Send once');
       await button('Send once').onclick();await settle();
       assert.deepEqual(calls.filter(c=>c.op==='commit').length,1);
-      assert.deepEqual(pend,['synthetic line']);
+      assert.deepEqual(pend,[{text:'synthetic line',origin:{top:0,right:viewWidth,width:viewWidth},
+        beforeCommit:true,accepted:true}]);
       context.OrreryMobileTerminal.close();assert.ok(unmounts>=1);assert.equal(q('#conversation'),null);
     ''')
 

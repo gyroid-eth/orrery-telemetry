@@ -9,6 +9,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from mobile_reader_browser import phone
+from test_mobile_reference_reply import draft, setup, stage
 
 
 def start(js, wait, state):
@@ -50,7 +51,14 @@ def capture(client, theme, step):
     if folder:
         path = Path(folder)
         path.mkdir(parents=True, exist_ok=True)
-        (path/(theme+'-'+step+'.png')).write_bytes(base64.b64decode(client.call('Page.captureScreenshot', format='png')['data']))
+        if os.environ.get('CDP_PDF_ON_TIMEOUT'):
+            result=client.call('Page.printToPDF',paperWidth=390/96,paperHeight=844/96,
+                               marginTop=0,marginRight=0,marginBottom=0,marginLeft=0,printBackground=True)
+            suffix='.pdf'
+        else:
+            result=client.call('Page.captureScreenshot',format='png')
+            suffix='.png'
+        (path/(theme+'-'+step+suffix)).write_bytes(base64.b64decode(result['data']))
 
 
 @pytest.mark.parametrize('theme', ['dark', 'light'])
@@ -87,12 +95,64 @@ def test_multiple_selection_add_remove_and_one_confirmed_send(phone, theme):
     assert js("document.querySelectorAll('.reader-image-thumb').length") == 3
     js("document.querySelector('#terminal-review').click()")
     wait("document.querySelector('.reader-review')!==null")
+    js("window.sentDraftUrls=attachmentURLs.slice()")
     js("[...document.querySelectorAll('button')].find(button=>button.textContent==='Send once').click()")
     wait("document.querySelector('.reader-receipt.accepted')!==null")
     assert state['draft'] == expected
     assert sum(op == 'commit' for op, _ in state['calls']) == 1
-    assert js("attachmentURLs.every(url=>revokedURLs.includes(url))")
+    assert js("sentDraftUrls.every(url=>revokedURLs.includes(url))")
     assert js("document.querySelectorAll('.reader-image-thumb').length") == 0
+    wait("[...document.querySelectorAll('.conversation-pending img')].filter(img=>img.naturalWidth===240).length===3")
+    assert not js("document.querySelector('.conversation-pending').textContent.includes('.orrery-input-images')")
+    assert [upload['label'] for upload in uploads(state)] == ['image-0.png','image-1.png','image-2.png','image-0.png']
+    capture(client,theme,'pending')
+    state['events']=[dict(id='recorded-images',kind='text',role='user',text=expected,
+                          input_display_text='Compare these',ts='2026-01-23T00:00:00Z')]
+    wait("!!document.querySelector('[data-id=recorded-images]')&&!document.querySelector('.conversation-pending')",10)
+    assert js("attachmentURLs.every(url=>revokedURLs.includes(url))")
+
+
+
+@pytest.mark.parametrize('theme', ['dark', 'light'])
+def test_attachment_only_reference_keeps_thread_until_the_record(phone, theme):
+    client, js, wait, state = setup(phone, 'First quoted line.\n\nSecond | Reply: quoted line.')
+    if theme == 'light':
+        js((Path(__file__).resolve().parents[1]/'dashboard/theme_core.js').read_text())
+        js("document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
+    start(js, wait, state)
+    wait("document.querySelector('[data-id=reference]')!==null&&OrreryMobileTerminal.canReference()")
+    stage(client, js, wait, all_text=True)
+    draft(js, '')
+    select(js, 1)
+    wait("document.querySelectorAll('.reader-image-thumb').length===1&&!document.querySelector('#terminal-review').disabled")
+    js("""window.releaseCommit=null;
+      const fetchBeforeCommit=fetch;window.fetch=async(...args)=>{
+        const result=await fetchBeforeCommit(...args);
+        return String(args[0]).endsWith('/commit')?new Promise(resolve=>{releaseCommit=()=>resolve(result)}):result;
+      }""")
+    js("document.querySelector('#terminal-review').click()")
+    wait("!!document.querySelector('.reader-review')")
+    js("[...document.querySelectorAll('button')].find(button=>button.textContent==='Send once').click()")
+    wait("Boolean(releaseCommit&&document.querySelector('.conversation-pending .conversation-thumbnail-image')?.naturalWidth===240)")
+    js("window.sendingRow=document.querySelector('.conversation-pending')")
+    assert js("sendingRow.dataset.state") == 'sending'
+    assert js("!!sendingRow.querySelector('.conversation-reply-reference')")
+    assert js("!sendingRow.textContent.includes('Recorded message:')&&!sendingRow.textContent.includes('.orrery-input-')")
+    capture(client, theme, 'reference-attachment')
+    js("releaseCommit()")
+    wait("sendingRow.dataset.state==='accepted'")
+    assert js("sendingRow===document.querySelector('.conversation-pending')")
+    sent = state['draft']
+    assert '\n' not in sent and 'Second | Reply: quoted line.' in sent
+    caption, marker = sent.rsplit(' | Reply:', 1)
+    assert marker.startswith(" [image: '")
+    state['events'].append(dict(id='reference-image', kind='text', role='user', text=sent,
+                         input_display_text=caption+' | Reply:', ts='2026-01-23T00:00:00Z',
+                         files=[dict(kind='image', label='Chart.png', ref='a'*32)], shown=True))
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("!!document.querySelector('[data-id=reference-image] .conversation-reply-reference')&&!sendingRow.isConnected")
+    assert js("attachmentURLs.every(url=>revokedURLs.includes(url))")
+    assert sum(op == 'commit' for op, _ in state['calls']) == 1
 
 
 def test_limit_and_invalid_batch_preserve_existing_selection(phone):

@@ -25,6 +25,7 @@ class Element{
  get scrollTop(){return this._top;}set scrollTop(value){this._top=Math.max(0,Math.min(value,this.scrollHeight-this.clientHeight));}
  append(...values){this.children.push(...values);}replaceChildren(...values){this._text='';this.children=[...values];}
  setAttribute(){}addEventListener(kind,fn){this.events[kind]=fn;}focus(){}querySelectorAll(){return [];}querySelector(){return null;}closest(){return null;}after(){}remove(){}
+ getBoundingClientRect(){return {top:0,right:viewWidth,width:viewWidth,height:80};}
  showModal(){this.open=true;}close(){this.open=false;}
 }
 for(const s of ['#terminal-sheet','#selected-name','#agent-picker','.selected-agent','#attention','#events','body>header>span'])staticElements.set(s,new Element());
