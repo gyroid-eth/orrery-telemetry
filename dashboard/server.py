@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 46
+API_GENERATION = 47
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -2298,6 +2298,12 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
             if running else {}
         )
         runtime_by_name[name] = rt
+        reader_fields = {}
+        phase = rt.get("_reader_compaction")
+        if phase and phase[0] == {"claude-code": "claude", "codex-cli": "codex"}.get(program, program):
+            reader_fields["reader_phase"] = "compacting"
+            if phase[1]:
+                reader_fields["reader_phase_elapsed"] = phase[1]
         pane_model = _pane_model_for(rt.get("pane_model"), (m or {}).get("program"))
         rows.append(
             {
@@ -2348,6 +2354,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 "last_active_rel": _rel(last_active, now),
                 "created": s["created"],
                 "surface": "tmux",
+                **reader_fields,
             }
         )
     # 2nd pass: tmux 不在の ORRERY Mail 登録 (retired / gone) も rows に含める。
@@ -7194,9 +7201,9 @@ def agent_history_payload(name: str = "", hours: int | None = 24,
 
 
 try:
-    from dashboard.terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal)
+    from dashboard.terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal, reader_compaction)
 except ModuleNotFoundError:
-    from terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal)
+    from terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal, reader_compaction)
 # --------------------------------------------------------------------------- #
 # Agent runtime probe — コンテキスト残量(HP) + 動作状態を tmux ペインから読む
 #   Claude Code / Codex の TUI 表示を read-only パース。新データ源は持たない。
@@ -7753,6 +7760,9 @@ def _parse_runtime(text: str) -> dict:
     result = {"ctx_used": ctx_used, "act_state": act,
               "ctx_window": ctx_window, "work_secs": work_secs,
               "work_disp": work_disp, "last_disp": last_disp, "pane_model": pane_model}
+    phase = reader_compaction(text, ("claude", "codex"))
+    if phase:
+        result["_reader_compaction"] = phase
     if card_model:
         result.update(codex_card_model=card_model, codex_card_effort=card_effort)
     return result
@@ -7797,6 +7807,9 @@ def _native_context_runtime(session, created, session_id, program):
             if capture.returncode == 0:
                 result = harness_context.parse_context(capture.stdout, program)
                 result['act_state'] = harness_activity.parse_activity(capture.stdout, program)
+                phase = reader_compaction(capture.stdout, (program,))
+                if phase:
+                    result["_reader_compaction"] = phase
                 if program == 'dsh':
                     result['dsh_card_effort'] = harness_context.dsh_effort(capture.stdout)
         except (OSError, subprocess.SubprocessError):

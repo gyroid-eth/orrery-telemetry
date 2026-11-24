@@ -215,7 +215,7 @@ SOFTWARE.
         const finished=g.closed?(g.duration??card.lastWork):(card.lastWork??g.duration);
         title(card,working?(compacting?'Compacting context…':'Working…'):waiting?'Waiting for you':
           finished!==null?'Worked for '+duration(finished):'Recorded work',working&&!compacting);
-        changed(card.clock,working&&card.lastWork!==null?duration(card.lastWork):'');
+        changed(card.clock,compacting?current.reader_phase_elapsed||'':working&&card.lastWork!==null?duration(card.lastWork):'');
         changed(card.count,'· '+g.steps.length+(g.steps.length===1?' step':' steps'));
         card.node.classList.toggle('is-paused',!visible);
         card.node.hidden=!g.steps.length&&!g.orphans&&!now;
@@ -315,7 +315,12 @@ window.visualViewport?.addEventListener('resize',selectionReply);
 let mailResize=null,mailWidth=0;
 let toolGroups=[],toolGroupFor=new Map(),toolSerial=0;
 let stepView=null,provider='';
-function stepContext(){const a=window.OrreryMobileAgent?.forName(name);return {running:a?.stale?false:a?.running===true,act_state:a?.state,work_disp:a?.workDisplay};}
+function stepContext(a=window.OrreryMobileAgent?.forName(name)){
+ const running=a?.running===true&&!a.stale;
+ const compacting=running&&a.readerPhase==='compacting';
+ return {running,act_state:a?.state,work_disp:a?.workDisplay,
+  reader_phase:compacting?'compacting':'',reader_phase_elapsed:compacting?a.readerPhaseElapsed:''};
+}
 function stepsVisible(){return !!root?.isConnected&&!document.hidden;}
 const thumbnails=new Map();let thumbnailObserver=null;
 const messages={
@@ -555,15 +560,30 @@ function mailCard(m,ts,images){
 // The cockpit puts file references on the file tool calls (Read, Write,
 // Edit, apply_patch, SendUserFile...), so a tool row carries chips too.
 function files(e,r){if(Array.isArray(e.files)&&e.files.length){const f=make('div','conversation-files');e.files.forEach(x=>f.append(chip(x)));r.append(f);}}
+const terminalCSI=/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/g;
+function localCommand(e){
+ const command=markdown()?.commandRecord(e.text);
+ const localOutput=command&&!command.shell&&command.outputs.length>0;
+ const output=localOutput?e.text.replace(terminalCSI,''):e.text;
+ const compact=provider==='Claude'&&!e.truncated&&command&&(
+  command.command==='/compact'||command.command?.startsWith('/compact ')||
+  command.outputs.length===1&&command.outputs[0].label==='output'&&
+   command.outputs[0].text.replace(terminalCSI,'').trimStart().split(/\r?\n/,1)[0].trimEnd()==='Compacted (ctrl+o to see full summary)');
+ return {command,output,compact};
+}
+const compactRecord=e=>e?.kind==='tool'&&e.step_boundary===true&&e.text==='Context compacted';
 function row(e){
  if(e.kind==='tool'){const r=make('div','conversation-tool');r.append(make('span','conversation-tool-label',e.text));r.dataset.id=e.id;files(e,r);if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
  if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
- const command=e.role==='user'&&markdown()?.commandRecord(e.text);
+ const record=e.role==='user'?localCommand(e):null,command=record?.command;
+ if(record?.compact){
+  const r=make('div','conversation-compact-envelope');r.dataset.id=e.id;r.hidden=true;return r;
+ }
  const human=e.kind==='text'&&e.role==='user'&&!command;
  const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
  const time=clock(e.ts);
  if(human)r.title=time?'You · '+time:'You';
- if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}
+ if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(record.output,r);}
  else{
   const reference=human&&!e.truncated&&replyReference(e.text);
   if(e.role==='assistant')r.append(speaker(e));
@@ -782,10 +802,16 @@ function setStatus(text){if(!status)return;status.textContent=text;
  status.hidden=/^(?:Read-only record · updating|Latest record · updating|New messages below · paused while you read)$/.test(text);
 }
 function activity(){
- if(!list)return;const stepActivity=stepView?.activity(stepContext(),stepsVisible());list.querySelector('.conversation-activity')?.remove();
- const a=window.OrreryMobileAgent?.forName(name),box=make('div','conversation-activity');
- if(a?.running&&a.state==='work'&&!a.stale&&!stepActivity)box.textContent='Working'+(a.workDisplay?' · '+a.workDisplay:'');
- else{if(a?.running&&['ask','question'].includes(a.state)&&!a.stale&&!stepActivity){box.className+=' reply-needed';box.textContent=a.state==='ask'?'Reply needed · approval':'Reply needed · question';}else if(a?.stale)box.textContent='Activity observation unavailable';}
+ if(!list)return;
+ const a=window.OrreryMobileAgent?.forName(name),context=stepContext(a);
+ const stepActivity=stepView?.activity(context,stepsVisible()),compacting=context.reader_phase==='compacting';
+ list.querySelector('.conversation-activity')?.remove();
+ const box=make('div','conversation-activity');
+ if(compacting&&!(stepActivity&&a.state==='work')){
+  const elapsed=context.reader_phase_elapsed;
+  box.textContent='Compacting context…'+(elapsed?' · '+elapsed:'');
+ }else if(context.running&&a.state==='work'&&!stepActivity)box.textContent='Working'+(a.workDisplay?' · '+a.workDisplay:'');
+ else{if(context.running&&['ask','question'].includes(a.state)&&!stepActivity){box.className+=' reply-needed';box.textContent=a.state==='ask'?'Reply needed · approval':'Reply needed · question';}else if(a?.stale)box.textContent='Activity observation unavailable';}
  if(box.textContent)list.append(box);
  const dot=document.querySelector?.('.reader-state');if(dot&&root?.isConnected){dot.dataset.state=a?.stale?'unknown':a?.state||'unknown';dot.title=a?.stale?'Activity observation unavailable':a?.state==='work'?'Working':a?.state==='ask'?'Approval needed':a?.state==='question'?'Reply needed':'Waiting';dot.setAttribute('aria-label',dot.title);}
 }
@@ -854,6 +880,7 @@ function regroupTools(focused=toolGroups.find(g=>g.button===document.activeEleme
   if(row.className==='conversation-shown-files'){finish();continue;}
   if(row.dataset.id===undefined)continue;
   const e=byId.get(row.dataset.id);
+  if(row.className==='conversation-compact-envelope'||compactRecord(e)){finish();continue;}
   if(e&&stepRows.has(e.id)){finish();row.classList.add('conversation-step-record');row.hidden=!row.querySelector('.conversation-files')&&!row.querySelector('.conversation-mail');continue;}
   if(row.className.includes('conversation-step-record'))row.className=row.className.replace(' conversation-step-record','');
   if(e?.kind==='tool'&&!e.mail?.length)run.push(row);else{finish();row.hidden=false;}

@@ -17,6 +17,8 @@ MODEL = re.compile(r'[A-Za-z0-9_.:+-]+(?:/[A-Za-z0-9_.:+-]+)?\Z')
 EVENT_KEY = re.compile(r'[a-f0-9]{32}\Z')
 STATES = {'run', 'idle', 'finished', 'gone', 'retired', 'unknown'}
 ACTS = {'work', 'wait', 'ask', 'question'}
+PHASE_ELAPSED = re.compile(
+    r'(?:[0-9]{1,4}h(?: [0-9]{1,3}m)?(?: [0-9]{1,2}s)?|[0-9]{1,3}m(?: [0-9]{1,2}s)?|[0-9]{1,2}s)')
 
 
 def png_image(data):
@@ -88,6 +90,11 @@ def project_agent(row):
     if (act == 'work' and isinstance(duration, str)
             and re.fullmatch(r'[0-9]{1,6}(?:s|m[0-9]{2}s|h[0-9]{2}m)', duration)):
         result['work_disp'] = duration
+    if running is True and row.get('reader_phase') == 'compacting':
+        result['reader_phase'] = 'compacting'
+        elapsed = row.get('reader_phase_elapsed')
+        if isinstance(elapsed, str) and PHASE_ELAPSED.fullmatch(elapsed):
+            result['reader_phase_elapsed'] = elapsed
     if 'mail_instance_id' in row or 'mail_agent_id' in row:
         instance=row.get('mail_instance_id');agent=row.get('mail_agent_id')
         # FreshRuntime publishes uuid4().hex. Keep those opaque bytes unchanged;

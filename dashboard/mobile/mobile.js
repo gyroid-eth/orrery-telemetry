@@ -22,7 +22,15 @@ let readingView='graph',tabletLayout=tabletView.matches;
 let snapshot=null,kind='all',agentFilter='',desiredWindow='day',timer=0,active=null,pending=false,receivedAt=0,lastNotices=[];
 const mailRef=a=>a&&/^[a-f0-9]{32}$/.test(a.mail_instance_id)&&Number.isSafeInteger(a.mail_agent_id)&&a.mail_agent_id>0?{mail_instance_id:a.mail_instance_id,mail_agent_id:a.mail_agent_id}:null;
 function markRef(element,value){if(typeof value?.name==='string')element.dataset.agentName=value.name;const ref=mailRef(value);if(ref){element.dataset.mailInstanceId=ref.mail_instance_id;element.dataset.mailAgentId=String(ref.mail_agent_id);}}
-window.OrreryMobileAgent={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?{state:rows[0].act_state,running:rows[0].running,workDisplay:typeof rows[0].work_disp==='string'?rows[0].work_disp:'',stale:snapshot.sources.agents.status!=='available'||snapshot.sources.agents.age_seconds===null||snapshot.sources.agents.age_seconds+(performance.now()-receivedAt)/1000>30}:null;}};
+window.OrreryMobileAgent={forName(name){
+ const rows=(snapshot?.agents||[]).filter(a=>a.name===name);
+ if(rows.length!==1)return null;
+ const [a]=rows;
+ return {state:a.act_state,running:a.running,workDisplay:typeof a.work_disp==='string'?a.work_disp:'',
+  readerPhase:a.reader_phase,readerPhaseElapsed:a.reader_phase_elapsed,
+  stale:snapshot.sources.agents.status!=='available'||snapshot.sources.agents.age_seconds===null||
+   snapshot.sources.agents.age_seconds+(performance.now()-receivedAt)/1000>30};
+}};
 window.OrreryMobileIdentity={forName(name){const rows=(snapshot?.agents||[]).filter(a=>a.name===name);return rows.length===1?mailRef(rows[0]):null;},roster(){const source=snapshot?.sources.agents;return source?.status==='available'&&source.age_seconds!==null&&source.age_seconds+(performance.now()-receivedAt)/1000<=30?snapshot.agents:null;}};
 let mailPage=null,mailPositions=[null],mailPosition=0,mailController=null,mailGeneration=0;
 let pair=null,pairController=null,pairGeneration=0,detailController=null,detailGeneration=0;
