@@ -79,6 +79,9 @@ def test_selected_reference_review_and_once_send(phone,theme):
     state['events'].append(dict(id='recorded',kind='text',role='user',text=expected,ts=STAMP))
     js("document.dispatchEvent(new Event('visibilitychange'))")
     wait("document.querySelector('.conversation-pending')===null")
+    wait("document.querySelector('[data-id=recorded] .conversation-reply-reference')!==null")
+    assert js("document.querySelector('[data-id=recorded] .conversation-reply-reference-quote').textContent")==PASSAGE
+    assert js("document.querySelector('[data-id=recorded] .conversation-text').textContent")=='Keep the role visible in Focus.'
 
 
 def test_remove_reference_keeps_the_reply(phone):
@@ -104,15 +107,19 @@ def test_reference_and_reply_share_the_byte_limit(phone):
     assert not any(op=='prepare' for op,_ in state['calls'])
 
 
-def test_multiline_selection_becomes_a_single_line_quote(phone):
-    client,js,wait,state=setup(phone,'First quoted line.\n\nSecond quoted line.')
+def test_multiline_selection_survives_unchanged_in_the_one_line_payload(phone):
+    client,js,wait,state=setup(phone,'First "quoted" line.\n\nSecond | Reply: quoted line.')
     stage(client,js,wait,True)
-    assert js("document.querySelector('.reader-reference-quote').textContent")=='First quoted line. Second quoted line.'
+    selected = js("selectedText")
+    assert '\n' in selected and 'Second | Reply: quoted line.' in selected
+    assert js("document.querySelector('.reader-reference-quote').textContent")==selected
     draft(js,'Check both lines.')
     js("document.querySelector('#terminal-review').click()")
     wait("document.querySelector('.terminal-exact')!==null")
     sent=[body['text'] for op,body in state['calls'] if op=='prepare'][-1]
-    assert 'Quote: "First quoted line. Second quoted line."' in sent
+    encoded = sent.split(' | Quote: ', 1)[1]
+    quoted, end = json.JSONDecoder().raw_decode(encoded)
+    assert quoted == selected and encoded[end:] == ' | Reply: Check both lines.'
     assert '\n' not in sent and '\r' not in sent
 
 
@@ -121,7 +128,7 @@ def test_long_quote_is_retained_and_blocked_without_truncation(phone):
     client,js,wait,state=setup(phone,text)
     stage(client,js,wait,True)
     draft(js,'Check this quote.')
-    assert js("document.querySelector('.reader-reference-quote').textContent")==text.strip()
+    assert js("document.querySelector('.reader-reference-quote').textContent")==js('selectedText')
     assert js("document.querySelector('#terminal-review').disabled")
     assert '4096 bytes' in js("document.querySelector('.terminal-input-error').textContent")
     capture(client,'long-quote-limit')

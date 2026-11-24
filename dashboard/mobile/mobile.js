@@ -658,7 +658,7 @@ const referenceCurrent=value=>!value||value.target===referenceTarget()&&value.va
 const referenceError=()=>replyReference&&!referenceCurrent(replyReference)?'Target or conversation changed. Remove this reference and select again.':'';
 function addReference(value){
  if(phase!=='editing'||!previewOK||!target||value.agent!==name||!value.isCurrent())return false;
- replyReference={value:{...value,text:value.text.replace(/\s+/gu,' ').trim()},target:referenceTarget()};
+ replyReference={value,target:referenceTarget()};
  render();window.OrreryReaderReplyMotion?.confirmReference?.(sheet.querySelector('.reader-reference-card'));
  q('#terminal-text')?.focus({preventScroll:true});return true;
 }
@@ -953,7 +953,8 @@ const draftText=()=>[text.replace(/[\r\n]+$/u,''),...attachments.map(attachment=
 const inputText=()=>{
  if(!replyReference)return draftText();
  const r=replyReference.value;
- return 'Reference: '+r.agent+' · '+r.role+' · '+r.ts+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draftText();
+ const heading=r.agent+' · '+r.role+(r.ts?' · '+r.ts:'');
+ return 'Reference: '+heading+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draftText();
 };
 const inputValid=()=>validText(draftText())&&validText(inputText())&&referenceCurrent(replyReference);
 function inputErrorNote(){
