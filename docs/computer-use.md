@@ -8,7 +8,7 @@
 | `--tools screen:read:orrery-screen` | `view` |
 | `--tools screen:operate:orrery-screen` | `control` |
 
-`/api/spawn` では `{"tools":{"mcp":["orrery-screen"]}}` または `{"tools":{"screen":{"server":"orrery-screen","access":"read"}}}` を渡します。操作を初期値にする場合は `access` を `operate` にします。既存の名前なし `screen:operate` は Claude の組み込み computer use を選びます。installer の既定の道具に `orrery-screen` は追加されません。
+`/api/spawn` では `{"tools":{"mcp":["orrery-screen"]}}` または `{"tools":{"screen":{"server":"orrery-screen","access":"read"}}}` を渡します。操作を初期値にする場合は `access` を `operate` にします。macOS の名前なし `screen:operate` も `orrery-screen` を選びます。installer の既定の道具に `orrery-screen` は追加されません。
 
 Claude を会話だけで再開するときも、`/api/jump` に同じ `tools` を渡せます。指定した回の起動に世代を作ります。再開時に追加の道具を省略すると、前の世代の画面操作資格も失効します。[再開 API の指定例](api.md#post-apijump)
 
@@ -28,6 +28,14 @@ Claude を会話だけで再開するときも、`/api/jump` に同じ `tools` �
 PATH で見つからない場合は `AGENTSTACK_CUA_DRIVER` に実行ファイルの絶対パスを指定します。WSL では `/mnt/c/…/cua-driver.exe` のような WSL 側の絶対パスです。公開される定義は 0.55.0 の確認済みの定義に固定しています。実行時の版・入力・出力 schema のいずれかが違えば、呼び出しを拒否します。更新時は固定した定義と実際の `tools/list` を照合します。
 
 WSL の中継は普通の stdio パイプを使います。動作には起動経路の WSL interop と、Windows ユーザーの対話ログオンが必要です。interop と distro の寿命は WSL の設定に従います。ログイン中の Windows Terminal、昇格なし、Limited から先に確認します。
+
+## macOS の子の起動
+
+NEW AGENT で View または Control を選ぶと、Claude Code、Codex CLI、dsh、Hermes、Antigravity CLI は `orrery-screen` から Cua Driver を呼びます。`--tools screen:read` と `--tools screen:operate` も同じ経路です。`--tools mcp:orrery-screen` は Off で公開し、起動後の切替を待ちます。
+
+生成する Claude Code では同名の組み込み MCP を起動設定で拒否します。Codex CLI の生成ホームでは、Computer use の選択にかかわらず GUI 同梱の `node_repl` と `unified-computer-use@openai-bundled` を無効にします。Hermes の生成プロファイルでは組み込みの Cua toolset を外します。Chrome DevTools など別途選んだ Browser use は独立しています。
+
+Antigravity CLI の global MCP 設定で Cua Driver を直接有効にしている場合、生成時に対象の MCP 名を表示して起動を止めます。Antigravity の global MCP 設定は本人が管理します。 [Antigravity の MCP 設定](https://antigravity.google/docs/mcp/#global-and-workspace-server-configs)
 
 ## 起動中に権限を変える
 

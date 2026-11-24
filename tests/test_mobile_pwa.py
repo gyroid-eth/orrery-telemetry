@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from dashboard import mobile_relay as relay
-from test_mobile_relay import Store, serving
+from test_mobile_relay import Store, request, serving
 from mobile_reader_browser import phone  # noqa: F401
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -35,8 +35,9 @@ def test_manifest_and_icons_pass_the_existing_owner_admission(path):
             if path.endswith('webmanifest'):
                 assert response.getheader('Content-Type').split(';')[0]=='application/manifest+json'
                 value=json.loads(body)
-                assert value['name']==value['short_name']=='ORRERY'
-                assert value['start_url']==value['scope']=='/' and value['display']=='standalone'
+                assert value['name']=='ORRERY · viewer'
+                assert value['short_name']=='viewer'
+                assert value['id']==value['start_url']==value['scope']=='/' and value['display']=='standalone'
             else:
                 from PIL import Image
                 import io
@@ -45,6 +46,40 @@ def test_manifest_and_icons_pass_the_existing_owner_admission(path):
                     side=192 if '192' in path else 180 if 'apple' in path else 512
                     assert image.size==(side,side)
         finally:connection.close()
+
+
+@pytest.mark.parametrize(('computer','short_name'),[
+    ('sample-box','sample-box'),('123456789012','123456789012'),
+    ('sample-workstation-001','sample-…-001'),('sample-workstation-002','sample-…-002'),
+])
+def test_relay_labels_install_and_both_html_routes(computer,short_name):
+    host=f'{computer}.example.ts.net:9443'
+    cfg=relay.Config('owner@example.test',f'https://{host}')
+    headers={'Host':host,'Tailscale-User-Login':cfg.owner_login}
+    name=f'ORRERY · {computer}'
+    with serving(relay.make_server(cfg,store=Store(),test_port=0)) as port:
+        status,_,body=request(port,'/manifest.webmanifest',headers=headers)
+        assert status==200
+        manifest=json.loads(body)
+        assert (manifest['name'],manifest['short_name'])==(name,short_name)
+        assert len(short_name)<=12
+        for path in ('/','/reader-pane'):
+            status,_,body=request(port,path,headers=headers)
+            assert status==200
+            page=body.decode('utf-8')
+            assert f'<title>{name}</title>' in page
+            assert f'<meta name="apple-mobile-web-app-title" content="{name}">' in page
+
+
+def test_bundled_app_metadata_falls_back_to_orrery_without_serve_origin():
+    assets=relay.static_assets()
+    manifest=assets['/manifest.webmanifest'][0].read_bytes()
+    value=json.loads(relay.render_app_metadata('/manifest.webmanifest',manifest,''))
+    assert value['name']==value['short_name']=='ORRERY'
+    for path in ('/','/reader-pane'):
+        data=relay.render_app_metadata(path,assets[path][0].read_bytes(),'')
+        assert b'<title>ORRERY</title>' in data
+        assert b'<meta name="apple-mobile-web-app-title" content="ORRERY">' in data
 
 
 @pytest.mark.parametrize('case',['host','origin','identity_missing','identity_other','cross_site'])

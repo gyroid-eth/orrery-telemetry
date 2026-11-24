@@ -1395,6 +1395,24 @@ append_child_workspace_environment() {
         -e "AGENTSTACK_LAUNCH_CONTEXT_HELPER=$PROJECT_CONTEXT_HELPER")
 }
 
+codex_child_environment_exports_quoted() {
+    # Login profiles can reload the default install. Restore the launcher
+    # settings inside the login command, before workspace resolution or hooks.
+    local setting assignment exports="" single_quote="'" quote_escape="'\"'\"'"
+    for setting in "${TMUX_ENV_ARGS[@]}"; do
+        case "${setting%%=*}" in
+            PROJECT_KEY|AGENTSTACK_PROJECT_KEY|AGENTSTACK_HOME|AGENTSTACK_HOOKS_DIR|AGENTSTACK_RUNTIME_DIR|\
+            AGENTSTACK_MCP_URL|AGENTSTACK_MAIL_ENV|AGENTSTACK_MAIL_HTTP_BEARER_MODE|\
+            AGENTSTACK_PYTHON|AGENTSTACK_CHILD_RESUME_RETENTION_DAYS)
+                printf -v assignment 'export %s=%q; ' "${setting%%=*}" "${setting#*=}"
+                exports+="$assignment"
+                ;;
+        esac
+    done
+    # tmux evaluates the single-quoted login command in an outer shell.
+    printf '%s' "${exports//$single_quote/$quote_escape}"
+}
+
 codex_search_path() {
     codex_launch_search_path "$@"
 }
@@ -2979,7 +2997,9 @@ claude_child_launch_command() {
         inner+=' "$(cat "$CLAUDE_CHILD_PROMPT_FILE"; rm -f "$CLAUDE_CHILD_PROMPT_FILE")"'
     fi
     inner+='; /bin/bash "$AGENTSTACK_HOOKS_DIR/cleanup-child-agent.sh"'
-    printf "%s -lc '%s'" "$CHILD_SHELL" "$inner"
+    # tmux evaluates this single command argument through a shell first.
+    local single_quote="'" quote_escape="'\"'\"'"
+    printf "%s -lc '%s'" "$CHILD_SHELL" "${inner//$single_quote/$quote_escape}"
 }
 
 # Appended to the child's first prompt when --claude-chrome is on. The same
@@ -2999,7 +3019,10 @@ claude_chrome_prompt_block() {
 # the selection cannot be honoured; the caller then stops before tmux.
 claude_tools_plan() {
     CLAUDE_CHILD_TOOL_FLAGS=""
-    [[ "$CHILD_TOOLS_RESTRICTIVE" == true || "$CLAUDE_CHILD_CHROME" == true ]] || return 0
+    if [[ "$CHILD_TOOLS_RESTRICTIVE" != true && "$CLAUDE_CHILD_CHROME" != true \
+          && "$(uname -s)" != Darwin ]]; then
+        return 0
+    fi
     local flags spec
     spec="$CHILD_TOOLS_SPEC"
     # Legacy --claude-chrome requests have no parsed base/tools selection.
@@ -3008,10 +3031,7 @@ claude_tools_plan() {
         --cwd "$WORK_DIR" \
         --chrome "$([[ "$CLAUDE_CHILD_CHROME" == true ]] && echo 1 || echo 0)" \
         --claude-json "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}")" || return 1
-    if ! [[ "$flags" =~ ^[A-Za-z0-9_,.:\ -]*$ ]]; then
-        echo "Error: unexpected characters in the child's tool flags" >&2
-        return 1
-    fi
+    # child_tools emits a shell-quoted argv from a validated tool selection.
     CLAUDE_CHILD_TOOL_FLAGS="$flags"
 }
 
@@ -3598,6 +3618,7 @@ ${TASK}"
             -c "$WORK_DIR" \
             "${TMUX_ENV_ARGS[@]}" \
             "$CHILD_SHELL"' -lc '"'"'
+                '"$(codex_child_environment_exports_quoted)"'
                 '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
                 cd "$AGENTSTACK_LAUNCH_WORK_DIR" || exit $?; _ags_workspace_context="$(AGENTSTACK_EXTRA_PROTECTED_ROOTS="$AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS" /bin/bash "$AGENTSTACK_LAUNCH_CONTEXT_HELPER" workspace-context-exports "$PWD" "$AGENTSTACK_LAUNCH_PROJECT_KEY")" || exit $?; eval "$_ags_workspace_context"; unset _ags_workspace_context AGENTSTACK_LAUNCH_WORK_DIR AGENTSTACK_LAUNCH_PROJECT_KEY AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS AGENTSTACK_LAUNCH_CONTEXT_HELPER;
                 # The child never sources a user-side bootstrap: identity comes
@@ -3716,7 +3737,7 @@ ${TASK}"
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
         if [[ "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true \
-                && -z "$CHILD_DEFAULT_TOOLS_NOTICE" && -f "$WARM_POOL" ]] \
+                && -z "$CLAUDE_CHILD_TOOL_FLAGS" && -z "$CHILD_DEFAULT_TOOLS_NOTICE" && -f "$WARM_POOL" ]] \
             && warm_pool_has_model "$WARM_TYPE" "$CHILD_MODEL" "$WARM_STATUS"; then
             echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE, $CHILD_MODEL)..." >&2
             WARM_CLAIM_STATUS=0
@@ -4500,6 +4521,7 @@ elif [[ "$USE_CODEX" == true ]]; then
         -c "$WORK_DIR" \
         "${TMUX_ENV_ARGS[@]}" \
         "$CHILD_SHELL"' -lc '"'"'
+                '"$(codex_child_environment_exports_quoted)"'
                 '"$CODEX_CHILD_PATH_SETUP_QUOTED"';
                 cd "$AGENTSTACK_LAUNCH_WORK_DIR" || exit $?; _ags_workspace_context="$(AGENTSTACK_EXTRA_PROTECTED_ROOTS="$AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS" /bin/bash "$AGENTSTACK_LAUNCH_CONTEXT_HELPER" workspace-context-exports "$PWD" "$AGENTSTACK_LAUNCH_PROJECT_KEY")" || exit $?; eval "$_ags_workspace_context"; unset _ags_workspace_context AGENTSTACK_LAUNCH_WORK_DIR AGENTSTACK_LAUNCH_PROJECT_KEY AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS AGENTSTACK_LAUNCH_CONTEXT_HELPER;
             # See the pre-registered path: no user-side bootstrap is sourced.

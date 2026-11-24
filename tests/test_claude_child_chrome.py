@@ -156,6 +156,11 @@ def _launch_env(tmp_path, *, codex=False):
     return env, workdir
 
 
+def _simulate_linux_launcher(tmp_path):
+    _executable(tmp_path / 'bin' / 'uname',
+                '#!/bin/bash\nif [[ "$1" == -s ]]; then echo Linux; else exec /usr/bin/uname "$@"; fi\n')
+
+
 def _state_dir(env) -> pathlib.Path:
     return pathlib.Path(env["AGENTSTACK_RUNTIME_DIR"]) / "child-agents"
 
@@ -174,13 +179,14 @@ def _launch_id(env) -> str:
 # --------------------------------------------------------------------------- #
 # launch command
 # --------------------------------------------------------------------------- #
-def _builder_output(chrome: bool) -> str:
+def _builder_output(chrome: bool, flags: str = "") -> str:
     text = SPAWN.read_text(encoding="utf-8")
     start = text.index("claude_child_launch_command() {")
     end = text.index("\n}\n", start) + 3
     script = (
         text[start:end]
         + f'CHILD_SHELL=/bin/bash; CLAUDE_CHILD_CHROME={"true" if chrome else "false"}\n'
+        + f'CLAUDE_CHILD_TOOL_FLAGS={shlex.quote(flags)}\n'
         + "claude_child_launch_command\n"
     )
     return subprocess.run(
@@ -195,6 +201,14 @@ def test_builder_preserves_provider_command_after_workspace_setup():
 
 def test_builder_adds_only_chrome_when_requested():
     assert _builder_output(True) == f"/bin/bash -lc '{CHROME_INNER}'"
+
+
+def test_settings_json_survives_the_tmux_shell_and_child_shell():
+    flags = child_tools.claude_native_screen_flags('darwin')
+    outer = shlex.split(_builder_output(False, shlex.join(flags)))
+    assert outer[:2] == ['/bin/bash', '-lc']
+    provider = outer[2].split('"${MCP_ARGS[@]}" ', 1)[1].split(';', 1)[0]
+    assert shlex.split(provider) == flags
 
 
 def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
@@ -228,7 +242,12 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
             _, _, rest = log.partition("\034load-buffer\034")
             prompts[label] = rest.split("\035\n", 1)[1].split("CALL", 1)[0]
         else:
-            raw_inner = launch[-1]
+            shell, option, raw_inner = shlex.split(launch[-1])
+            if sys.platform == 'darwin':
+                native_flags = ' ' + shlex.join(child_tools.claude_native_screen_flags('darwin'))
+                assert native_flags in raw_inner
+                raw_inner = raw_inner.replace(native_flags, '', 1)
+            launch[-1] = f"{shell} {option} '{raw_inner}'"
             # The new one passes the same text as the launch argument instead,
             # and runs the claude path it resolved (bare `claude` if none).
             for variable in ("CLAUDE_CHILD_PROMPT_FILE=", "CLAUDE_CHILD_SYSTEM_PROMPT=", "CLAUDE_CHILD_BIN="):
@@ -252,15 +271,19 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
     # exactly the prompt it got before; only how the prompt travels changed.
     assert launches["new"] == launches["old"]
     assert prompts["new"] == prompts["old"] and "SameChild" in prompts["new"]
-    assert raw_inner.replace(ARGV_PROMPT, "").endswith(f"-lc '{PRE_CHROME_INNER}'")
+    assert raw_inner.replace(ARGV_PROMPT, "") == PRE_CHROME_INNER
 
 
 @pytest.mark.parametrize("warm_model", ["opus", "sonnet"])
-def test_default_spawn_still_claims_a_ready_warm_session(tmp_path, warm_model):
+def test_default_spawn_cold_starts_for_mac_screen_policy_and_uses_warm_pool_elsewhere(tmp_path, warm_model):
     env, workdir = _launch_env(tmp_path)
     env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
     result = _spawn(tmp_path, env, workdir, "WarmChild", "--model", warm_model)
     assert result.returncode == 0, result.stderr
+    if sys.platform == 'darwin':
+        assert not (tmp_path / 'warm.log').exists()
+        assert '--disallowed-tools mcp__computer-use' in _new_session(env)[-1]
+        return
     model = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5"}[warm_model]
     assert (tmp_path / "warm.log").read_text() == f"claim-model WarmChild {model}\n"
 
@@ -286,6 +309,7 @@ def test_a_claim_that_cannot_promise_the_model_falls_back_to_cold_start(tmp_path
 
 def test_a_claim_reporting_another_model_is_stopped(tmp_path):
     env, workdir = _launch_env(tmp_path)
+    _simulate_linux_launcher(tmp_path)
     env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
     env["FAKE_WARM_REPORT"] = "LyingChild claude-opus-7"
     result = _spawn(tmp_path, env, workdir, "LyingChild", "--model", "opus")
@@ -312,7 +336,17 @@ def test_chrome_request_skips_a_ready_warm_session_and_adds_chrome(tmp_path):
     result = _spawn(tmp_path, env, workdir, "ChromeChild", "--claude-chrome")
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "warm.log").exists()
-    assert _new_session(env)[-1].endswith(f"-lc '{LAUNCHED_CHROME_INNER}'")
+    assert_chrome_launch(env)
+
+
+def assert_chrome_launch(env):
+    inner = shlex.split(_new_session(env)[-1])[-1]
+    expected = LAUNCHED_CHROME_INNER
+    if sys.platform == 'darwin':
+        flags = child_tools.claude_native_screen_flags('darwin')
+        expected = expected.replace(CHROME_APPROVAL, ' ' + shlex.join(flags[:2]) + CHROME_APPROVAL)
+        expected = expected.replace(' --chrome ', ' ' + shlex.join(flags[2:]) + ' --chrome ')
+    assert inner == expected
 
 
 def test_env_default_turns_chrome_on_for_claude_children(tmp_path):
@@ -321,7 +355,7 @@ def test_env_default_turns_chrome_on_for_claude_children(tmp_path):
     env["AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE"] = "win-brave.1"
     result = _spawn(tmp_path, env, workdir, "EnvChild")
     assert result.returncode == 0, result.stderr
-    assert _new_session(env)[-1].endswith(f"-lc '{LAUNCHED_CHROME_INNER}'")
+    assert_chrome_launch(env)
     assert "deviceId win-brave.1" in _log_text(env)
 
 
@@ -871,6 +905,7 @@ def test_new_agent_form_offers_chrome_only_for_claude():
 
 def test_warm_handoff_refuses_a_different_resolved_identity(tmp_path):
     env,workdir=_launch_env(tmp_path)
+    _simulate_linux_launcher(tmp_path)
     env['AGENTSTACK_HOOKS_DIR']=str(_hooks_with_warm_pool(tmp_path))
     env['FAKE_WARM_IDENTITY_OVERRIDE']='AnotherIdentity'
     result=_spawn(tmp_path,env,workdir,'WarmChild','--model','opus')

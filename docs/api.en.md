@@ -72,6 +72,8 @@ with HTTP 400. A media-type mismatch is HTTP 415, a cross-origin POST is HTTP 40
 
 API 42 adds explicit computer use for standard children launched with `orrery-screen`. [Setup and verification](computer-use.md)
 
+On macOS, legacy `POST /api/spawn` maps `tools.screen` with `read` or `operate` to the existing `orrery-screen` relay for generated Claude Code, Codex CLI, dsh, Hermes, and Antigravity CLI children. Omitting the server, using `orrery-screen`, and using the earlier `cua-driver` name select the same route. Use `tools.mcp:["orrery-screen"]` to start in Off.
+
 | Method | Path | Credential | Request and response |
 | --- | --- | --- | --- |
 | GET | `/api/computer-use` | Operator | With no query, returns `{launches: [...]}`. With all four target fields, returns that launch’s permission. |
@@ -89,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":46}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":48}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -408,6 +410,10 @@ A receipt timestamp older than the current tmux `session_created` returns `stale
 Only `history_binding: bound` publishes `transcript_path` (the absolute child-owned `HERMES_HOME/state.db` path). Bound/stale rows include the evidence's `history_session_id` (native ID) and `history_receipt_ts` (the callback's original ISO timestamp, with UTC offset). Existing `program: hermes` identifies the format. Readers must verify **both the database path and session ID** and filter `messages.session_id`: multiple sessions share one HOME/database. This path is not a JSONL transcript.
 
 Binding verifies the project/agent registration, child-specific launch/input, pinned private HOME, self `on_session_start` callback, and exact CLI session in SQLite. It never selects by cwd, newest session, or modification time. Missing/mismatched proof or a launch/resume in preparation yields `unbound`; a receipt older than a new terminal launch without explicit exact resume yields `stale`. Neither publishes a path; `history_binding_reason` / `history_binding_reason_code` explain why. Success uses an empty explanation and code `bound`. Retired children remain readable while proof is retained; removal/purge unbinds them. Provider-internal switching/compression without a new callback can leave this binding on the earlier recorded segment; it never guesses descendant sessions or emergency diverted JSONL. Fresh Hermes TUI history uses the protected `/api/history` route described above.
+
+#### Antigravity (API 48)
+
+For managed interactive launches in legacy mode, the official hook binds the conversation UUID and its `transcript.jsonl` or `transcript_full.jsonl` path to the current Mail registration and tmux launch. The ordinary binding fields publish the path only when bound. Receiving more than one UUID for that launch returns `unbound` with `session_conflict`. Headless result logs are outside this binding.
 
 ### Other agent display fields
 
@@ -822,17 +828,17 @@ Request:
 | `claude_chrome` | Claude only | Boolean. `true` adds `--chrome` to the child. Omitted or `false` means inherit (the user's Claude settings decide). The launcher's env defaults are not used. See [Claude in Chrome](delegation.en.md#claude-children-and-browser-control-claude-in-chrome) |
 | `claude_chrome_device` | Claude only | deviceId of the browser to use (`[A-Za-z0-9._:-]{1,128}`). Implies `claude_chrome: true`; combining it with `claude_chrome: false` is rejected |
 | `base` | Claude / Codex / dsh / Hermes | `"default"` (explicitly suppresses installer tool defaults) or `"mail-only"` (ORRERY Mail and only what `tools` selects). Since api 7 |
-| `tools` | Claude / Codex / dsh / Hermes | Object: `browser` (`true` for Claude/Codex, `{"device": "<deviceId>"}` with a Claude-only deviceId), `screen` (`"read"` / `"operate"` or `{"access": ..., "server": "<name>"}`; without a server it is the macOS computer use, Claude only), `mcp` (array of server names; no tool is approved), `approve_all` (servers in `mcp` whose every tool is approved; rejected for a version not in the table). Rejected when its deviceId differs from `claude_chrome_device`. Since api 7. See [Choosing the tools a child gets](delegation.en.md#choosing-the-tools-a-child-gets---base----tools) |
+| `tools` | Claude / Codex / dsh / Hermes | Object: `browser` (`true` for Claude/Codex, `{"device": "<deviceId>"}` with a Claude-only deviceId), `screen` (`"read"` / `"operate"` or `{"access": ..., "server": "<name>"}`; macOS uses `orrery-screen` when no server is specified), `mcp` (array of server names; no tool is approved), `approve_all` (servers in `mcp` whose every tool is approved; rejected for a version not in the table). Rejected when its deviceId differs from `claude_chrome_device`. Since api 7. See [Choosing the tools a child gets](delegation.en.md#choosing-the-tools-a-child-gets---base----tools) |
 
 The ordinary DeepSeek / Local catalog shares plain-generation admission and generator static validation with the launcher. Older managed generations are not automatically admitted. Effort uses the checked cache for the selected model and harness; unknown capabilities remain unknown. Liveness checks native CLI descendants of the pane and does not classify an unconfirmed observation as finished. Provider identity comes from the child's explicit harness_backend, rather than the model name.
 
-dsh / Hermes accept `base` / `tools` only when the selection can be represented in native configuration. They copy stdio / HTTP MCP servers and reject built-in computer use, Chrome devices, and unrepresentable per-tool approvals or filters with a reason. A successful launch does not imply those approvals are enabled.
+dsh / Hermes accept `base` / `tools` only when the selection can be represented in native configuration. They copy stdio / HTTP MCP servers and reject Chrome devices and unrepresentable per-tool approvals or filters with a reason. A successful launch does not imply those approvals are enabled.
 
 Since API 41, the standard `/api/spawn` applies the installer's `AGENTSTACK_CHILD_DEFAULT_TOOLS` to Claude, Codex, dsh and Hermes when both `base` and `tools` are omitted. NEW AGENT uses this path. The launcher evaluates defaults for the provider and final working directory, and reports any unavailable items it omits. Explicit selections take precedence. An empty `tools: {}` or `base: "default"` with no extra tools still passes `--base default`, as in API 8, to suppress installer defaults. Unavailable explicit tools stop the launch.
 
-Since API 44, `{"tools":{"chrome_extension":true}}` enables the configured `chrome@openai-bundled` plugin for a Codex child in `/api/spawn` and tool-changing `/api/jump`. Combining it with `orrery-screen` is rejected.
+Since API 44, `{"tools":{"chrome_extension":true}}` enables the configured `chrome@openai-bundled` plugin for a Codex child in `/api/spawn` and tool-changing `/api/jump`. macOS supports combining it with `orrery-screen`.
 
-A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, `mail-only` in a project where the computer use is enabled, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. Other providers such as Gemini reject `mail-only` and `tools`.
+A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. On macOS, Antigravity accepts a managed screen selection. The rest of these options apply to the providers listed in the table.
 
 Unknown request fields return HTTP 400 before model resolution or launch. When the optional Gemini provider is installed, it also accepts `resources` (see [Gemini delegation](delegation.en.md)); other providers reject that field.
 
@@ -938,6 +944,8 @@ API 25: legacy managed `attempt_id` spawn/status requests are retired and return
 ## Mobile reader (API 30)
 
 From API 39, snapshot agents optionally include `work_disp` only while running with `act_state: work` and a validated compact upstream duration such as `2m05s`. The field is omitted for stopped agents, other states, missing or invalid values. The viewer does not invent elapsed time.
+
+In legacy mode, API 47 adds optional `reader_phase: "compacting"` to `/api/agents` and the corresponding mobile snapshot row when the current tmux screen of a running Claude Code, Codex CLI, dsh, or Hermes agent shows a native compaction control. An observed timer is included as `reader_phase_elapsed` (for example, `2m 05s`). This uses existing screen sampling and sends only the phase and timer to the phone.
 
 `GET /api/mobile-mail?window=<period>` is a legacy, loopback-only metadata endpoint. The default is `day` (24h). Allowed values are `all`, `day`, `15m`, and `m<N>` for integer minutes from 15 to 43200 divisible by 15; leading zeros and fractions are rejected. It keeps the existing dashboard Host admission. Missing DB or project/schema/read failure returns 503; unsupported global mode is explicitly refused (501 after admission, or the existing global admission refusal). It never falls back to a legacy DB from global mode. Unknown or repeated query fields return 400.
 

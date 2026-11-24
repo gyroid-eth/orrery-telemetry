@@ -232,6 +232,8 @@ Resume never registers an alias or issues a credential. Failed Mail registration
 
 The standard launcher can give Claude, Codex, dsh and Hermes the generated relay by choosing `--tools mcp:orrery-screen` or `--tools screen:read:orrery-screen`. The operator API changes a running child’s permission. [Cua Driver setup and verification (Japanese)](computer-use.md)
 
+On macOS, use Computer use in NEW AGENT or choose `--tools screen:read` (View), `--tools screen:operate` (Control), or `--tools mcp:orrery-screen` (start in Off). Claude Code, Codex CLI, dsh, Hermes, and Antigravity CLI use Cua Driver through the existing `orrery-screen` relay. The older spelling `screen:operate:cua-driver` selects the same relay. Named MCP selections on Windows and WSL retain their existing behavior.
+
 ## Codex-specific startup
 
 `agent-start-codex` performs the following steps.

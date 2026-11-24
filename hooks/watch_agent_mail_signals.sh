@@ -760,42 +760,33 @@ deliver_worker() {
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
-    local paste_file paste_buf="agentstack-notify-$$-${RANDOM}"
-    paste_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify.XXXXXX") || paste_file=""
-    if [[ -z "$paste_file" ]] || ! printf '%s' "$prompt" > "$paste_file" \
-       || ! run_to "$TMUX_TIMEOUT" tmux load-buffer -b "$paste_buf" "$paste_file" 2>/dev/null \
-       || ! run_to "$TMUX_TIMEOUT" tmux paste-buffer -p -d -b "$paste_buf" -t "$session_name" 2>/dev/null; then
-        [[ -n "$paste_file" ]] && rm -f "$paste_file"
-        run_to "$TMUX_TIMEOUT" tmux delete-buffer -b "$paste_buf" 2>/dev/null || true
+    # Pin the pane once. Both commands must address the same pane even if the
+    # active pane changes. The tmux admission wrapper checks that pane again.
+    local pane_id
+    pane_id=$(run_to "$TMUX_TIMEOUT" tmux display-message -p -t "=$session_name" '#{pane_id}' 2>/dev/null) || pane_id=""
+    if [[ ! "$pane_id" =~ ^%[0-9]+$ ]]; then
         state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
-    rm -f "$paste_file"
-    sleep 0.2
-    # submit は Enter keysym ではなく C-m（Ctrl+M=CR）を使う。spawn_child.sh が
-    # Claude/Codex 両方の prompt 注入で C-m を使っており（proven-universal）、Codex
-    # REPL では Enter が submit されないことがある（2026-06-05 WildCurie が Enter で
-    # 固まった件）。Claude Code は Enter/C-m 両方 submit するので C-m に統一しても無回帰
-    # （捨て子 Claude で実測確認）。
-    if ! run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" C-m 2>/dev/null; then
-        state_mark_result "$agent_name" "$msg_key" "submit_failed" "watcher"
+    local paste_file submit_rc=0
+    paste_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify.XXXXXX") || paste_file=""
+    if [[ -z "$paste_file" ]] || ! printf '%s' "$prompt" > "$paste_file"; then
+        [[ -n "$paste_file" ]] && rm -f "$paste_file"
+        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
-
-    # 保険: それでも入力欄に本文が残っていれば C-m を 1 回だけ送り直す。入力欄は
-    # 画面上で最後にある ›（Codex）/ ❯（Claude Code）の行。履歴の同じ文面は
-    # それより上にあるので誤判定しない。長い貼り付けは Claude Code が
-    # [Pasted text …] に畳むので、それも残留とみなす。
-    sleep 1
-    local input_line
-    input_line=$(run_to "$TMUX_TIMEOUT" tmux capture-pane -t "$session_name" -p 2>/dev/null \
-        | grep -E '^[[:space:]]*(›|❯)' | tail -1) || input_line=""
-    if [[ -z "$gemini_identity" && -n "$input_line" ]] && { [[ "$input_line" == *"ORRERY Mail notification: message from ${from}"* ]] \
-        || [[ "$input_line" == *"[Pasted text"* ]]; }; then
-        log "  Notification still in the input box of '$agent_name'; resending C-m"
-        run_to "$TMUX_TIMEOUT" tmux send-keys -t "$session_name" C-m 2>/dev/null || true
+    # The helper shares the pane lock with Cockpit and checks the visible
+    # input before Enter. A refused or unknown send leaves the signal pending.
+    run_to "$((TMUX_TIMEOUT + 2))" tmux submit-input "$pane_id" "$paste_file" 2>/dev/null || submit_rc=$?
+    rm -f "$paste_file"
+    if (( submit_rc != 0 )); then
+        local result="submit_failed"
+        if (( submit_rc == 3 )); then result="submit_deferred"; fi
+        state_mark_result "$agent_name" "$msg_key" "$result" "watcher"
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+        return 0
     fi
 
     state_mark_result "$agent_name" "$msg_key" "success" "watcher"

@@ -232,6 +232,8 @@ Claude の子も正常終了後、state と owner credential を既定30日、mo
 
 Claude、Codex、dsh、Hermes の標準 launcher で `--tools mcp:orrery-screen` または `--tools screen:read:orrery-screen` を選べます。実行中の権限を変える場合は operator API を使います。 [Cua Driver の準備、権限と確認手順](computer-use.md)
 
+macOS の子は NEW AGENT の Computer use、または `--tools screen:read`（View）、`--tools screen:operate`（Control）、`--tools mcp:orrery-screen`（Off で待機）を使います。Claude Code、Codex CLI、dsh、Hermes、Antigravity CLI のいずれも既存の `orrery-screen` から Cua Driver を呼びます。従来の `screen:operate:cua-driver` も同じ relay を選びます。Windows／WSL の名前付き MCP 指定は従来どおりです。
+
 ## Codex 固有の起動
 
 `agent-start-codex` は次を行います。
@@ -244,6 +246,8 @@ Claude、Codex、dsh、Hermes の標準 launcher で `--tools mcp:orrery-screen`
 - `OPENAI_API_KEY` を除去し、ChatGPT OAuth を優先
 
 dashboard の Codex resume も installer が配る同じ `agentstack-codex-bootstrap` を必ず source し、reserved identity を再登録して fresh resume launch を作ってから `codex resume` を exec します。個人用 `~/.codex/bin` wrapper には依存せず、bootstrap / prepare が失敗すれば resume 自体を開始しません。
+
+Codex child の新規起動と dashboard からの resume は、ログインシェルが設定した PATH を使い、初期化後に子の runtime・project key・ORRERY Mail の URL を再設定します。別 install の設定を `~/.zshenv` から読み込む環境でも、子は起動元の ORRERY に接続します。
 
 Codex child の fresh launch は、`launch_origin: child` と選択した `codex_mcp_profile` を launch expectation に記録します。`cx` / `agent-start-codex` と persistent launcher の top-level Codex は `launch_origin: standalone` を記録し、child profile は持ちません。公式 `SessionStart` が identity と rollout を検証した後、その非秘密 provenance は数値 agent ID・project・provider とともに bound session receipt へコピーされます。receipt は private resume state・credential・専用 home の外に残るため、dashboard は cleanup 済み child、製品起動の top-level session、origin 不明の session を区別できます。provenance 導入前の receipt は名前や履歴から origin を推測せず resume 不可にします。
 

@@ -17,6 +17,7 @@ import pytest
 import dashboard.provider_server as server
 import dashboard.server as canonical_server
 import dashboard.service_runner as service_runner
+from hooks import child_tools
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -214,6 +215,17 @@ def test_gemini_dry_run_does_not_create_handoffs_or_launch(monkeypatch, gemini_e
     assert result["launcher_env"]["AGENTSTACK_GEMINI_TASK_FILE"] == "<gemini-task-file>"
     assert gemini_env.launches.launched == [] and gemini_env.launches.mcp_calls == []
     assert sorted(gemini_env.tmp.rglob("*")) == before
+
+
+def test_gemini_mac_spawn_passes_managed_screen_to_the_adapter(monkeypatch, gemini_env):
+    monkeypatch.setattr(server.sys, "platform", "darwin")
+    monkeypatch.setattr(server, "_child_tools_module", lambda: child_tools)
+    result = server.do_spawn(_gemini_payload(gemini_env, dry_run=True,
+                                            tools={"screen": "read"}))
+    assert result["ok"], result
+    argv = result["argv"]
+    assert argv[argv.index("--tools") + 1] == "screen:read:orrery-screen"
+    assert gemini_env.launches.launched == []
 
 
 # --------------------------------------------------------------------------- #

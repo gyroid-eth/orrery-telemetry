@@ -2604,6 +2604,7 @@ RUNTIME_CLIENT_CONTRACT_SOURCES=(
   "$REPO_ROOT/bin/lib/runtime_operator.py"
   "$REPO_ROOT/bin/lib/runtime_observation.py"
   "$REPO_ROOT/bin/lib/runtime_tmux.py"
+  "$REPO_ROOT/bin/lib/pane_submission.py"
   "$REPO_ROOT/bin/lib/runtime_target.py"
   "$REPO_ROOT/bin/lib/runtime_tmux_consumer.py"
   "$REPO_ROOT/bin/lib/legacy_consumer.py"

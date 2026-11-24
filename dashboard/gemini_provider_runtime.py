@@ -751,6 +751,9 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
             return error
         if request["standalone"] and not CAPABILITIES["standalone"]:
             return {"ok": False, "error": "standalone not supported for provider gemini"}
+        tools_args, tools_error = base._spawn_tools_args(payload, PROVIDER_ID, False, "")
+        if tools_error:
+            return {"ok": False, "error": tools_error}
         # Explicit spawn IDs, including dry_run, do not need CLI discovery.
         models, error = integration.availability(discover=False)
         if error:
@@ -798,6 +801,7 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
                 program="antigravity",
                 model=model,
                 script=context["adapter"],
+                provider_args=tools_args,
                 effort=effort,
                 standalone_supported=CAPABILITIES["standalone"],
                 worktree_required=CAPABILITIES["worktree_required"],

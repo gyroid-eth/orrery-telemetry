@@ -437,6 +437,20 @@ def generate(document):
                           for task in tasks},
             'delegation': _helper_route(native_provider, facts['helper_model']),
         }
+        if sys.platform == "darwin":
+            # Hermes also exposes a bundled Cua Driver toolset. A generated
+            # Mac child reaches the driver only through the ORRERY MCP relay.
+            disabled = existing.get('agent', {}).get('disabled_toolsets') or []
+            if isinstance(disabled, str):
+                try:
+                    parsed = ast.literal_eval(disabled)
+                except (SyntaxError, ValueError):
+                    parsed = None
+                disabled = parsed if isinstance(parsed, (list, tuple)) else disabled.split(',')
+            if not isinstance(disabled, (list, tuple)):
+                disabled = []
+            overlay['agent']['disabled_toolsets'] = list(dict.fromkeys(
+                [*(name.strip() for name in disabled if isinstance(name, str) and name.strip()), 'computer_use']))
         if telegram is not None:
             overlay['telegram'] = telegram
             overlay['plugins']['enabled'].append('orrery-telegram')

@@ -58,6 +58,7 @@ PREREGISTER="$AGENTSTACK_HOME_DIR/bin/agentstack-preregister-child"
 MAIL_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-child-mail"
 STREAM_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-stream"
 MCP_WRAPPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-mcp"
+GEMINI_TOOLS=()
 CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"
 
 usage() {
@@ -66,6 +67,7 @@ Usage: spawn_gemini_child.sh [options] --resources "path1,path2" "<task>" [WORKD
 
 Options:
   --model MODEL           Antigravity model slug (default gemini-3.8-flash-high)
+  --tools SPEC            macOS Computer use (screen, screen:read, or mcp:orrery-screen)
   --effort LEVEL          low, medium, or high (default high)
   --resources CSV         resources to reserve before launch (required)
   --resource-ttl SEC      reservation TTL (default 14400)
@@ -76,6 +78,9 @@ EOF
 
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
+    --tools)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      GEMINI_TOOLS+=(--tools "$2"); shift 2 ;;
     --model)
       [[ $# -ge 2 ]] || { usage; exit 2; }
       MODEL="$2"; shift 2 ;;
@@ -119,6 +124,10 @@ esac
 case "$RESOURCE_TTL" in
   ''|*[!0-9]*) echo "$PROG: --resource-ttl must be an integer" >&2; exit 2 ;;
 esac
+
+if [[ ${#GEMINI_TOOLS[@]} -gt 0 ]]; then
+  "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" parse --provider gemini "${GEMINI_TOOLS[@]}" >/dev/null || exit 2
+fi
 
 command -v tmux >/dev/null 2>&1 || { echo "$PROG: tmux not found" >&2; exit 1; }
 command -v "$GEMINI_BIN" >/dev/null 2>&1 || { echo "$PROG: Antigravity CLI not found (expected agy)" >&2; exit 1; }
@@ -296,6 +305,12 @@ if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev
 fi
 mkdir -p "$WORKTREE_DIR/.agents"
 MCP_CONFIG="$WORKTREE_DIR/.agents/mcp_config.json"
+if [[ "$(uname -s)" == Darwin ]]; then
+  "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" agy-config \
+    --out "$MCP_CONFIG" --runner "$MCP_WRAPPER" --child "$CHILD_NAME" \
+    --project-key "$PROJECT_KEY" --runtime-dir "$RUNTIME_DIR" --mail-env "$MAIL_ENV" \
+    ${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"}
+else
 AGS_GEMINI_MCP_PATH="$MCP_CONFIG" \
 AGS_GEMINI_MCP_COMMAND="$MCP_WRAPPER" \
 "$PYTHON_BIN" - <<'PY'
@@ -314,6 +329,7 @@ path.write_text(
 )
 os.chmod(path, 0o600)
 PY
+fi
 
 ( umask 077 && printf '%s' "$TASK" > "$TASK_RAW_FILE" )
 "$PYTHON_BIN" - "$TASK_RAW_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_NAME" "$RESOURCES" "$WORKTREE_DIR" "$SOURCE_REPO" <<'PY'

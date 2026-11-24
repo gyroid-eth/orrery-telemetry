@@ -92,6 +92,8 @@ The badge says **ON** and the setup steps are gone. **Check it yourself:** all f
 
 Claude and Codex records show the same **Agent steps** as the desktop Reader. Messages, Mail, and system notices separate adjacent runs of operations into different cards. Completed operations appear one at a time, with **Working…** and elapsed time during work. On completion the card folds into **Worked for … · N steps**; tap to expand it. Historical turns start collapsed. Only explicit failure is **Failed**; an operation without a recorded outcome is **Observed**. Codex inner operations appear after their completion record arrives; execution in progress is not inferred. Target summaries use one ellipsized line.
 
+With the legacy dashboard and current cockpit, Claude Code, Codex CLI, dsh and Hermes show **Compacting context…** while the active terminal shows compaction. The timer appears when the terminal supplies one. When the history catches up, **Context compacted** stays in the record as a single line.
+
 Replaced tool labels do not repeat, while files, images, Mail and unsupported tool groups stay available. An unmatched Claude result asks to load earlier requests. The phone receives only bounded tool names, existing target summaries, times, status, opaque IDs and turn markers; no new raw arguments, output, paths or cockpit reference IDs. Page and byte limits stay the same. Demo continues to work and masks targets by the same existing rules as other text. Backgrounding pauses motion and the clock; Close clears them. OS reduced motion is respected. Motion reuses the desktop adaptation of [kokonutUI AI Loading](https://kokonutui.com/) (MIT), retaining its license in source.
 
 On the phone, open the **Address on the phone** from step 2 (`https://…:9443/`) and open an agent. The first HTTPS request can take a few seconds while the certificate is issued. When the **Conversation** tab appears, conversation records reach the phone ([Read an agent's conversation history](#read-an-agents-conversation-history-on-your-phone)).
@@ -149,6 +151,8 @@ On macOS the CLI is usually `/Applications/Tailscale.app/Contents/MacOS/Tailscal
 ## Install on the home screen
 
 With Tailscale connected, open this reader's HTTPS Serve address in Android Chrome. Choose **Install app** from Chrome's menu (some versions put it under **Add to Home screen**), then confirm installation. Delete an older browser shortcut and install again. Launch **ORRERY** from its new icon to open it without the browser's URL bar; opening the address in a normal browser tab still shows that bar. On iOS, use Safari's **Add to Home Screen**.
+
+Add each computer from its own Serve address. The app name is **ORRERY · computer name**, and the home screen may use the shorter computer label.
 
 Installation keeps the same owner admission and live connection requirements. It does not add offline records or a service worker. Android Chrome's menu installation no longer requires a service worker ([Chrome's installation criteria](https://developer.chrome.com/blog/update-install-criteria)). The app keeps controls inside the device's safe areas. After updating, verify installation and background/foreground behavior on the actual phone.
 

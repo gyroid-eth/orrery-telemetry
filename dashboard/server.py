@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 46
+API_GENERATION = 48
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -114,11 +114,12 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import agent_card, legacy_http_admission, claude_history
+    from dashboard import agent_card, legacy_http_admission, claude_history, agy_history
 except ModuleNotFoundError:  # direct script execution
     import agent_card
     import legacy_http_admission
     import claude_history
+    import agy_history
 
 
 def _same_origin_request(handler) -> bool:
@@ -1978,6 +1979,12 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None, session
     `reuse_stopped` lets the roster poll reuse the verdict of a row that is not
     running for a short while; the light route never does.
     """
+    program = row.get("program")
+    if program in agy_history.PROGRAMS:
+        if FRESH_MODE or GLOBAL_MODE:
+            return agy_history.unbound("protected_history_required")
+        return agy_history.binding(RUNTIME_DIR, row["name"],
+                                   _resume_registration(row["name"], agy_history.PROGRAMS), session_state)
     if reuse_stopped and row.get("running") is False:
         key = (row.get("name"), row.get("program"), row.get("category"), row.get("created"))
         cached = _STOPPED_BINDING_REUSE.get(key)
@@ -1986,7 +1993,6 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None, session
             cached = _history_binding_fields(row, now=now, claude_index=claude_index)
             _STOPPED_BINDING_REUSE.put(key, cached, mark)
         return dict(cached)
-    program = row.get("program")
     if program in {"codex", "codex-cli"}:
         return _codex_history_binding(row["name"], now=now)
     if program in {"claude", "claude-code"}:
@@ -2314,6 +2320,12 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
             if running else {}
         )
         runtime_by_name[name] = rt
+        reader_fields = {}
+        phase = rt.get("_reader_compaction")
+        if phase and phase[0] == {"claude-code": "claude", "codex-cli": "codex"}.get(program, program):
+            reader_fields["reader_phase"] = "compacting"
+            if phase[1]:
+                reader_fields["reader_phase_elapsed"] = phase[1]
         pane_model = _pane_model_for(rt.get("pane_model"), (m or {}).get("program"))
         rows.append(
             {
@@ -2364,6 +2376,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 "last_active_rel": _rel(last_active, now),
                 "created": s["created"],
                 "surface": "tmux",
+                **reader_fields,
             }
         )
     # 2nd pass: tmux 不在の ORRERY Mail 登録 (retired / gone) も rows に含める。
@@ -4047,7 +4060,7 @@ def _claude_child_tools(session: str, sid: str) -> tuple[dict | None, str]:
         return None, f"Claude in Chrome launch record is invalid: {exc}"
     if state is None:
         return None, ""
-    spec = {"base": state["base"], "tools": state["tools"]}
+    spec = tools_module.normalize(state["base"], state["tools"])
     if state.get("browser_disabled"):
         spec["browser_disabled"] = True
     return (spec if state["version"] == 4 or tools_module.restrictive(spec) else None), ""
@@ -4261,7 +4274,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             mcp_config = _write_claude_resume_mcp_config(
                 session, registration, parent=child_state.get("parent_agent"),
                 servers=servers)
-            flags = "".join(" " + shlex.quote(flag) for flag in (tools_plan or {}).get("flags", ()))
+            tool_flags = tools_plan["flags"] if tools_plan is not None else tools.claude_native_screen_flags()
+            flags = "".join(" " + shlex.quote(flag) for flag in tool_flags)
             inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config{flags} --resume ", 1)
         if not legacy:
             if expected_history_session_id is not None:
@@ -5011,9 +5025,15 @@ def _launch_claude_conversation(session: str, sid: str, path: str, cwd: str, rea
             generation = screen_target["generation"] if screen is not None else ""
             environment[_CLAUDE_CONVERSATION_TOOLS_ENV] = f"{int(chrome)}:{generation}"
             config = json.dumps({"mcpServers": plan["servers"]}, separators=(",", ":"))
+            settings = {"disableAllHooks": True}
+            flags = plan["flags"]
+            if "--settings" in flags:
+                index = flags.index("--settings")
+                settings.update(json.loads(flags[index + 1]))
+                flags = flags[:index] + flags[index + 2:]
             command = [ABS_CLAUDE, "--resume", sid, "-n", session,
                        "--strict-mcp-config", "--mcp-config", config,
-                       "--settings", '{"disableAllHooks":true}', *plan["flags"],
+                       "--settings", json.dumps(settings, separators=(",", ":")), *flags,
                        *(["--chrome"] if chrome else []), "--append-system-prompt", prompt]
             inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG '
                      'AGENTSTACK_CLAUDE_LAUNCH_ID MCP_AGENT_MAIL_TOKEN; '
@@ -6025,12 +6045,6 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
             f'exec env -u OPENAI_API_KEY codex resume {sid} '
             f'-C {shlex.quote(cwd)} {_codex_child_launch_flags()}'
         )
-    # Claude in Chrome defaults (possibly in the tmux server env) belong to
-    # Claude children; a Codex child must not hand them on to its own spawns.
-    inner = (
-        'unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE; '
-        + inner
-    )
     resume_environment = {
         "AGENTSTACK_HOME": install_home,
         "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR,
@@ -6053,6 +6067,16 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
     configured_python = os.environ.get("AGENTSTACK_PYTHON", "").strip()
     if configured_python:
         resume_environment["AGENTSTACK_PYTHON"] = configured_python
+    if launch_origin == "child":
+        # Apply the verified child settings after the login profile runs, as
+        # Claude does. The bootstrap uses the environment to locate its owner.
+        exports = "".join(
+            f"export {key}={shlex.quote(value)}; " for key, value in resume_environment.items()
+        )
+        inner = exports + inner
+    # Claude in Chrome defaults (possibly in the tmux server env) belong to
+    # Claude children; a Codex child must not hand them on to its own spawns.
+    inner = 'unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE; ' + inner
     tmux_environment = [
         argument
         for key, value in resume_environment.items()
@@ -7306,9 +7330,9 @@ def agent_history_payload(name: str = "", hours: int | None = 24,
 
 
 try:
-    from dashboard.terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal)
+    from dashboard.terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal, reader_compaction)
 except ModuleNotFoundError:
-    from terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal)
+    from terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal, reader_compaction)
 # --------------------------------------------------------------------------- #
 # Agent runtime probe — コンテキスト残量(HP) + 動作状態を tmux ペインから読む
 #   Claude Code / Codex の TUI 表示を read-only パース。新データ源は持たない。
@@ -7865,6 +7889,9 @@ def _parse_runtime(text: str) -> dict:
     result = {"ctx_used": ctx_used, "act_state": act,
               "ctx_window": ctx_window, "work_secs": work_secs,
               "work_disp": work_disp, "last_disp": last_disp, "pane_model": pane_model}
+    phase = reader_compaction(text, ("claude", "codex"))
+    if phase:
+        result["_reader_compaction"] = phase
     if card_model:
         result.update(codex_card_model=card_model, codex_card_effort=card_effort)
     return result
@@ -7909,6 +7936,9 @@ def _native_context_runtime(session, created, session_id, program):
             if capture.returncode == 0:
                 result = harness_context.parse_context(capture.stdout, program)
                 result['act_state'] = harness_activity.parse_activity(capture.stdout, program)
+                phase = reader_compaction(capture.stdout, (program,))
+                if phase:
+                    result["_reader_compaction"] = phase
                 if program == 'dsh':
                     result['dsh_card_effort'] = harness_context.dsh_effort(capture.stdout)
         except (OSError, subprocess.SubprocessError):
@@ -8190,9 +8220,6 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
         if provider == "claude":
             if "browser_use" in permission:
                 keep_browser_off = not permission["browser_use"]
-            if (permission.get("computer_use") in ("off", "view") and sys.platform == "darwin"
-                    and selection.computer_use_enabled(selection._load_claude_settings(claude_json), cwd)):
-                return {"ok": False, "error": "Disable the project's built-in computer use before changing this permission"}
     if provider == "codex":
         selection.codex_apply(config, spec)
         candidate = {"version": selection.CODEX_RECORD_VERSION, **spec}
@@ -8891,6 +8918,7 @@ def spawn_names_payload() -> dict:
     local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
         os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
     return {
+        "computer_use": sys.platform == "darwin",
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
@@ -9761,8 +9789,9 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
         request, error = _spawn_request(payload)
         if error:
             return error
-        if spec.provider not in ("claude", "codex") and spec.program not in harness_runtime.HARNESSES and (
-                payload.get("tools") or payload.get("base") not in (None, "default")):
+        if (spec.provider not in ("claude", "codex") and spec.program not in harness_runtime.HARNESSES
+                and (spec.program != "antigravity" or sys.platform != "darwin")
+                and (payload.get("tools") or payload.get("base") not in (None, "default"))):
             return {"ok": False,
                     "error": f"base and tools are not supported for provider: {spec.provider}"}
         return _spawn_launch(payload, request, spec, handoff, discard_handoff)

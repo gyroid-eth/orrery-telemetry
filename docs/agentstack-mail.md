@@ -470,9 +470,10 @@ python3 scripts/measure_mail_notice.py sink \
   --event-fifo "$MEASURE_DIR/notice.fifo"
 ```
 
-画面は `measurement-ready` の固定表示です。raw/no-echoとbracketed pasteを有効にし、
-閉じたpaste frameの後のCRだけで到達を記録します。通知を画面へechoしないため、
-watcherの入力残留検査を自分で誘発しません。画面stdoutとevent FDを分離しています。
+画面に `measurement-ready` と空の入力欄を表示します。raw/no-echoとbracketed pasteを有効にし、
+貼り付けが完了したら本文の代わりに `[Pasted text #1]` を表示します。watcher はこの表示を
+確認して Enter を送り、計測器は閉じた paste frame の後の CR で到達を記録して入力欄を空にします。
+通知本文は画面に出さず、画面stdoutとevent FDを分離しています。
 `--event-fd` は既に継承できている専用pipe用です。tmux clientのFDがpaneへ自動継承されるとは
 仮定しないでください。collectorのready eventを確認してから送信します。
 
