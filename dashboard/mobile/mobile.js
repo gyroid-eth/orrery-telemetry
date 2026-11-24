@@ -950,10 +950,10 @@ function inputError(value){
 function validText(value){return typeof value==='string'&&value.trim()&&!inputError(value);}
 function clearAttachments(){for(const attachment of attachments)if(attachment.url)URL.revokeObjectURL(attachment.url);attachments=[];}
 const draftText=()=>[text.replace(/[\r\n]+$/u,''),...attachments.map(attachment=>attachment.marker)].filter(Boolean).join(' ');
-const inputText=()=>{
- if(!replyReference)return draftText();
+const inputText=(draft=draftText())=>{
+ if(!replyReference)return draft;
  const r=replyReference.value;
- return 'Reference: '+r.agent+' · '+r.role+' · '+r.ts+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draftText();
+ return 'Reference: '+r.agent+' · '+r.role+' · '+r.ts+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draft;
 };
 const inputValid=()=>validText(draftText())&&validText(inputText())&&referenceCurrent(replyReference);
 function inputErrorNote(){
@@ -1055,13 +1055,14 @@ async function uploadAttachments(files,source){
    const data=await readAttachment(file,controller.signal);
    if(g!==generation||controller.signal.aborted)return;
    const result=await request(kind,{epoch:capability.epoch,choice:t.choice,revision:t.revision,
+    ...(file.name&&{label:file.name.slice(0,256)}),
     [kind]:kind==='image'?data:{format:type.format,data}},controller,30000);
    if(g!==generation||!sheet.open||document.hidden)return;
    if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||
     !sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
    const quoted="'"+result.path.replaceAll("'","'\\''")+"'",marker='['+kind+': '+quoted+']';
    if(!validText([inputText(),marker].filter(Boolean).join(' ')))throw Error(kind+'_text_too_large');
-   attachments.push({kind,marker,label:file.name,url:kind==='image'?URL.createObjectURL(file):null});
+   attachments.push({kind,marker,label:file.name,file,url:kind==='image'?URL.createObjectURL(file):null});
   }
   message='';
  }catch(error){
@@ -1102,6 +1103,7 @@ async function send(){
  if(!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
  sendFeedback?.begin(q('.reader-send-confirm'));
  const sentText=prepared.text,p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
+ const display={text:inputText(text.replace(/[\r\n]+$/u,'')),attachments};
  prepared=null;preparedReference=replyReference=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
  try{
@@ -1110,7 +1112,7 @@ async function send(){
   if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
   // Local display only, until the same words appear in the verified record.
-  if(phase==='accepted'&&history){tab='conversation';composer=false;conversation()?.addPending(sentText);}
+  if(phase==='accepted'&&history){tab='conversation';composer=false;conversation()?.addPending(sentText,display);}
   if(phase==='accepted')scheduleReceiptDismissal();
   render();
  }catch(_){if(g===generation&&sheet.open){phase='unknown';render();}}

@@ -45,11 +45,17 @@ def test_user_image_preview_works_with_an_older_bridge():
 
 def test_real_phone_renders_the_user_thumbnail_and_opens_the_same_image(phone):
     client,js,wait,state=phone
-    state['events']=[history.project_event(input_event(),issue=lambda _: 'b'*32)]
+    raw=input_event()
+    raw['input_display_text']=raw['text']
+    raw['text']+='\n\n@./.orrery-input-images/'+'a'*32+'.png'
+    raw['references'].append(dict(id='c'*32,label='メモ.md',kind='file'))
+    state['events']=[history.project_event(raw,issue=lambda _: 'b'*32)]
     state['file_preview']=image(png(640,320),width=640,height=320,notice='Recorded input image')
     js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
     wait("document.querySelector('.conversation-thumbnail-image')?.naturalWidth>0")
     assert js("document.querySelector('.conversation-shown-files').previousElementSibling.classList.contains('user')")
+    assert js("document.querySelector('.conversation-bubble.user').textContent.includes('メモ.md')")
+    assert not js("document.querySelector('.conversation-bubble.user').textContent.includes('.orrery-input-')")
     assert js("(()=>{const box=document.querySelector('.conversation-shown-files'),bubble=box.previousElementSibling,button=box.querySelector('.conversation-thumbnail');return Math.abs(button.getBoundingClientRect().right-bubble.getBoundingClientRect().right)<1&&box.getBoundingClientRect().top>=bubble.getBoundingClientRect().bottom;})()")
     if os.environ.get('MOBILE_INPUT_IMAGE_CAPTURE'):
         path=Path(os.environ['MOBILE_INPUT_IMAGE_CAPTURE'])

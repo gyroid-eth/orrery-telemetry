@@ -558,16 +558,17 @@ function files(e,r){if(Array.isArray(e.files)&&e.files.length){const f=make('div
 function row(e){
  if(e.kind==='tool'){const r=make('div','conversation-tool');r.append(make('span','conversation-tool-label',e.text));r.dataset.id=e.id;files(e,r);if(Array.isArray(e.mail))e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
  if(e.kind==='mail'){const r=make('div','conversation-mails');r.dataset.id=e.id;e.mail.forEach(m=>r.append(mailCard(m,e.ts,e.markdown_images)));return r;}
- const command=e.role==='user'&&markdown()?.commandRecord(e.text);
+ const visibleText=e.input_display_text??e.text;
+ const command=e.role==='user'&&markdown()?.commandRecord(visibleText);
  const human=e.kind==='text'&&e.role==='user'&&!command;
  const r=make('div',command?.shell?'conversation-shell':'conversation-bubble '+(e.role==='user'?'user':'assistant'));r.dataset.id=e.id;
  const time=clock(e.ts);
  if(human)r.title=time?'You · '+time:'You';
- if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(e.text,r);}
+ if(command){if(command.shell)r.append(make('small','conversation-speaker','SHELL'));markdown().renderCommand(visibleText,r);}
  else{
-  const reference=human&&!e.truncated&&replyReference(e.text);
+  const reference=human&&!e.truncated&&replyReference(visibleText);
   if(e.role==='assistant')r.append(speaker(e));
-  const text=body(reference?reference.reply:e.text,e.role==='assistant',e.markdown_images);
+  const text=body(reference?reference.reply:visibleText,e.role==='assistant',e.markdown_images);
   if(reference){
    r.classList.add('conversation-has-reference');
    const wash=make('div','conversation-reference-body');wash.append(text);
@@ -595,11 +596,12 @@ function shownFiles(e){
  box.dataset.role=e.role==='user'?'user':'assistant';
  for(const x of e.files){
   if(x.kind!=='image'||typeof x.ref!=='string'||!REF.test(x.ref)){
-   box.append(make('span','conversation-chip',x.label));continue;
+   if(e.role!=='user')box.append(make('span','conversation-chip',x.label));
+   continue;
   }
   box.append(thumbnail(x));
  }
- return box;
+ return box.childElementCount?box:null;
 }
 function thumbnail(x,alt=x.label,fallback=alt){
  const button=make('button','conversation-thumbnail'+(x.markdown?' conversation-markdown-image':''));
@@ -790,13 +792,37 @@ function activity(){
  const dot=document.querySelector?.('.reader-state');if(dot&&root?.isConnected){dot.dataset.state=a?.stale?'unknown':a?.state||'unknown';dot.title=a?.stale?'Activity observation unavailable':a?.state==='work'?'Working':a?.state==='ask'?'Approval needed':a?.state==='question'?'Reply needed':'Waiting';dot.setAttribute('aria-label',dot.title);}
 }
 
+function keepPending(keep){
+ pending=pending.filter(p=>{
+  if(keep(p))return true;
+  for(const attachment of p.attachments)if(attachment.url)URL.revokeObjectURL(attachment.url);
+  return false;
+ });
+}
 function renderPending(){
  list?.querySelectorAll(':scope > .conversation-pending').forEach(x=>{if(x.contains?.(document.activeElement))list.focus?.({preventScroll:true});x.remove();});
- for(const p of pending){const r=make('div','conversation-bubble user conversation-pending');r.append(body(p.text),make('small','conversation-time','Sent to terminal · not yet in the record'));const dismiss=make('button','conversation-dismiss','Dismiss');dismiss.type='button';dismiss.onclick=()=>{list.tabIndex=-1;list.focus?.({preventScroll:true});pending=pending.filter(x=>x!==p);renderPending();activity();};r.append(dismiss);list.append(r);}
+ for(const p of pending){
+  const r=make('div','conversation-bubble user conversation-pending');
+  if(p.displayText)r.append(body(p.displayText));
+  const images=make('div','conversation-shown-files'),files=make('div','conversation-files');
+  images.dataset.role='user';
+  for(const attachment of p.attachments){
+   if(attachment.url){
+    const tile=make('span','conversation-thumbnail'),img=make('img','conversation-thumbnail-image');
+    img.src=attachment.url;img.alt=attachment.label;tile.append(img);images.append(tile);
+   }else files.append(chip(attachment));
+  }
+  if(images.childElementCount)r.append(images);
+  if(files.childElementCount)r.append(files);
+  r.append(make('small','conversation-time','Sent to terminal · not yet in the record'));
+  const dismiss=make('button','conversation-dismiss','Dismiss');dismiss.type='button';
+  dismiss.onclick=()=>{list.tabIndex=-1;list.focus?.({preventScroll:true});keepPending(x=>x!==p);renderPending();activity();};
+  r.append(dismiss);list.append(r);
+ }
 }
 function settlePending(){
  const now=Date.now();
- pending=pending.filter(p=>now-p.at<180000&&!events.some(e=>!p.before.has(e.id)&&e.role==='user'&&e.kind==='text'&&(markdown()?.submissionText(e.text)||e.text).trim()===p.text.trim()));
+ keepPending(p=>now-p.at<180000&&!events.some(e=>!p.before.has(e.id)&&e.role==='user'&&e.kind==='text'&&(markdown()?.submissionText(e.text)||e.text).trim()===p.text.trim()));
 }
 function groupShellRows(){
  let owner=null;
@@ -1000,7 +1026,13 @@ function mount(n){
  const g=gen;document.fonts?.ready?.then(()=>{if(g===gen)layoutMailRoutes();});poll();return root;
 }
 function element(){return root;}
-function addPending(text){if(!root||typeof text!=='string'||!text.trim())return;pending.push({text,at:Date.now(),before:new Set(seen)});renderPending();following=true;restore();}
+function addPending(text,display){
+ if(!root||typeof text!=='string'||!text.trim())return;
+ const attachments=(display?.attachments||[]).slice(0,8).map(({kind,label,file})=>({kind,label,
+  url:kind==='image'&&file instanceof File?URL.createObjectURL(file):null}));
+ pending.push({text,displayText:display?.text??text,attachments,at:Date.now(),before:new Set(seen)});
+ renderPending();following=true;restore();
+}
 function unmount(){
  stepView?.reset();stepView=null;provider='';
  recordVersion++;recordConfirmed=false;lastRecordPoll=null;referenceJump=null;clearReferenceFlash();dismissReferenceSelection();
@@ -1008,7 +1040,7 @@ function unmount(){
  mailResize?.disconnect();mailResize=null;mailWidth=0;
  clearToolGroups();
  root?.replaceChildren();root?.remove();root=list=status=olderButton=retryButton=null;
- events=[];seen=new Set();older=null;pending=[];failures=0;olderLoad=null;following=true;savedTop=0;name='';
+ events=[];seen=new Set();older=null;keepPending(()=>false);failures=0;olderLoad=null;following=true;savedTop=0;name='';
 }
 document.addEventListener('visibilitychange',()=>{
  if(document.hidden){

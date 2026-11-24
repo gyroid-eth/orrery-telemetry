@@ -50,7 +50,14 @@ def capture(client, theme, step):
     if folder:
         path = Path(folder)
         path.mkdir(parents=True, exist_ok=True)
-        (path/(theme+'-'+step+'.png')).write_bytes(base64.b64decode(client.call('Page.captureScreenshot', format='png')['data']))
+        if os.environ.get('CDP_PDF_ON_TIMEOUT'):
+            result=client.call('Page.printToPDF',paperWidth=390/96,paperHeight=844/96,
+                               marginTop=0,marginRight=0,marginBottom=0,marginLeft=0,printBackground=True)
+            suffix='.pdf'
+        else:
+            result=client.call('Page.captureScreenshot',format='png')
+            suffix='.png'
+        (path/(theme+'-'+step+suffix)).write_bytes(base64.b64decode(result['data']))
 
 
 @pytest.mark.parametrize('theme', ['dark', 'light'])
@@ -87,12 +94,21 @@ def test_multiple_selection_add_remove_and_one_confirmed_send(phone, theme):
     assert js("document.querySelectorAll('.reader-image-thumb').length") == 3
     js("document.querySelector('#terminal-review').click()")
     wait("document.querySelector('.reader-review')!==null")
+    js("window.sentDraftUrls=attachmentURLs.slice()")
     js("[...document.querySelectorAll('button')].find(button=>button.textContent==='Send once').click()")
     wait("document.querySelector('.reader-receipt.accepted')!==null")
     assert state['draft'] == expected
     assert sum(op == 'commit' for op, _ in state['calls']) == 1
-    assert js("attachmentURLs.every(url=>revokedURLs.includes(url))")
+    assert js("sentDraftUrls.every(url=>revokedURLs.includes(url))")
     assert js("document.querySelectorAll('.reader-image-thumb').length") == 0
+    wait("[...document.querySelectorAll('.conversation-pending img')].filter(img=>img.naturalWidth===240).length===3")
+    assert not js("document.querySelector('.conversation-pending').textContent.includes('.orrery-input-images')")
+    assert [upload['label'] for upload in uploads(state)] == ['image-0.png','image-1.png','image-2.png','image-0.png']
+    capture(client,theme,'pending')
+    state['events']=[dict(id='recorded-images',kind='text',role='user',text=expected,
+                          input_display_text='Compare these',ts='2026-01-23T00:00:00Z')]
+    wait("!!document.querySelector('[data-id=recorded-images]')&&!document.querySelector('.conversation-pending')",10)
+    assert js("attachmentURLs.every(url=>revokedURLs.includes(url))")
 
 
 def test_limit_and_invalid_batch_preserve_existing_selection(phone):
