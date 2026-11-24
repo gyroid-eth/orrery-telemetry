@@ -1289,8 +1289,15 @@ run_to() {{
             return 0
             ;;
         capture-pane) printf 'Claude ❯\n'; return 0 ;;
-        load-buffer) printf 'load-buffer-content %s\n' "$(cat "$5")" >> "$FAKE_COMMAND_LOG"; return 0 ;;
-        paste-buffer|delete-buffer|send-keys) return 0 ;;
+        show-environment) return 0 ;;
+        display-message)
+            [[ "$*" == "tmux display-message -p -t =$TEST_AGENT #{{pane_id}}" ]] || return 98
+            printf '%%1\n'
+            ;;
+        submit-input)
+            [[ "$3" == '%1' && -s "$4" ]] || return 98
+            printf 'submitted %s %s\n' "$3" "$(cat "$4")" >> "$FAKE_COMMAND_LOG"
+            ;;
         *) return 98 ;;
     esac
 }}
@@ -1363,16 +1370,14 @@ def _state_should_attempt(
 
 
 def _assert_injection_commands(commands: list[str], *, expected_count: int) -> None:
-    injection_sequence = []
-    for command in commands:
-        if command.startswith("load-buffer-content "):
-            assert "D12 completion delivery" in command
-            injection_sequence.append("body")
-        elif command.startswith("tmux paste-buffer -p -d ") and command.endswith(" -t BlueLake"):
-            injection_sequence.append("prompt")
-        elif command.endswith("send-keys -t BlueLake C-m"):
-            injection_sequence.append("submit")
-    assert injection_sequence == ["body", "prompt", "submit"] * expected_count
+    attempts = [command for command in commands if command.startswith("tmux submit-input ")]
+    submitted = [command for command in commands if command.startswith("submitted ")]
+    assert len(attempts) == len(submitted) == expected_count
+    assert all(command.startswith("tmux submit-input %1 ") for command in attempts)
+    assert submitted == [
+        "submitted %1 ORRERY Mail notification: message from GreenCastle [high]: "
+        "D12 completion delivery. Please call fetch_inbox to read it."
+    ] * expected_count
 
 
 def test_d12_selected_parity_watcher_crash_windows_are_durable_and_hermetic(
@@ -1420,9 +1425,6 @@ def test_d12_selected_parity_watcher_crash_windows_are_durable_and_hermetic(
             (case_root / "fake-external-commands.log")
             .read_text(encoding="utf-8")
             .splitlines()
-        )
-        assert [c for c in commands if " send-keys " in c][-1].endswith(
-            "send-keys -t BlueLake C-m"
         )
         _assert_injection_commands(commands, expected_count=1)
 
@@ -1547,7 +1549,7 @@ def test_d12_selected_parity_source_order_exposes_external_application_seam() ->
         < should_attempts[2] < worker
     )
     delivery = _extract_shell_function(source, "deliver_worker")
-    submit = delivery.index('tmux send-keys -t "$session_name" C-m')
+    submit = delivery.index('tmux submit-input "$pane_id" "$paste_file"')
     success = delivery.index(
         'state_mark_result "$agent_name" "$msg_key" "success" "watcher"'
     )
