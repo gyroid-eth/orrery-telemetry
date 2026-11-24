@@ -11,6 +11,7 @@
   const settings = $('spawn-settings'), modelChip = $('spawn-model-chip');
   const modelName = $('spawn-model-name'), effortMark = $('spawn-model-effort');
   const computer = $('spawn-computer'), browser = $('spawn-browser');
+  const browserTool = browser.closest('.spawn-tool');
   const mobileControls = window.OrrerySpawnControls;
   const selects = new Map([
     [harness, mobileControls?.mountDropdown(harness, {inline:true})],
@@ -47,6 +48,13 @@
   const receiptKey = 'orrery-mobile-launch-receipt';
   const providerIcons = new Map([['claude', 'anthropic'], ['codex', 'openai'], ['gemini', 'google'], ['deepseek', 'deepseek']]);
   const providerOrder = [...providerIcons.keys(), 'local'];
+  const failureReasons = new Map([
+    ['unsupported_tools', 'Turn off optional tools or choose another harness.'],
+    ['browser_setup', 'Turn off Browser or set up Chrome on your computer.'],
+    ['model_unavailable', 'Choose another model or harness.'],
+    ['launch_directory', 'Choose another launch folder.'],
+    ['check_graph', 'Check the graph before trying again.'],
+  ]);
   const modelGroups = new Map();
   let modelIndex = -1;
   let catalog, route, selection, receipt = '', submitting = false, timer = 0, catalogRequest;
@@ -190,6 +198,20 @@
     return selectedModel()?.harnesses.find(item => item.id === harness.value);
   }
 
+  function browserAvailable(next = chosenRoute()) {
+    return catalog?.configurable && next &&
+      (!['dsh', 'hermes'].includes(next.key) || catalog.directories[Number(directory.value)]?.native_browser === true);
+  }
+
+  function syncBrowser(next, reset = false) {
+    const available = Boolean(browserAvailable(next));
+    if (reset || browserTool.hidden === available) {
+      browser.setAttribute('aria-checked', String(available && next.key !== 'dsh'));
+      toggleMotion[1]?.sync(false);
+    }
+    browserTool.hidden = !available;
+  }
+
   function enabled() {
     const available = window.OrreryMobileTerminal?.inputAvailable?.() === true;
     entry.hidden = !available;
@@ -224,12 +246,14 @@
     if (!next) return;
     const provider = selectedModel().provider;
     const key = provider + '/' + next.key;
-    if (route !== key) {
+    const changed = route !== key;
+    if (changed) {
       dismissToolHelp();
       const on = catalog.configurable && next.key !== 'dsh';
-      for (const control of [computer, browser]) control.setAttribute('aria-checked', String(on));
-      for (const motion of toggleMotion) motion?.sync(false);
+      computer.setAttribute('aria-checked', String(on));
+      toggleMotion[0]?.sync(false);
     }
+    syncBrowser(next, changed);
     route = key;
     const previous = effort.value;
     const entries = next.efforts.map(value => [value, effortLabel(value)]);
@@ -282,6 +306,7 @@
     } else if (state === 'failed') {
       saveReceipt('');
       show('result', 'Launch failed.');
+      notice.append(document.createElement('br'), failureReasons.get(data.failure_reason) || 'Check the launch settings and try again.');
       resultButton('Edit', loadCatalog);
     } else if (state === 'submitting' || state === 'launching') {
       show('result', state === 'launching' ? 'Starting ' + name + '…' : 'Submitting launch…');
@@ -373,11 +398,12 @@
     const route = chosenRoute();
     const selectedDirectory = catalog.directories[Number(directory.value)];
     const checked = control => control.getAttribute('aria-checked') === 'true';
+    const canUseBrowser = browserAvailable(route);
     selection = {
       catalog:catalog.catalog, model:modelIndex, harness:harness.value, directory:Number(directory.value),
       task:task.value.trim(), role:catalog.configurable ? role.value.trim() : '',
       effort:effort.value || null, computer:catalog.configurable && checked(computer),
-      browser:catalog.configurable && checked(browser),
+      ...(canUseBrowser || !catalog.configurable ? {browser:Boolean(canUseBrowser) && checked(browser)} : {}),
     };
     const item = selectedModel(), source = modelSource(item);
     const name = modelLabel(item) + (source ? ' on ' + source : '');
@@ -389,7 +415,7 @@
     if (selection.role) labels.push(summaryValue('Role', 'agents', selection.role));
     if (catalog.configurable) {
       labels.push(summaryValue('Computer use', 'launch-computer', selection.computer ? 'On' : 'Off'));
-      labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));
+      if (canUseBrowser) labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));
     }
     $('spawn-summary').replaceChildren(...labels);
     $('spawn-task-copy').textContent = selection.task;
@@ -533,6 +559,7 @@
   }
   modelSearch.oninput = renderModels;
   harness.onchange = updateRoute;
+  directory.onchange = () => syncBrowser(chosenRoute());
   effort.onchange = () => {syncEffort();canReview();};
   task.oninput = canReview;
   editor.onsubmit = reviewSelection;

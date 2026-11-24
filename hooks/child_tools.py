@@ -746,6 +746,12 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
         raise ToolsError('native_mcp_selection_unsupported: built-in computer use')
     names = list(tools.get('mcp', ()))
     servers, approved, enabled = {}, {}, {}
+    # The plain native MCP selection copies the transport without requesting
+    # per-tool auto-approval, which these clients cannot express.
+    plain_chrome = 'chrome-devtools' in names and 'chrome-devtools' not in tools.get('approve_all', ())
+    selected_chrome = _native_codex_browser(codex_config or {}, explicit=True) if plain_chrome else None
+    if selected_chrome and selected_chrome[0] != 'chrome-devtools' and selected_chrome[0] in names:
+        raise ToolsError('native_mcp_selection_unsupported: Chrome selected twice')
     codex_browser = None
     if spec['base'] == 'default' or 'browser' in tools:
         codex_browser = _native_codex_browser(codex_config or {})
@@ -777,8 +783,12 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
             if managed_screen is not None:
                 servers[name] = managed_screen
             continue
-        definition = codex_browser[1] if codex_browser and name == browser_server \
-            else _copyable_definition(name, settings, cwd)
+        if name == 'chrome-devtools' and selected_chrome is not None:
+            name, definition = selected_chrome
+        elif codex_browser and name == browser_server:
+            definition = codex_browser[1]
+        else:
+            definition = _copyable_definition(name, settings, cwd)
         _check_screen_source(spec, name, definition, platform=platform)
         if definition.get('type','stdio') not in transports:
             raise ToolsError('native_mcp_transport_unsupported')
@@ -1254,29 +1264,35 @@ def resolve_defaults(selection: str, provider: str, *, cwd: str,
             "omitted": omitted}
 
 
-def _defaults_codex_config(path: str, overlay: str) -> dict:
+def native_codex_config(*, resume=None) -> dict:
+    home = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))).expanduser()
+    return _defaults_codex_config(str(home / 'config.toml'),
+                                  os.environ.get('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', ''), resume=resume)
+
+
+def _defaults_codex_config(path: str, overlay: str, *, resume=None) -> dict:
     """Read transport definitions with the same overlay merge as build-home.
 
     This reads no auth.json or credential file, and never prints config values.
     An unreadable base leaves no applicable MCP defaults; an invalid overlay is
     ignored, matching the build-home overlay contract.
     """
-    if __package__:
-        from . import child_resume
-    else:
-        import child_resume
-    from pathlib import Path
+    if resume is None:
+        if __package__:
+            from . import child_resume as resume
+        else:
+            import child_resume as resume
     try:
         config_path = Path(path)
-        config = child_resume._toml().loads(config_path.read_text(encoding="utf-8")) \
+        config = resume._toml().loads(config_path.read_text(encoding="utf-8")) \
             if config_path.exists() else {}
     except (OSError, ValueError):
         return {}
     if overlay.strip():
         try:
-            extra = child_resume._toml().loads(Path(overlay).read_text(encoding="utf-8"))
-            child_resume._drop_protected_overlay_tables(extra)
-            child_resume._deep_merge(config, extra)
+            extra = resume._toml().loads(Path(overlay).read_text(encoding="utf-8"))
+            resume._drop_protected_overlay_tables(extra)
+            resume._deep_merge(config, extra)
         except (OSError, ValueError):
             pass
     return config

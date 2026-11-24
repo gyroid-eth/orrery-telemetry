@@ -95,6 +95,21 @@ def test_default_browser_and_explicit_plain_mcp_are_combined(tmp_path):
     assert plan['approved'] == plan['enabled_tools'] == {}
 
 
+@pytest.mark.parametrize('base', ['default', 'mail-only'])
+@pytest.mark.parametrize('name', ['chrome-devtools', 'custom-chrome'])
+def test_named_chrome_selection_copies_codex_transport_without_approvals(tmp_path, base, name):
+    spec = tools.normalize(base, {'mcp': ['chrome-devtools']})
+    plan = browser_plan(tmp_path, spec, {name: CHROME, 'unrelated': {'command':'/fixture/other'}})
+    assert plan['servers'] == {name: CHROME}
+    assert plan['approved'] == plan['enabled_tools'] == {}
+
+
+def test_named_chrome_selection_refuses_to_drop_codex_tool_controls(tmp_path):
+    spec = tools.normalize('mail-only', {'mcp': ['chrome-devtools']})
+    with pytest.raises(tools.ToolsError, match='native_mcp_selection_unsupported'):
+        browser_plan(tmp_path, spec, {'chrome-devtools': {**CHROME, 'enabled_tools': ['list_pages']}})
+
+
 def test_browser_discovery_ambiguity_is_not_silently_ignored(tmp_path):
     with pytest.raises(tools.ToolsError, match='several match'):
         browser_plan(tmp_path, servers={'first': CHROME, 'second': CHROME})

@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":47}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":48}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -207,6 +207,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 [取得・実確認の手順](dsh-stage-a.md)も参照。
 
 ## GET `/api/spawn-names`
+
+API 48 は dsh・Hermes の子へ Chrome DevTools を渡せる起動フォルダを、`dirs` と同じ表記の `native_browser_dirs` で返します。スマホは選択したフォルダが含まれる場合に Browser を表示します。起動時にも設定を検証します。
 
 API33では `dynamic_models: true` / `model_source: server` の動的Localを追加します。pickerは設定した各endpointの `/v1/models` を明示取得し、静的検証・spawn POSTではmodel探索しません。各modelは生の `id`、任意の `display_name`、0始まり `url_index`、opaqueな `url_key`、`model_state`（`loaded` / `available` / `unloaded`）、`context` と由来 `context_source`（`server` / `override` / `default`）を持ちます。status欠損・未知の有効IDは許可し、明示unloadedだけ無効です。`Available` はロード済みの証明ではありません。URL別失敗は `endpoints[].reason` へ出し、取得失敗時に旧model行を現在値として返しません。URL・資格参照は公開catalogへ含めません。動的effortは未報告、helperはSame as mainです。実command生成・exact resumeでは選択URLだけを1回照合し、ID消失・明示unloaded・取得失敗を拒否します。server modelの継続lockではありません。
 
