@@ -750,23 +750,22 @@ deliver_worker() {
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
-    local paste_file paste_buf="agentstack-notify-$$-${RANDOM}"
+    local paste_file submit_rc=0
     paste_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify.XXXXXX") || paste_file=""
-    if [[ -z "$paste_file" ]] || ! printf '%s' "$prompt" > "$paste_file" \
-       || ! run_to "$TMUX_TIMEOUT" tmux load-buffer -b "$paste_buf" "$paste_file" 2>/dev/null; then
+    if [[ -z "$paste_file" ]] || ! printf '%s' "$prompt" > "$paste_file"; then
         [[ -n "$paste_file" ]] && rm -f "$paste_file"
-        run_to "$TMUX_TIMEOUT" tmux delete-buffer -b "$paste_buf" 2>/dev/null || true
         state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
+    # The helper shares the pane lock with Cockpit and checks the visible
+    # input before Enter. A refused or unknown send leaves the signal pending.
+    run_to "$((TMUX_TIMEOUT + 2))" tmux submit-input "$pane_id" "$paste_file" 2>/dev/null || submit_rc=$?
     rm -f "$paste_file"
-    # Paste and submit on one server queue. A failed paste skips C-m. Never
-    # send a second Enter later, when the pane may already hold another draft.
-    if ! run_to "$TMUX_TIMEOUT" tmux paste-buffer -p -d -b "$paste_buf" -t "$pane_id" \
-        ';' send-keys -t "$pane_id" C-m 2>/dev/null; then
-        run_to "$TMUX_TIMEOUT" tmux delete-buffer -b "$paste_buf" 2>/dev/null || true
-        state_mark_result "$agent_name" "$msg_key" "submit_failed" "watcher"
+    if (( submit_rc != 0 )); then
+        local result="submit_failed"
+        if (( submit_rc == 3 )); then result="submit_deferred"; fi
+        state_mark_result "$agent_name" "$msg_key" "$result" "watcher"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi

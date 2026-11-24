@@ -559,16 +559,23 @@ def test_real_tmux_notification_uses_only_own_socket_and_completes_fact(launch,s
     session='orrery-'+row['launch_id']
     worker=client.isolation/'synthetic-terminal-provider.py'
     output=client.isolation/'terminal-notification.txt'
-    worker.write_text('import os,sys,termios,tty\n'
-        'tty.setraw(0)\n'
-        'raw=b""\n'
-        'while b"\\r" not in raw and b"\\n" not in raw:\n'
-        ' raw+=os.read(0,4096)\n'
-        'open(sys.argv[1],"wb").write(raw)\n'
-        'import time;time.sleep(30)\n')
+    worker.write_text(r"""
+import os,sys,tty
+tty.setraw(0)
+os.write(1,b'\x1b[?2004h'+'❯ '.encode())
+raw=b''
+while not raw.endswith(b'\x1b[201~'):
+    raw+=os.read(0,1)
+draft=raw.removeprefix(b'\x1b[200~').removesuffix(b'\x1b[201~')
+os.write(1,draft.replace(b'\n',b'\r\n'))
+assert os.read(0,1)==b'\r'
+open(sys.argv[1],'wb').write(draft)
+os.write(1,'\r\n❯ '.encode())
+import time;time.sleep(30)
+""")
     def tmux(*args):
         return subprocess.run(['tmux','-L',socket_name,*args],capture_output=True,text=True,timeout=10,check=True)
-    tmux('new-session','-d','-s',session,shlex.join([sys.executable,str(worker),str(output)]))
+    tmux('new-session','-d','-x','150','-s',session,shlex.join([sys.executable,str(worker),str(output)]))
     try:
         pane,pid,socket_path,server_pid=tmux('display-message','-p','-t',session,
             '#{pane_id} #{pane_pid} #{socket_path} #{pid}').stdout.strip().split()
@@ -579,7 +586,7 @@ def test_real_tmux_notification_uses_only_own_socket_and_completes_fact(launch,s
               'pane_id':pane,'pid':int(pid),'process_start':start}
         monkeypatch.setattr(delivery,'live_rows',lambda launch_id:[['session.json',live]])
         deadline=time.monotonic()+5
-        while delivery.tmux_target() is None:
+        while delivery.tmux_target() is None or '❯' not in tmux('capture-pane','-p','-t',pane).stdout:
             assert time.monotonic()<deadline, 'synthetic provider did not become the pane process'
             time.sleep(.03)
         mid=send(server)
