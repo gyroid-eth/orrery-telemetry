@@ -248,12 +248,8 @@ def _server_name(value: Any, what: str) -> str:
 # --------------------------------------------------------------------------- #
 # the selection
 # --------------------------------------------------------------------------- #
-def normalize(base: Any = None, tools: Any = None, *, platform: str | None = None) -> dict:
-    """Validate an API/CLI selection and return {"base", "tools"}.
-
-    ``tools`` holds only the kinds that were selected: ``browser`` as
-    {"device": str}, ``screen`` as {"access", "server"}, and ``mcp`` as a
-    sorted list of server names. macOS uses the managed Cua Driver relay."""
+def normalize_selection(base: Any = None, tools: Any = None) -> dict:
+    """Validate and canonicalize the selection independent of launch policy."""
     if base is None:
         base = "default"
     if base not in BASES:
@@ -327,6 +323,13 @@ def normalize(base: Any = None, tools: Any = None, *, platform: str | None = Non
         if SCREEN_SERVER in checked:
             raise ToolsError("orrery-screen already has a fixed per-tool approval list")
         result["approve_all"] = sorted(checked)
+    return {"base": base, "tools": result}
+
+
+def normalize(base: Any = None, tools: Any = None, *, platform: str | None = None) -> dict:
+    """Validate a launch selection and use the managed relay for macOS Cua."""
+    spec = normalize_selection(base, tools)
+    result = spec["tools"]
     if platform is None:
         platform = sys.platform
     if platform == "darwin":
@@ -348,7 +351,7 @@ def normalize(base: Any = None, tools: Any = None, *, platform: str | None = Non
                     result[key] = remaining
                 else:
                     result.pop(key)
-    return {"base": base, "tools": result}
+    return spec
 
 
 def parse_cli(values: list[str]) -> dict:

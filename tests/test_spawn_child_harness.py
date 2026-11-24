@@ -126,16 +126,22 @@ def test_harness_resolves_installer_default_tools(tmp_path, harness, explicit, o
     launch = json.loads((Path(state['harness_state_dir']) / 'input.json').read_text())
     servers = json.loads(Path(launch['mcp_config']).read_text())['mcpServers']
     prompt = Path(launch['prompt_file']).read_text()
+    if expected == ['cua-driver']:
+        omitted = ['screen:operate', 'mcp:missing']
+        if sys.platform == 'darwin':
+            # A legacy default maps to the relay, which requires explicit selection.
+            expected = []
+            omitted.append('mcp:cua-driver')
+            assert 'orrery-screen' not in servers
+        for item in omitted:
+            message = f'Default tool {item} is unavailable'
+            assert message in prompt and message in result.stderr
     assert launch['tools'] == {'base': 'default', 'tools': {'mcp': expected} if expected else {}}
     assert {name: servers[name] for name in definitions if name in servers} == {
         name: definitions[name] for name in expected
     }
     if explicit:
         assert 'an explicit base' in prompt and 'an explicit base' in result.stderr
-    if expected == ['cua-driver']:
-        for item in ('screen:operate', 'mcp:missing'):
-            message = f'Default tool {item} is unavailable'
-            assert message in prompt and message in result.stderr
 
 
 @pytest.mark.parametrize('stop_fails,start_pending', [(False, False), (True, False), (False, True)])

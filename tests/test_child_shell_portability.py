@@ -36,7 +36,17 @@ def test_no_hard_coded_zsh_launch():
     )
     # Both Claude launch sites share one builder, which uses the same shell.
     assert text.count('"$(claude_child_launch_command)"') == 2
-    assert 'printf "%s -lc \'%s\'" "$CHILD_SHELL" "$inner"' in text
+    start = text.index("\nclaude_child_launch_command() {") + 1
+    builder = text[start:text.index("\n}\n", start) + 2]
+    shell = "/fixture/bin/selected-shell"
+    command = subprocess.check_output(
+        ["bash", "-c", builder + "\nclaude_child_launch_command"],
+        env={**os.environ, "CHILD_SHELL": shell,
+             "CLAUDE_CHILD_TOOL_FLAGS": "", "CLAUDE_CHILD_CHROME": "false"},
+        text=True,
+    )
+    resolved_shell, option, _ = shlex.split(command)
+    assert (resolved_shell, option) == (shell, "-lc")
 
 
 def test_launch_snippets_avoid_zsh_only_expansions():
