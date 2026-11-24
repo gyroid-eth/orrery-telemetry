@@ -186,6 +186,13 @@ def test_workspace_keeps_the_same_reader_and_private_draft_across_layouts(phone)
     js("paneDoc('SampleAgent').querySelector('.workspace-compose-button').click()")
     wait("workspaceFrame('SampleAgent').dataset.composerOverlay === 'true' && workspaceFrame('SampleAgent').getBoundingClientRect().width > 350")
     assert js("""(() => {
+        const doc=paneDoc('SampleAgent'),header=doc.querySelector('.reader-bar .reader-person');
+        return header.getClientRects().length>0 && header.querySelector('h2').textContent==='SampleAgent'
+            && header.querySelector('.reader-initials').getClientRects().length>0
+            && !doc.querySelector('.reader-input-target')
+            && !doc.querySelector('.reader-input-bar').innerText.includes('SampleAgent');
+    })()""")
+    assert js("""(() => {
         const frame=workspaceFrame('SampleAgent');
         return {width:frame.offsetWidth, position:getComputedStyle(frame).position, viewport:innerWidth};
     })()""") == {'width':366,'position':'fixed','viewport':390}
@@ -243,10 +250,72 @@ def test_workspace_keeps_the_same_reader_and_private_draft_across_layouts(phone)
     js("paneDoc('SampleAgent').querySelector('#terminal-review').click()")
     wait("!!paneDoc('SampleAgent').querySelector('.reader-review')")
     assert state['prepared_target']['name'] == 'SampleAgent'
+    assert state['prepared_target']['choice'] == 'fixture-choice'
     assert state['draft'].startswith('Private draft for SampleAgent [image: ')
     assert js("!!paneDoc('SampleAgent').querySelector('.reader-review .reader-image-thumb')")
     assert not any(op == 'commit' for op, _ in state['calls'])
     assert js("!paneDoc('Peer').querySelector('.reader-review')")
+    js("Array.from(paneDoc('SampleAgent').querySelectorAll('.reader-review button')).find(b=>b.textContent==='Edit').click()")
+    js("paneDoc('SampleAgent').querySelector('.workspace-collapse-button').click()")
+    wait("!workspaceFrame('SampleAgent').hasAttribute('data-composer-overlay')")
+    js("paneDoc('Peer').querySelector('.reader-bar .terminal-close').click()")
+    wait("!workspaceFrame('Peer')&&paneDoc('SampleAgent').documentElement.dataset.workspaceComposer==='standard'")
+    assert js("""(() => {
+        const doc=paneDoc('SampleAgent');
+        return !doc.querySelector('.reader-input-target')
+            && !doc.querySelector('.reader-input-bar').innerText.includes('SampleAgent')
+            && doc.querySelector('#terminal-text').value==='Private draft for SampleAgent';
+    })()""")
+
+
+def test_two_workspace_readers_send_in_turn_after_one_refreshes_its_choice(phone):
+    _, js, wait, state = phone
+    peer = dict(state['snapshot']['agents'][0], name='Peer', act_state='ask')
+    state['snapshot']['agents'].append(peer)
+    state['snapshot']['graph']['nodes'].append(peer)
+    state['snapshot']['graph']['edges'] = [dict(source='SampleAgent', target='Peer', kind='to', count=4)]
+    first = dict(name='SampleAgent', choice='fixture-choice', pane_label='Window 0 · pane 0',
+                 revision='fixture-revision')
+    second = dict(first, name='Peer', choice='peer-choice')
+    state.update(workspace=True, reject_stale_terminal=True, targets=[first, second])
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("!!document.querySelector('#gsvg [data-name=Peer]')")
+    js("document.querySelector('#terminal-sheet [aria-label=\"Add SampleAgent to the workspace\"]').click()")
+    wait("document.querySelector('.workspace-picker').open&&!!document.querySelector('.workspace-roster [data-agent=Peer]')")
+    js("""document.querySelector('.workspace-roster [data-agent=Peer]').click();
+    document.querySelector('.workspace-picker .workspace-commit').click();
+    window.reader = name => document.querySelector('.workspace-card[data-name='+name+'] iframe')?.contentDocument;""")
+    wait("['SampleAgent','Peer'].every(name=>reader(name)?.querySelector('.workspace-compose-button'))")
+
+    def send(name, draft):
+        js(f"reader({name!r}).querySelector('.workspace-compose-button').click()")
+        wait(f"reader({name!r}).documentElement.dataset.workspaceComposer==='expanded'")
+        js(f"""(() => {{
+            const field=reader({name!r}).querySelector('#terminal-text');
+            field.value={draft!r};field.dispatchEvent(new Event('input',{{bubbles:true}}));
+        }})()""")
+        wait(f"reader({name!r}).querySelector('#terminal-review')?.disabled===false",12)
+        js(f"reader({name!r}).querySelector('#terminal-review').click()")
+        wait(f"reader({name!r}).querySelector('.terminal-exact')?.textContent==={draft!r}")
+        assert state['prepared_target']['name']==name
+        js(f"reader({name!r}).querySelector('.terminal-confirm').click()")
+        wait(f"!!reader({name!r}).querySelector('.reader-receipt.accepted')")
+        js(f"reader({name!r}).querySelector('.workspace-collapse-button')?.click()")
+        wait(f"reader({name!r}).documentElement.dataset.workspaceComposer==='collapsed'")
+
+    send('SampleAgent','First from SampleAgent')
+    send('Peer','First from Peer')
+    state['targets']=[dict(first, choice='renewed-choice'), second]
+    js("""const doc=reader('SampleAgent');
+    Object.defineProperty(doc,'hidden',{configurable:true,get:()=>true});
+    doc.dispatchEvent(new Event('visibilitychange'));
+    delete doc.hidden;doc.dispatchEvent(new Event('visibilitychange'));""")
+    send('SampleAgent','Second from SampleAgent')
+    send('Peer','Second from Peer')
+    assert [p['choice'] for op,p in state['calls'] if op=='prepare']==[
+        'fixture-choice','peer-choice','renewed-choice','peer-choice'
+    ]
+    assert sum(op=='commit' for op,_ in state['calls'])==4
 
 
 def test_successful_receipt_disappears_but_unknown_waits_for_a_status_check(phone):
