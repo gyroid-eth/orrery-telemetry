@@ -137,7 +137,9 @@ def _cli_models(binary: str) -> tuple[str, ...]:
 
 
 def _discover_models() -> tuple[str, ...]:
-    binary = shutil.which(os.environ.get("AGENTSTACK_GEMINI_BIN") or "agy")
+    # Use the same path as launch preflight. Services may exclude the CLI
+    # installer's standard ~/.local/bin from their own PATH.
+    binary = _which(os.environ.get("AGENTSTACK_GEMINI_BIN") or "agy", _launch_path())
     if not binary:
         return ()
     try:

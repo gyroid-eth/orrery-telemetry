@@ -511,12 +511,14 @@ fi
 
 if [[ "$CONFIGURE_MCP" == true ]]; then
   if [[ "$DRY_RUN" == true ]]; then
-    echo "$PROG: would run $INSTALL_DIR/bin/agentstack-gemini-setup"
+    echo "$PROG: would configure the ORRERY Mail MCP entry in $GEMINI_MCP_CONFIG"
   else
     AGENTSTACK_HOME="$INSTALL_DIR" \
     AGENTSTACK_GEMINI_MCP_CONFIG="$GEMINI_MCP_CONFIG" \
       "$INSTALL_DIR/bin/agentstack-gemini-setup"
   fi
+else
+  echo "$PROG: top-level Mail requires the ORRERY Mail MCP entry. To set up the managed entry, rerun with --configure-mcp after operator approval."
 fi
 
 if command -v agy >/dev/null 2>&1; then
@@ -524,6 +526,7 @@ if command -v agy >/dev/null 2>&1; then
 else
   echo "$PROG: note: agy is not installed/on PATH; payload installation is still valid"
 fi
+echo "$PROG: usage polling is opt-in; see docs/antigravity.md for the enable marker."
 
 if [[ "$DRY_RUN" == true ]]; then
   echo "$PROG: Gemini provider payload dry-run complete"

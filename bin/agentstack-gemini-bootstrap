@@ -29,6 +29,11 @@ if [[ "$_ags_selected_rc" == 0 ]]; then
   fi
 fi
 
+if [[ -x "$SCRIPT_DIR/agentstack-gemini-setup" ]] &&
+    ! "$SCRIPT_DIR/agentstack-gemini-setup" --check >/dev/null 2>&1; then
+  echo "ORRERY Mail MCP: the managed global entry is unavailable. For top-level Mail, ask the operator to install with --configure-mcp or verify a workspace entry in /mcp." >&2
+fi
+
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-}"
