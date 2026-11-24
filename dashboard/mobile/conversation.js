@@ -48,12 +48,15 @@ SOFTWARE.
     const match=/^\s*(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?\s*$/.exec(value);
     return match&&match.slice(1).some(Boolean)?Number(match[1]||0)*3600+Number(match[2]||0)*60+Number(match[3]||0):null;
   }
-  function collect(events,provider){
-    if(!['Claude','Codex'].includes(provider))return {groups:[],consumed:new Set()};
-    const enabled=events.some(e=>e.step||e.step_turn||e.step_boundary);
-    if(!enabled)return {groups:[],consumed:new Set()};
+  const doingWork=context=>context?.running===true&&context.act_state==='work';
+  function collect(events,provider,{working=false,native=true,activeCalls=new Set()}={}){
+    const enabled=native&&['Claude','Codex'].includes(provider)&&events.some(e=>e.step||e.step_turn||e.step_boundary);
+    const pending=new Set();
+    if(!enabled&&!working)return {groups:[],consumed:new Set(),pending};
     const groups=[],consumed=new Set(),calls=new Map(),results=new Map(),completions=new Map();
+    const codexCalls=new Map(),recordOrder=new Map();
     let current=null,segment='partial',turn=null;
+    let tail=[];
     function cut(event){
       if(current)current.closed=true;
       current=null;segment='after:'+event.id;
@@ -69,8 +72,15 @@ SOFTWARE.
       }
       return current;
     }
-    for(const event of events){
+    for(const [index,event] of events.entries()){
+      recordOrder.set(event.id,index);
+      const separator=event.step_boundary||event.kind==='text'||event.kind==='mail'||event.mail?.length;
       const boundary=event.step_turn;
+      if(working){
+        if(!separator&&!boundary&&event.kind==='tool')tail.push(event);
+        else tail=[];
+      }
+      if(!enabled)continue;
       if(provider==='Codex'&&boundary&&key(boundary.id)){
         consumed.add(event.id);
         if(boundary.phase==='start'){
@@ -89,6 +99,8 @@ SOFTWARE.
       }
       if(provider==='Codex'&&event.step_wrapper===true)consumed.add(event.id);
       const step=event.step;
+      if(provider==='Codex'&&event.kind==='tool'&&key(event.tool_call_id)&&!step&&!event.step_wrapper)
+        codexCalls.set(event.tool_call_id,event);
       if(step&&key(step.id)){
         if(step.phase==='call'&&provider==='Claude'){
           const owner=active();owner.anchor??=event.id;
@@ -98,19 +110,22 @@ SOFTWARE.
           results.set(step.id,{step,event,owner:calls.has(step.id)?null:active()});
         }else if(step.phase==='complete'&&provider==='Codex'){
           consumed.add(event.id);
+          const request=codexCalls.get(event.tool_call_id||step.id);
+          if(request)consumed.add(request.id);
           const id=key(step.turn)?step.turn:turn?.id;
           const completionKey=(id||'')+':'+step.id;
           let completion=completions.get(completionKey);
           if(!completion){
-            if(id&&turn?.id!==id)startTurn(event,id);
-            const owner=active();owner.anchor??=event.id;
-            completion={owner,eventId:event.id};completions.set(completionKey,completion);
+            if(id&&turn?.id!==id)startTurn(request||event,id);
+            const owner=active();owner.anchor??=request?.id||event.id;
+            completion={owner,eventId:request?.id||event.id,stepId:request?'record:'+request.id:step.id};
+            completions.set(completionKey,completion);
           }
-          completion.owner.steps.set(step.id,{...step,eventId:completion.eventId});
+          completion.owner.steps.set(completion.stepId,{...step,id:completion.stepId,eventId:completion.eventId});
         }
       }
       // A tool can also emit a visible Mail card. Assign the step first.
-      if(event.step_boundary||event.kind==='text'||event.kind==='mail'||event.mail?.length)cut(event);
+      if(separator)cut(event);
     }
     for(const [id,call] of calls){
       const result=results.get(id);
@@ -118,14 +133,27 @@ SOFTWARE.
         consumed.add(call.event.id);
         call.owner.steps.set(id,{...call.step,...result.step,phase:'complete',
           eventId:call.event.id,resultId:result.event.id});
+      }else if((working&&call.owner===current)||activeCalls.has(id)){
+        // Keep an already displayed request in its original run when an idle
+        // observation arrives before the matching result.
+        pending.add(id);consumed.add(call.event.id);
+        call.owner.steps.set(id,{...call.step,status:working?'running':'observed',eventId:call.event.id});
       }
     }
     for(const [id,result] of results)if(!calls.has(id)){
       result.owner.orphans++;result.owner.anchor??=result.event.id;
     }
-    if(!current&&(provider==='Claude'||turn))active();
+    if(working){
+      for(const event of tail){
+        if(consumed.has(event.id)||event.step?.phase==='call')continue;
+        const owner=active(),id='record:'+event.id;
+        consumed.add(event.id);owner.anchor??=event.id;
+        owner.steps.set(id,{id,tool:event.text,status:'observed',started:event.ts,eventId:event.id});
+      }
+    }
+    if(enabled&&!current&&(provider==='Claude'||turn))active();
     for(const g of groups){
-      g.steps=[...g.steps.values()];
+      g.steps=[...g.steps.values()].sort((a,b)=>recordOrder.get(a.eventId)-recordOrder.get(b.eventId));
       const starts=g.steps.map(s=>time(s.started)).filter(Number.isFinite);
       const ends=g.steps.map(s=>time(s.ended)).filter(Number.isFinite);
       if(!Number.isFinite(g.started)&&starts.length)g.started=Math.min(...starts);
@@ -133,18 +161,25 @@ SOFTWARE.
       if(g.duration===null&&Number.isFinite(g.started)&&Number.isFinite(g.ended)&&g.ended>=g.started)
         g.duration=(g.ended-g.started)/1000;
     }
-    return {groups,consumed};
+    return {groups,consumed,pending};
   }
 
   function mount({host,mutate=fn=>fn(),onFocusLost=()=>{}}){
-    const cards=new Map();let model={groups:[],consumed:new Set()},current={},visible=false,timer=0,serial=0;
+    const cards=new Map();let model={groups:[],consumed:new Set()},current={},visible=false,timer=0,serial=0,workingModel=false;
     const make=(tag,cls,value)=>{const node=root.document.createElement(tag);node.className=cls;if(value!==undefined)node.textContent=value;return node;};
     function changed(node,value){if(node.textContent!==value)node.textContent=value;}
+    function glyph(cls,path){
+      const node=make('span',cls);node.setAttribute('aria-hidden','true');
+      const svg=root.document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 16 16');
+      const shape=root.document.createElementNS('http://www.w3.org/2000/svg','path');shape.setAttribute('d',path);
+      svg.append(shape);node.append(svg);return node;
+    }
     function icon(status){
       const node=make('span','conversation-step-icon '+status);node.setAttribute('aria-hidden','true');
       const svg=root.document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 16 16');
-      const shape=root.document.createElementNS('http://www.w3.org/2000/svg',status==='observed'?'circle':'path');
-      if(status==='observed'){for(const [k,v] of Object.entries({cx:8,cy:8,r:4.5}))shape.setAttribute(k,v);}
+      const open=status==='observed'||status==='running';
+      const shape=root.document.createElementNS('http://www.w3.org/2000/svg',open?'circle':'path');
+      if(open){for(const [k,v] of Object.entries({cx:8,cy:8,r:4.5}))shape.setAttribute(k,v);}
       else{shape.setAttribute('d',status==='failed'?'M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5':'M3.5 8.5 6.5 11.5 12.5 4.5');
         if(status==='done'){shape.setAttribute('class','conversation-step-check');shape.setAttribute('pathLength','1');}}
       svg.append(shape);node.append(svg);
@@ -158,31 +193,40 @@ SOFTWARE.
     function create(id){
       const node=make('section','conversation-steps');node.dataset.stepsGroup=id;node.setAttribute('aria-label','Agent steps');
       const button=make('button','conversation-steps-toggle');button.type='button';
+      const symbol=glyph('conversation-steps-symbol','M5 4h8M5 8h8M5 12h8M2.5 4h.01m-.01 4h.01m-.01 4h.01');
       const heading=make('span','conversation-steps-heading'),clock=make('span','conversation-steps-time');
-      const count=make('span','conversation-steps-count'),chevron=make('span','conversation-steps-chevron','⌄');chevron.setAttribute('aria-hidden','true');
-      button.append(heading,clock,count,chevron);
+      const summary=make('span','conversation-steps-summary'),count=make('span','conversation-steps-count');
+      summary.append(count,clock);button.append(symbol,heading,summary,glyph('conversation-steps-chevron','m4 6 4 4 4-4'));
       const body=make('div','conversation-steps-expansion'),inner=make('div','conversation-steps-inner');
       body.id='conversation-steps-'+(++serial)+'-'+Math.random().toString(36).slice(2);button.setAttribute('aria-controls',body.id);
-      const label=make('div','conversation-steps-label','Agent steps'),list=make('ol','conversation-steps-list');
+      const list=make('ol','conversation-steps-list');
       const notice=make('p','conversation-steps-notice','Load earlier to see the matching tool requests.');notice.hidden=true;
-      inner.append(label,list,notice);body.append(inner);node.append(button,body);
+      inner.append(list,notice);body.append(inner);node.append(button,body);
       const card={node,button,heading,clock,count,body,list,notice,rows:new Map(),open:false,working:false,waiting:false,
         clockValue:null,clockAt:0,lastWork:null,lastInput:null};
       button.addEventListener('click',()=>mutate(()=>setOpen(card,!card.open),button));
       setOpen(card,false);return card;
     }
-    function row(step,animate){
+    function createRow(animate){
       const node=make('li','conversation-step'+(animate?' is-new':''));
-      const status=['done','failed'].includes(step.status)?step.status:'observed';
       const copy=make('div','conversation-step-copy'),top=make('div','conversation-step-top');
-      const tool=make('span','conversation-step-tool',text(step.tool).split('__').at(-1));
-      const outcome=make('span','conversation-step-outcome',status==='failed'?'Failed':status==='observed'?'Observed':'');
+      const tool=make('span','conversation-step-tool'),outcome=make('span','conversation-step-outcome');
+      const clock=make('span','conversation-step-duration'),detail=make('div','conversation-step-target');
+      top.append(tool,outcome,clock);copy.append(top,detail);node.append(copy);
+      return {node,tool,outcome,clock,detail,icon:null,status:'',fingerprint:''};
+    }
+    function updateRow(record,step){
+      const status=['done','failed','running'].includes(step.status)?step.status:'observed';
+      if(status!==record.status){
+        const symbol=icon(status);
+        if(record.icon)record.icon.replaceWith(symbol);else record.node.prepend(symbol);
+        record.icon=symbol;record.status=status;
+      }
+      changed(record.tool,text(step.tool).split('__').at(-1));
+      changed(record.outcome,status==='failed'?'Failed':status==='running'?'Running…':status==='observed'?'Observed':'');
       const start=time(step.started),end=time(step.ended);
-      top.append(tool,outcome,make('span','conversation-step-duration',
-        Number.isFinite(start)&&Number.isFinite(end)&&end>=start?duration((end-start)/1000):''));
-      copy.append(top);
-      if(step.detail)copy.append(make('div','conversation-step-target',text(step.detail)));
-      node.append(icon(status),copy);return node;
+      changed(record.clock,Number.isFinite(start)&&Number.isFinite(end)&&end>=start?duration((end-start)/1000):'');
+      changed(record.detail,text(step.detail));record.detail.hidden=!step.detail;
     }
     function title(card,value,working){
       if(card.title===value&&card.wave===working)return;
@@ -207,18 +251,21 @@ SOFTWARE.
           card.lastWork=card.clockValue===null?null:card.clockValue+(Date.now()-card.clockAt)/1000;
         }
         const was=card.working||card.waiting,now=working||waiting;
-        if(!card.initialized||was!==now){
-          setOpen(card,now);card.initialized=true;
-        }
+        if(was&&!now&&card.open)setOpen(card,false);
         card.working=working;card.waiting=waiting;
         const compacting=working&&current.reader_phase==='compacting';
         const finished=g.closed?(g.duration??card.lastWork):(card.lastWork??g.duration);
-        title(card,working?(compacting?'Compacting context…':'Working…'):waiting?'Waiting for you':
-          finished!==null?'Worked for '+duration(finished):'Recorded work',working&&!compacting);
-        changed(card.clock,working&&card.lastWork!==null?duration(card.lastWork):'');
-        changed(card.count,'· '+g.steps.length+(g.steps.length===1?' step':' steps'));
+        const status=working&&!compacting?'Working…':waiting?'Waiting for you':'';
+        const unit=now?'step':'tool call';
+        const count=g.steps.length+' '+unit+(g.steps.length===1?'':'s');
+        const secondsShown=working?(compacting?null:card.lastWork):finished;
+        const clock=secondsShown===null?'':', '+duration(secondsShown);
+        title(card,status,working&&!compacting);card.heading.hidden=!status;
+        changed(card.count,count);changed(card.clock,clock);
+        const label=(status?status+' ':'')+count+clock;
+        if(card.button.title!==label){card.button.title=label;card.button.setAttribute('aria-label',label);}
         card.node.classList.toggle('is-paused',!visible);
-        card.node.hidden=!g.steps.length&&!g.orphans&&!now;
+        card.node.hidden=!g.steps.length&&!g.orphans&&(!now||compacting);
         ticking=ticking||working&&visible;
       }
       if(ticking&&!timer)timer=root.setInterval(paint,500);
@@ -226,7 +273,8 @@ SOFTWARE.
     }
     function sync({events,provider,mode,rows,context,isVisible}){
       current=context||{};visible=isVisible;
-      model=['snapshot','fresh_tail'].includes(mode)?{groups:[],consumed:new Set()}:collect(events,provider);
+      workingModel=doingWork(current);
+      model=collect(events,provider,{working:workingModel,native:!['snapshot','fresh_tail'].includes(mode),activeCalls:model.pending});
       const wanted=new Set(model.groups.map(g=>g.id)),byId=new Map(rows.map(r=>[r.dataset.id,r]));
       for(const [id,card] of cards)if(!wanted.has(id)){
         if(card.node.contains(root.document.activeElement))onFocusLost();card.node.remove();cards.delete(id);
@@ -236,15 +284,12 @@ SOFTWARE.
         const ids=new Set(g.steps.map(s=>s.id));
         for(const [id,record] of card.rows)if(!ids.has(id)){record.node.remove();card.rows.delete(id);}
         for(const [index,step] of g.steps.entries()){
-          const fingerprint=JSON.stringify(step),record=card.rows.get(step.id);
-          if(!record||record.fingerprint!==fingerprint){
-            const node=row(step,existed);if(record)record.node.replaceWith(node);
-            card.rows.set(step.id,{node,fingerprint});
-          }
-          const node=card.rows.get(step.id).node;
+          const fingerprint=JSON.stringify(step),record=card.rows.get(step.id)||createRow(existed);
+          if(record.fingerprint!==fingerprint){updateRow(record,step);record.fingerprint=fingerprint;}
+          card.rows.set(step.id,record);
+          const node=record.node;
           if(card.list.children[index]!==node)card.list.insertBefore(node,card.list.children[index]||null);
         }
-        const nodes=[...card.list.children];nodes.forEach((node,index)=>node.classList.toggle('has-next',index<nodes.length-1));
         card.notice.hidden=!g.orphans;
         const anchor=byId.get(g.anchor);
         if(anchor){if(card.node.nextSibling!==anchor)anchor.before(card.node);}
@@ -252,9 +297,9 @@ SOFTWARE.
       }
       paint();return model.consumed;
     }
-    return Object.freeze({sync,
+    return Object.freeze({sync,needsSync:context=>workingModel!==doingWork(context),
       activity(context,isVisible){current=context||{};visible=isVisible;paint();return [...cards.values()].some(c=>!c.node.hidden&&(c.working||c.waiting));},
-      reset(){if(timer)root.clearInterval(timer);timer=0;for(const card of cards.values())card.node.remove();cards.clear();model={groups:[],consumed:new Set()};},
+      reset(){if(timer)root.clearInterval(timer);timer=0;for(const card of cards.values())card.node.remove();cards.clear();model={groups:[],consumed:new Set()};workingModel=false;},
     });
   }
   const api={collect,duration,elapsed,mount};
@@ -782,6 +827,7 @@ function setStatus(text){if(!status)return;status.textContent=text;
  status.hidden=/^(?:Read-only record · updating|Latest record · updating|New messages below · paused while you read)$/.test(text);
 }
 function activity(){
+ if(list&&events.length&&stepView?.needsSync(stepContext()))regroupTools();
  if(!list)return;const stepActivity=stepView?.activity(stepContext(),stepsVisible());list.querySelector('.conversation-activity')?.remove();
  const a=window.OrreryMobileAgent?.forName(name),box=make('div','conversation-activity');
  if(a?.running&&a.state==='work'&&!a.stale&&!stepActivity)box.textContent='Working'+(a.workDisplay?' · '+a.workDisplay:'');

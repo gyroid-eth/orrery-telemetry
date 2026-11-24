@@ -206,6 +206,9 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
         result['variant'] = 'update'
     if step and kind == 'tool':
         result['step'] = step
+    call_id = raw.get('tool_call_id')
+    if raw.get('kind') == 'tool' and role == 'assistant' and isinstance(call_id, str) and TOKEN.fullmatch(call_id):
+        result['tool_call_id'] = call_id
     turn = project_step(raw.get('step_turn'), boundary=True)
     if turn and raw.get('kind') == 'system':
         result['step_turn'] = turn
