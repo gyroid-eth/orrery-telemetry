@@ -9,6 +9,7 @@
 #
 # Usage:
 #   agentstack-gemini-setup             install/update the managed server entry
+#   agentstack-gemini-setup --check     verify the managed entry without writing
 #   agentstack-gemini-setup --print     print the resulting JSON, change nothing
 #   agentstack-gemini-setup --uninstall remove only the managed server entry
 set -euo pipefail
@@ -27,13 +28,14 @@ PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
 
 mode="install"
 case "${1:-}" in
+  --check) mode="check" ;;
   --print) mode="print" ;;
   --uninstall) mode="uninstall" ;;
   "") ;;
-  *) die "unknown argument: $1 (use --print or --uninstall)" ;;
+  *) die "unknown argument: $1 (use --check, --print, or --uninstall)" ;;
 esac
 
-if [[ "$mode" == "install" && ! -x "$MCP_COMMAND" ]]; then
+if [[ ( "$mode" == "install" || "$mode" == "check" ) && ! -x "$MCP_COMMAND" ]]; then
   die "session-bound MCP runner is not installed: $MCP_COMMAND"
 fi
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || \
@@ -41,7 +43,10 @@ command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || \
 
 TMP="$(mktemp -t agentstack-gemini-mcp.XXXXXX)"
 TARGET_TMP="${TARGET}.tmp.$$"
-cleanup() { rm -f "$TMP" "$TARGET_TMP"; }
+cleanup() {
+  rm -f "$TMP"
+  if [[ "$mode" == "install" || "$mode" == "uninstall" ]]; then rm -f "$TARGET_TMP"; fi
+}
 trap cleanup EXIT INT TERM HUP
 
 AGS_GEMINI_SETUP_TARGET="$TARGET" \
@@ -82,6 +87,14 @@ if servers is None:
 if not isinstance(servers, dict):
     raise SystemExit(f"{target}: mcpServers must be a JSON object")
 
+if mode == "check":
+    entry = servers.get(server_key)
+    if (isinstance(entry, dict) and entry.get("command") == command
+            and entry.get("args", []) == [] and entry.get("enabled") is not False
+            and entry.get("disabled") is not True):
+        raise SystemExit(0)
+    raise SystemExit(f"managed '{server_key}' entry is missing, disabled or points to a different command")
+
 if mode == "uninstall":
     servers.pop(server_key, None)
 else:
@@ -92,6 +105,11 @@ else:
 
 print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
 PY
+
+if [[ "$mode" == "check" ]]; then
+  echo "$PROG: managed '$SERVER_KEY' is configured in $TARGET"
+  exit 0
+fi
 
 if [[ "$mode" == "print" ]]; then
   cat "$TMP"

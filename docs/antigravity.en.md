@@ -1,76 +1,87 @@
 # Google Antigravity / Gemini provider
 
-ORRERY can use Google Antigravity CLI (`agy`) as an optional provider alongside
-Claude Code and Codex. The integration uses the user's existing Antigravity
-authentication; ORRERY does not set a Gemini API key and does not auto-approve
-Antigravity permissions.
-
-## Design boundary
-
-The provider is additive. Installing the optional Gemini payload does not
-replace the core Dashboard or change Claude/Codex launch behavior. The core
-owns provider-independent process-tree liveness; Gemini contributes only the
-`program=antigravity` / `agy` process identity to that shared path.
-
-Interactive and delegated lifecycles intentionally match the existing ORRERY
-rules:
-
-- a top-level interactive `agy` exits back to its human shell, so a surviving
-  tmux shell is observed as `finished`;
-- a delegated child runs cleanup after the provider process, then the runner
-  exits as the sole tmux command, so the child becomes `gone` / `retired`;
-- delegated cleanup reports the result, releases reservations, soft-retires the
-  child identity, removes transient credential/config state, and only then
-  exits.
-
-The Dashboard does not manufacture those states. It reports the process/tmux
-state it can measure.
+ORRERY can use Google Antigravity CLI (`agy`) alongside Claude Code and Codex.
+The integration uses the user's signed-in Antigravity account.
 
 ## Prerequisites
 
-Install and authenticate Antigravity CLI separately. Verify it with:
+Start with ORRERY core installed and ORRERY Mail running. Follow the
+[Google installation guide](https://antigravity.google/docs/getting-started?tab=cli)
+and have the user sign in. The official macOS/Linux `install.sh` ends by running
+`agy install`, which configures the shell and its PATH. Get the user's approval
+for that step. For a binary-only installation, stop before the shell setup.
+Check both commands in the current shell:
 
 ```sh
 agy --version
 agy models
 ```
 
-ORRERY itself must already be installed and ORRERY Mail must be healthy.
+The standard binary location is `~/.local/bin/agy`.
 
 ## Install the optional provider payload
 
-From an ORRERY checkout:
+Check the install location and planned copies from an ORRERY Telemetry checkout:
 
 ```sh
 scripts/install-gemini-provider.sh --dry-run
-scripts/install-gemini-provider.sh
 ```
 
-The dry run intentionally does **not** require `agy`. This lets CI and reviewers
-validate the optional provider on machines that do not have Antigravity.
+Choose a setup based on how you will use the provider. The dry run works without `agy`.
 
-To also configure the session-bound ORRERY Mail MCP wrapper in Antigravity:
+- For **NEW AGENT** or other delegated children only, run
+  `scripts/install-gemini-provider.sh`. The child launcher configures Mail MCP in its worktree.
+- **To send Mail from a top-level `agent-start-gemini` session**, first run
+  `scripts/install-gemini-provider.sh --dry-run --configure-mcp`. Show the user
+  the planned `orrery-mail` entry in `~/.gemini/config/mcp_config.json`. After approval,
+  run the following command. This also works if the provider is already installed.
 
 ```sh
 scripts/install-gemini-provider.sh --configure-mcp
 ```
 
-The optional installer fails closed if the installed core does not contain the
-required preregistration, cleanup, MCP-proxy, or shared process-liveness
-infrastructure. It copies only Gemini-owned payload files; it never replaces
-`dashboard/server.py`.
+Restart the Dashboard after installation:
 
-The Dashboard extension (`dashboard/provider_server.py` and
-`dashboard/gemini_provider_runtime.py`) ships only with this optional
-installer. The core `scripts/install.sh` does not copy those files, so a core
-install keeps running `dashboard/server.py`; a core reinstall also leaves an
-already-installed provider extension in place.
+```sh
+~/.agentstack/dashboard/agentctl.sh restart
+```
+
+The optional installer copies provider files. If it reports an outdated core,
+update the core and run the installer again.
+
+## Show account quota in Usage left
+
+With the user's approval, create the `antigravity-quota.enabled` marker in the
+Dashboard's runtime directory. For the standard installation:
+
+```sh
+quota_runtime="$HOME/.agentstack/runtime"
+test -d "$quota_runtime" && touch "$quota_runtime/antigravity-quota.enabled"
+```
+
+If the Dashboard uses a custom `AGENTSTACK_RUNTIME_DIR`, use the service's value.
+After opt-in, the Dashboard runs `agy -p /usage --output-format json` to read
+quota for the signed-in account. It requires CLI 1.1.24 or later. Look for
+**Antigravity (Gemini)** under **Usage left** in the cockpit. The initial read
+or an existing `unavailable` result may take about three minutes to refresh.
+If it still says `unavailable / no windows`, check the marker location, CLI
+version and sign-in, then check whether `agy -p /usage --output-format json`
+returns quota windows. A Gemini API key is unnecessary for this display.
 
 ## Top-level launcher
 
 ```sh
+~/.agentstack/bin/agentstack-gemini-setup --check
 ~/.agentstack/bin/agent-start-gemini /path/to/project
 ```
+
+`--check` verifies the managed global entry. In the running `agy` session,
+open `/mcp` to see whether `orrery-mail` is connected, then use that server's
+`send_message` tool. Use `/mcp` to verify a workspace-level entry too. Roster
+registration is a separate step. Tell the operator if MCP is missing or an
+approval is required. The interactive launcher uses the legacy runtime. If
+the global runtime returns `GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED`, use its
+supported delegated route.
 
 Defaults:
 
@@ -134,6 +145,9 @@ start does not leave a retained child identity behind:
   allow-list. Otherwise, the picker combines the bundled `gemini-3.8-flash-{high,medium,low}`
   candidates with valid Gemini IDs from the installed `agy models` CLI. This
   read may contact the CLI's model service; ORRERY reads no CLI credentials.
+  Discovery uses the same binary lookup as spawn preflight, including `~/.local/bin`
+  when the Dashboard's service PATH omits it. If only `gemini-3.8-flash` appears,
+  check `agy models`, the Dashboard restart and any explicit model allow-list.
   Queries are limited to 5 seconds and 64 KiB of output. Successful results are
   cached for 5 minutes; a failure is retried after 5 seconds without discarding
   the last successful list. Claude and GPT entries are excluded. A known Gemini
@@ -205,6 +219,19 @@ attempt an unsupported resume.
 
 ## Headless permission caveat
 
+Gemini launchers use the CLI's execution mode and `toolPermission` as shown in
+`/config`. With CLI 1.5.7 or later and no `agentMode` set, Auto is the default
+where available, with `default` mode elsewhere. `accept-edits` approves
+workspace edits, and `plan` is for investigation and planning. Auto depends
+on account and terminal sandbox support. MCP calls may still require approval.
+[Google's CLI permissions guide](https://antigravity.google/docs/permissions?tab=cli)
+
+Delegated Gemini runs headless, so a permission request that needs an interactive
+response fails. Its permissions are separate from the
+[Claude/Codex child launch policy](delegation.en.md). For example, the Codex
+child's `--ask-for-approval never` default does not apply to Gemini. ORRERY leaves
+`--mode`, `--sandbox` and `--dangerously-skip-permissions` unset for Gemini.
+
 In a measured macOS run using Antigravity CLI 1.1.27, headless `view_file`
 inside the delegated worktree was auto-denied until `read_file` was explicitly
 allowed by the user. The stderr message stated that headless mode could not
@@ -244,6 +271,18 @@ only the wrapper command, not the owner-token value or token-file path.
 `agy` and ORRERY still run as the same operating-system user. This reduces
 accidental configuration/argv exposure; it is not an OS-level isolation
 boundary against another process running as that user.
+
+## Design boundary
+
+The provider adds `program=antigravity` / `agy` to the core's shared
+process-tree liveness. The provider extension ships with the optional installer.
+The core installer leaves an already-installed extension in place.
+
+- Top-level `agy` exits to its interactive shell, which remains attachable as `finished`.
+- A delegated launcher reports the result, releases reservations, soft-retires the identity,
+  and removes transient config and credentials before its own exit.
+
+The Dashboard reports measured process and tmux state.
 
 ## Measured macOS E2E
 

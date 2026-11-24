@@ -8,6 +8,9 @@ import pathlib
 import stat
 import subprocess
 import tempfile
+from types import SimpleNamespace
+
+from dashboard import gemini_provider_runtime
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _LAUNCHER = _ROOT / "bin" / "agent-start-gemini"
@@ -119,6 +122,30 @@ def test_bootstrap_registers_antigravity_runtime_and_model() -> None:
     text = _BOOTSTRAP.read_text(encoding="utf-8")
     assert 'ags_register_session "$PROJECT_KEY" "antigravity" "$GEMINI_MODEL" "agy"' in text
     assert 'AGENTSTACK_GEMINI_MODEL:-gemini-3.8-flash-high' in text
+    assert 'agentstack-gemini-setup" --check' in text
+
+
+def test_dashboard_discovers_models_at_standard_user_cli_path(tmp_path, monkeypatch):
+    local_bin = tmp_path / '.local' / 'bin'
+    local_bin.mkdir(parents=True)
+    agy = local_bin / 'agy'
+    agy.write_text("#!/bin/sh\n"
+                   "[ \"$1\" = models ] || exit 2\n"
+                   "printf '%s\\t%s\\n' gemini-4-neon-high 'Gemini 4 Neon (High)' "
+                   "gemini-4-argon-low 'Gemini 4 Argon (Low)' claude-sonnet-high 'Claude Sonnet (High)'\n")
+    agy.chmod(0o755)
+    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    monkeypatch.delenv('AGENTSTACK_GEMINI_BIN', raising=False)
+    monkeypatch.delenv('AGENTSTACK_GEMINI_MODELS', raising=False)
+    monkeypatch.setattr(gemini_provider_runtime, '_CLI_CATALOG_CACHE', None)
+    expanduser = os.path.expanduser
+    monkeypatch.setattr(os.path, 'expanduser', lambda path:
+                        str(local_bin) if path == '~/.local/bin' else expanduser(path))
+    base = SimpleNamespace(_SPAWN_MODELS=(), _codex_models=lambda: ())
+    models, error = gemini_provider_runtime._gemini_models(base)
+    assert error == ''
+    assert models == ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+                      'gemini-4-neon-high', 'gemini-4-argon-low']
 
 
 def test_delegated_child_uses_worktree_stream_input_and_preregistered_identity() -> None:
@@ -213,6 +240,29 @@ def test_mcp_setup_preserves_unrelated_servers() -> None:
             "serverUrl": "https://example.invalid/mcp"
         }
         assert rendered["mcpServers"]["orrery-mail"] == _expected_session_bound_entry(config)
+
+
+def test_mcp_setup_check_reports_availability_without_writing(tmp_path):
+    config = tmp_path / 'mcp_config.json'
+    entry = _expected_session_bound_entry(config)
+    command = pathlib.Path(entry['command'])
+    command.parent.mkdir(parents=True)
+    command.write_text('#!/bin/sh\nexit 1\n')
+    command.chmod(0o700)
+    assert _run_setup(config, '--check').returncode != 0
+    assert not config.exists()
+
+    config.write_text(json.dumps({'mcpServers': {'orrery-mail': dict(entry, disabled=True)}}))
+    before = config.read_bytes()
+    assert _run_setup(config, '--check').returncode != 0
+    assert config.read_bytes() == before
+
+    assert _run_setup(config).returncode == 0
+    before = config.read_bytes()
+    result = _run_setup(config, '--check')
+    assert result.returncode == 0, result.stderr
+    assert 'is configured' in result.stdout
+    assert config.read_bytes() == before
 
 
 def test_mcp_setup_never_persists_mail_bearer_or_owner_token() -> None:
