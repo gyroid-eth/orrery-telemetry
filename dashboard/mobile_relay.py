@@ -253,6 +253,27 @@ def static_assets(root=HERE):
     return fixed
 
 
+def render_app_metadata(path: str, data: bytes, public_origin: str) -> bytes:
+    """Use the configured Serve device label for install and browser titles."""
+    if not public_origin or path not in {'/', '/reader-pane', '/manifest.webmanifest'}:
+        return data
+    _, host, _ = admission.origin(public_origin)
+    computer = host.split('.', 1)[0]
+    name = f'ORRERY · {computer}'
+    if path == '/manifest.webmanifest':
+        manifest = json.loads(data)
+        manifest['name'] = name
+        # Keep the end of long labels visible, including any device suffix.
+        manifest['short_name'] = computer if len(computer) <= 12 else f'{computer[:7]}…{computer[-4:]}'
+        return json.dumps(manifest, ensure_ascii=False).encode('utf-8')
+    title = name.encode('utf-8')
+    # admission.origin validates the DNS label, so the name is safe in
+    # both element text and the quoted attribute.
+    return data.replace(b'<title>ORRERY</title>', b'<title>' + title + b'</title>', 1).replace(
+        b'name="apple-mobile-web-app-title" content="ORRERY"',
+        b'name="apple-mobile-web-app-title" content="' + title + b'"', 1)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'ORRERY-mobile'
     sys_version = ''
@@ -464,10 +485,10 @@ class Handler(BaseHTTPRequestHandler):
         file,mime=asset
         try:
             if file.is_symlink():raise OSError('asset_symlink')
-            data=file.read_bytes()
+            data=render_app_metadata(parts.path,file.read_bytes(),self.server.mobile_config.public_origin)
             page={'/':'shell','/reader-pane':'pane'}.get(parts.path)
             self._send(200,data,mime,page=page)
-        except OSError:self._send(503,{'ok':False,'error':'asset_unavailable'})
+        except (OSError,ValueError):self._send(503,{'ok':False,'error':'asset_unavailable'})
 
     def do_HEAD(self):self.do_GET()
 

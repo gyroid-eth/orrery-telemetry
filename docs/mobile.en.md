@@ -152,6 +152,8 @@ On macOS the CLI is usually `/Applications/Tailscale.app/Contents/MacOS/Tailscal
 
 With Tailscale connected, open this reader's HTTPS Serve address in Android Chrome. Choose **Install app** from Chrome's menu (some versions put it under **Add to Home screen**), then confirm installation. Delete an older browser shortcut and install again. Launch **ORRERY** from its new icon to open it without the browser's URL bar; opening the address in a normal browser tab still shows that bar. On iOS, use Safari's **Add to Home Screen**.
 
+Add each computer from its own Serve address. The app name is **ORRERY · computer name**, and the home screen may use the shorter computer label.
+
 Installation keeps the same owner admission and live connection requirements. It does not add offline records or a service worker. Android Chrome's menu installation no longer requires a service worker ([Chrome's installation criteria](https://developer.chrome.com/blog/update-install-criteria)). The app keeps controls inside the device's safe areas. After updating, verify installation and background/foreground behavior on the actual phone.
 
 Regenerate the committed icons from `dashboard/assets/orbit.svg` with `python3 scripts/mobile_pwa_icons.py` (development tool: `rsvg-convert`).

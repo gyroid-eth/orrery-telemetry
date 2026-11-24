@@ -152,6 +152,8 @@ macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailsc
 
 Tailscaleを接続し、Android ChromeでreaderのHTTPSのServeアドレスを開きます。Chromeのメニューから **アプリをインストール**（版によっては **ホーム画面に追加** の中）を選び、インストールします。古いブラウザのショートカットは消して入れ直してください。新しい **ORRERY** のアイコンから開くとURLバーなしで表示されます。通常のブラウザのタブでアドレスを開いた場合はURLバーが出ます。iOSではSafariの **ホーム画面に追加** を使います。
 
+コンピューターごとのServeアドレスから追加すると、アプリ名は **ORRERY · コンピューター名** になります。ホーム画面では短いコンピューター名が表示される場合があります。
+
 インストール後も、本人のアクセス条件と接続は必要です。記録のoffline保存やservice workerは追加しません。Android Chromeのメニューからのインストールにservice workerは不要です（[Chrome公式の条件](https://developer.chrome.com/blog/update-install-criteria)）。操作は端末のsafe-area内に収めます。更新後のインストールと背景からの復帰は実機でも確かめてください。
 
 同梱のアイコンは `dashboard/assets/orbit.svg` から `python3 scripts/mobile_pwa_icons.py` で再生成します（開発用に `rsvg-convert` が必要）。
