@@ -9691,18 +9691,19 @@ def _spawn_argv(request: dict, spec: SpawnLaunchSpec,
     return args
 
 
-def _codex_self_update_on_screen(session: str) -> bool:
-    """Whether the session shows Codex replacing itself (`npm install -g`).
+def _codex_self_update_on_screen(session: str) -> bool | None:
+    """Whether Codex is replacing itself, or None if the pane is unreadable.
 
     A global npm install renames directories as it goes; killing it midway
     left neither the old nor the new codex usable on the machine (#60).
     """
     try:
         result = _tmux_run(['capture-pane', '-t', f'={session}', '-p'], capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    pane = getattr(result, "stdout", "")
-    return isinstance(pane, str) and "Updating Codex via" in pane
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not isinstance(result.stdout, str):
+        return None
+    return "Updating Codex via" in result.stdout
 
 
 def _failed_spawn_cleanup(script: str, child_name: str, environment: dict) -> bool:
@@ -10005,19 +10006,25 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                 "[spawn_child] creation unconfirmed; recovery state and worktree retained")):
             # The launcher never acknowledged ownership of this session.
             return False
-        if provider == "codex" and _codex_self_update_on_screen(child_name):
-            print(f"spawn {child_name}: Codex is updating itself; session left running (#60)", file=sys.stderr)
-            return False
         try:
-            probe = _tmux_run(['has-session', '-t', f'={child_name}'], capture_output=True, text=True)
-            if probe.returncode:
-                # A transport refusal (also exit 1) is not proof of absence.
-                spawn_stop_confirmed = "can't find session" in (getattr(probe, 'stderr', '') or '')
-            else:
-                killed = _tmux_run(['kill-session', '-t', f'={child_name}'], capture_output=True, text=True)
-                spawn_stop_confirmed = killed.returncode == 0
-        except (OSError, subprocess.SubprocessError):
+            probe = _tmux_run(['has-session', '-t', f'={child_name}'], capture_output=True, text=True, timeout=5)
+            if probe.returncode == 0:
+                updating = _codex_self_update_on_screen(child_name) if provider == "codex" else False
+                if updating is True:
+                    print(f"spawn {child_name}: Codex is updating itself; session left running (#60)", file=sys.stderr)
+                    return False
+                if updating is False:
+                    killed = _tmux_run(['kill-session', '-t', f'={child_name}'], capture_output=True, text=True, timeout=5)
+                    spawn_stop_confirmed = killed.returncode == 0
+            elif (getattr(probe, 'stderr', '') or '').startswith("can't find session:"):
+                spawn_stop_confirmed = True
+        except (OSError, RuntimeError, subprocess.SubprocessError):
             pass
+        if not spawn_stop_confirmed:
+            # A failed capture or guarded target refusal can mean the session
+            # disappeared mid-cleanup. Confirm absence without targeting it.
+            listed = _tmux_observed(['list-sessions', '-F', '#{session_name}'])
+            spawn_stop_confirmed = listed is not None and child_name not in listed.splitlines()
         return spawn_stop_confirmed
 
     def failed_spawn_result(error, **fields):
@@ -11634,10 +11641,10 @@ def _tmux_observed(args: list[str]) -> str | None:
         return None
     if out.returncode == 0:
         return out.stdout
-    err = (out.stderr or "").lower()
+    err = (out.stderr or "").strip().lower()
     # Only "there is no server" is a measurement of nothing running. A socket
     # that exists but cannot be opened (permission denied, ...) is not.
-    if err.startswith("no server running on ") or (
+    if err == "no sessions" or err.startswith("no server running on ") or (
         err.startswith("error connecting to ") and "(no such file or directory)" in err
     ):
         return ""

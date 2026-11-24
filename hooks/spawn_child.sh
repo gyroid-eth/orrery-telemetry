@@ -1841,14 +1841,26 @@ claude_onboarding_present() {
         && printf '%s' "$text" | grep -qiE "Security notes|Login successful"
 }
 
-# Another one-time question for the user, seen on a fresh Windows/WSL machine
-# with 2.1.289 (2026-10-04): "Try the new fullscreen renderer?" with "Yes" and
-# "Not now". Like the Chrome question its answer is the user's setting.
-claude_renderer_question_present() {
-    local text
-    text="$(printf '%s' "$1" | pane_normalize_nbsp)"
-    printf '%s' "$text" | grep -qiF "fullscreen renderer" \
-        && printf '%s' "$text" | grep -qiF "Not now"
+# A notice can be modal without a selected row. Match the active footer and
+# get the first line of its block, using the footer's indentation to stay
+# inside the dialog when an earlier prompt or reply is still visible.
+claude_notice_title() {
+    printf '%s\n' "$1" | pane_normalize_nbsp | LC_ALL=C awk '
+        function trim(t) { sub(/^[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t); return t }
+        { line[NR] = $0 }
+        END {
+            n = NR
+            while (n > 0 && trim(line[n]) == "") n--
+            footer = trim(line[n])
+            if (footer !~ /^Enter to (continue|confirm)[[:space:]]+·[[:space:]]+Esc to (close|cancel)$/) exit
+            column = match(line[n], /[^[:space:]]/)
+            first = n
+            for (i = n - 1; i >= 1; i--) {
+                if (trim(line[i]) == "" || match(line[i], /[^[:space:]]/) < column) break
+                first = i
+            }
+            print (first < n ? substr(trim(line[first]), 1, 120) : "startup notice")
+        }'
 }
 
 # The child has already answered its launch prompt: the prompt's echo
@@ -1957,6 +1969,7 @@ claude_prompt_echo_head() {
 wait_for_claude_ready() {
     local session_name="$1" log_prefix="$2"
     local waited=0 pane_text="" last_seen="" trust_attempts=0 trust_max=5 choice_since=-1 state last choice_kind
+    local answered notice_title
     # Each failure records the screen first and prints its short reason and
     # what to do last: the dashboard shows only the tail of the launcher log.
     while [[ $waited -lt $CLAUDE_READY_WAIT_MAX ]]; do
@@ -1967,24 +1980,24 @@ wait_for_claude_ready() {
         # Keep the last screen actually seen: once the session is gone, the
         # capture fails and would leave an empty record.
         [[ -n "$pane_text" ]] && last_seen="$pane_text"
-        if claude_answered_launch_prompt "$pane_text"; then
-            if claude_user_prompt_present "$pane_text" || claude_renderer_question_present "$pane_text" \
-                || [[ "$(claude_choice_block_kind "$(claude_strip_prompt_echo "$pane_text")")" != none ]]; then
+        answered=false
+        claude_answered_launch_prompt "$pane_text" && answered=true
+        pane_text="$(claude_strip_prompt_echo "$pane_text")"
+        choice_kind="$(claude_choice_block_kind "$pane_text")"
+        notice_title=""
+        if [[ "$choice_kind" != trust-* ]]; then
+            notice_title="$(claude_notice_title "$pane_text")"
+        fi
+        if [[ "$answered" == true ]]; then
+            if claude_user_prompt_present "$pane_text" || [[ -n "$notice_title" || "$choice_kind" != none ]]; then
                 echo "[$log_prefix] Claude has answered its first prompt and is now showing a question for you; it is left unanswered in the child's pane: $(printf '%s' "$pane_text" | pane_normalize_nbsp | pane_nonblank_tail 1 | cut -c1-120)" >&2
             fi
             return 0
         fi
-        pane_text="$(claude_strip_prompt_echo "$pane_text")"
         if claude_user_prompt_present "$pane_text"; then
             claude_record_failure "$session_name" "Claude asked the user about Claude in Chrome; not answered by the launcher" "$last_seen"
             echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
             spawn_reason "Claude Code is asking a one-time question about Claude in Chrome. Run 'claude' once in a terminal and answer it, then launch the child again."
-            return 1
-        fi
-        if claude_renderer_question_present "$pane_text"; then
-            claude_record_failure "$session_name" "Claude asked the user about the fullscreen renderer; not answered by the launcher" "$last_seen"
-            echo "[$log_prefix] Aborting: Claude Code is asking a one-time question (\"Try the new fullscreen renderer?\"). No key was sent: the answer is your setting, so ORRERY leaves it to you." >&2
-            spawn_reason "Claude Code is asking a one-time question (Try the new fullscreen renderer?). Run 'claude' once in a terminal and answer it, then launch the child again."
             return 1
         fi
         if claude_onboarding_present "$pane_text"; then
@@ -1993,7 +2006,12 @@ wait_for_claude_ready() {
             spawn_reason "Claude Code's first-run setup is not finished on this machine. Run 'claude' once in a terminal and go through text style, login, Security notes and trusting the folder until the normal input prompt appears, then /exit (if a 'claude' window is still on those screens, finish it there). Then launch the child again."
             return 1
         fi
-        choice_kind="$(claude_choice_block_kind "$pane_text")"
+        if [[ -n "$notice_title" ]]; then
+            claude_record_failure "$session_name" "Claude Code is asking a one-time question ($notice_title); not answered by the launcher" "$last_seen"
+            echo "[$log_prefix] Aborting: Claude Code is asking a one-time question ($notice_title). No key was sent." >&2
+            spawn_reason "Claude Code is asking a one-time question ($notice_title). Run 'claude' once in a terminal and answer it, then launch the child again."
+            return 1
+        fi
         if [[ "$choice_kind" == trust-* ]]; then
             trust_attempts=$((trust_attempts + 1))
             if ! claude_accept_trust_dialog \

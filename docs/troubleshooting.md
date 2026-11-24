@@ -272,6 +272,7 @@ Codex の場合は `AGENTSTACK_CODEX_MODELS` と request model、effort allow-li
 Claude の子は、入力を受け付ける画面になってから task を渡します。それ以外の画面では、launcher は task を入れずに止まります。そのとき、理由と画面（空行を除いた最大 40 行）を stderr と `AGENTSTACK_RUNTIME_DIR/spawn_incidents.log` に残します。待っている間は、10 秒ごとに経過を stderr に出します。
 
 - **`one-time question about Claude in Chrome`**: Claude Code が「Claude in Chrome extension detected」と、ブラウザ操作の既定を利用者に尋ねています（拡張を入れた後の最初の起動などで出ます）。その答えは、今後のすべての Claude セッションの既定になる可能性があります（保存されるかどうかは確認していません）。そのため、launcher はキーを押さずにすぐ止まります。通常の端末で `claude` を一度開いて自分で答えるか、`/chrome` で決めてから、もう一度起動してください。
+- **`one-time question (<heading>)`** は、「Claude in Chrome」の通知など、Claude Code が下部に Enter／Esc の案内がある起動画面を表示したときに出ます。通常の端末で `claude` を一度開いて応答し、子を起動し直してください。子が最初の指示にすでに返信している場合は、子の pane で応答できます。
 - **`choice screen ORRERY does not recognise`**: 未知の選択画面が 10 秒続きました。キーは送っていません。incidents.log の画面を確かめ、想定どおりの画面なら通常の `claude` で一度答えてから、もう一度起動してください。
 - **`Claude readiness timeout (60s)`**: 60 秒たっても入力を受け付ける画面になりませんでした。incidents.log の画面と、10 秒ごとの経過で、起動が遅いのか、画面を認識できていないのかを見分けてください。
 - launcher がキーを押すのは、trust dialog を受理するときだけです。
