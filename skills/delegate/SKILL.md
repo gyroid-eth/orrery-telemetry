@@ -77,6 +77,7 @@ The generator already links this product skill into `DSH_HOME/skills/delegate` o
 
 検索先を今回だけ切り替える場合、上の `payload` に `web_search: "exa"` または `web_search: "searxng"` を追加します。URL・資格は共通の managed spawn manifest の設定を使います。省略時はその設定、共通設定も無ければ従来の動作です。内部 launcher の指定は `--web-search exa|searxng` ですが、delegate は上の API を使ってください。
 
+For an **Antigravity child** requested with `gemini` or `antigravity`, choose provider `gemini` from the same catalog and use `POST /api/spawn`. Select its formal model ID, choose an explicit `effort` (`low`, `medium`, or `high`), and provide `resources` as a comma-separated string of repository-relative paths. Include the task, parent and working directory as above. The launcher creates a worktree and holds the declared reservations. Use the shared spawn-status and Mail follow-up steps. On macOS the child remains available after sending its report.
 <!-- native-delegate:end -->
 ## Environment
 

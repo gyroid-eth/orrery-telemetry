@@ -12,7 +12,7 @@ if declare -F ags_client_entry >/dev/null; then
 fi
 # Dashboard adapter for a Gemini child that ORRERY Mail already registered.
 # Accepts the same pre-registered contract used by dashboard/server.py, then
-# launches Antigravity headless in an isolated worktree.
+# launches Antigravity in an isolated worktree.
 set -euo pipefail
 
 PROG="spawn_gemini_preregistered.sh"
@@ -46,6 +46,11 @@ MAIL_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-child-mail"
 STREAM_HELPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-stream"
 MCP_WRAPPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-mcp"
 CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"
+INTERACTIVE=0
+if [[ "$(uname -s)" == Darwin ]]; then
+  INTERACTIVE=1
+fi
+INTERACTIVE_HELPER="$HOOKS_DIR/gemini_interactive.py"
 
 usage() {
   cat >&2 <<'EOF'
@@ -332,6 +337,13 @@ STDERR_LOG="$RUNTIME_DIR/gemini-$CHILD_NAME.stderr.log"
 WORKTREE_CREATED=false
 RESERVED=false
 TMUX_STARTED=false
+INTERACTIVE_PREPARED=false
+RESERVATION_SCOPE=()
+RESERVATION_TOKEN="$DURABLE_TOKEN"
+if [[ "$INTERACTIVE" == 1 ]]; then
+  RESERVATION_SCOPE=(--worktree "$WORKTREE_DIR")
+  RESERVATION_TOKEN="$CHILD_TOKEN_FILE"
+fi
 
 mail_helper() {
   AGENTSTACK_HOME="$AGENTSTACK_HOME_DIR" \
@@ -348,19 +360,28 @@ cleanup_failure() {
       tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
       TMUX_STARTED=false
     fi
-    if [[ "$RESERVED" == true && -s "$DURABLE_TOKEN" ]]; then
+    if [[ "$RESERVED" == true && -s "$RESERVATION_TOKEN" ]]; then
       mail_helper release --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
-        --token-file "$DURABLE_TOKEN" --paths "$RESOURCES" >/dev/null 2>&1 || true
+        --token-file "$RESERVATION_TOKEN" --paths "$RESOURCES" ${RESERVATION_SCOPE[@]+"${RESERVATION_SCOPE[@]}"} >/dev/null 2>&1 || true
     fi
     if [[ -s "$DURABLE_TOKEN" ]]; then
       mail_helper retire --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
         --token-file "$DURABLE_TOKEN" >/dev/null 2>&1 || true
+    elif [[ "$INTERACTIVE" == 1 && -s "$CHILD_TOKEN_FILE" ]]; then
+      mail_helper retire --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
+        --token-file "$CHILD_TOKEN_FILE" >/dev/null 2>&1 || true
     fi
     if [[ "$WORKTREE_CREATED" == true ]]; then
       git -C "$SOURCE_REPO" worktree remove --force "$WORKTREE_DIR" >/dev/null 2>&1 || true
       git -C "$SOURCE_REPO" branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
     fi
     rm -f "$TASK_EVENT_FILE" "$RUNNER_FILE" "$MCP_CONFIG" "$DURABLE_TOKEN" "$GIT_EXCLUDES_FILE" "$TASK_FILE"
+    if [[ "$INTERACTIVE_PREPARED" == true ]]; then
+      rm -f "$RUNTIME_DIR/child-agents/$CHILD_NAME.json"
+    fi
+    if [[ "$INTERACTIVE" == 1 ]]; then
+      rm -f "$CHILD_TOKEN_FILE" "$CHILD_TOKEN_FILE.binding.json"
+    fi
   fi
 }
 trap cleanup_failure EXIT
@@ -373,9 +394,11 @@ trap 'exit 143' TERM
 # Consume the one-shot token into the stable per-agent runtime path expected by
 # the MCP wrapper. The token value and token-file path are not embedded in the
 # workspace MCP config.
-( umask 077 && cat "$CHILD_TOKEN_FILE" > "$DURABLE_TOKEN" )
-chmod 600 "$DURABLE_TOKEN"
-rm -f "$CHILD_TOKEN_FILE"
+if [[ "$INTERACTIVE" == 0 ]]; then
+  ( umask 077 && cat "$CHILD_TOKEN_FILE" > "$DURABLE_TOKEN" )
+  chmod 600 "$DURABLE_TOKEN"
+  rm -f "$CHILD_TOKEN_FILE"
+fi
 
 [[ ! -e "$WORKTREE_DIR" ]] || { echo "$PROG: worktree path already exists: $WORKTREE_DIR" >&2; exit 1; }
 if git -C "$SOURCE_REPO" show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
@@ -390,13 +413,13 @@ agentstack_apply_workspace_context "$WORKTREE_DIR" "$PROJECT_KEY" || exit 1
 # injected only into the Antigravity runner instead of mutating shared repo
 # metadata, so overlapping delegated children cannot remove each other's rule.
 GIT_EXCLUDES_FILE="$RUNTIME_DIR/gemini-git-excludes-$CHILD_NAME"
-( umask 077 && printf '%s\n' '.agents/mcp_config.json' > "$GIT_EXCLUDES_FILE" )
+( umask 077 && printf '%s\n' '.agents/mcp_config.json' '.agents/hooks.json' > "$GIT_EXCLUDES_FILE" )
 
 # The worktree is what the child sees; check it before reserving anything.
 RESOURCES="$(validate_resources "$WORKTREE_DIR")" || exit 2
 
 mail_helper reserve --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
-  --token-file "$DURABLE_TOKEN" --paths "$RESOURCES" --ttl "$RESOURCE_TTL"
+  --token-file "$RESERVATION_TOKEN" --paths "$RESOURCES" --ttl "$RESOURCE_TTL" ${RESERVATION_SCOPE[@]+"${RESERVATION_SCOPE[@]}"}
 RESERVED=true
 
 if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev/null 2>&1; then
@@ -419,10 +442,10 @@ path.write_text(json.dumps({"mcpServers": {"orrery-mail": entry}}, indent=2) + "
 os.chmod(path, 0o600)
 PY
 
-"$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKTREE_DIR" "$SOURCE_REPO" <<'PY'
+"$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKTREE_DIR" "$INTERACTIVE" <<'PY'
 import json, os, sys
 from pathlib import Path
-raw_path, event_path, child, parent, resources, worktree, source_repo = sys.argv[1:8]
+raw_path, event_path, child, parent, resources, worktree, interactive = sys.argv[1:8]
 workspace_root = Path(worktree).resolve(strict=False)
 task = open(raw_path, encoding="utf-8").read()
 # validate_resources already produced canonical repository-relative entries,
@@ -439,7 +462,12 @@ prefix = (
     "Use the worktree-anchored resource paths below. Do not search the source checkout, $HOME, or parent directories for them. "
     "If a declared resource is absent from this worktree, report that exact failure instead of searching elsewhere. "
     "Any matching path mentioned in the canonical task refers to the worktree-anchored path below. "
-    "Do not register another ORRERY identity. The launcher will report your final result to the parent automatically.\n"
+    "Do not register another ORRERY identity. "
+    + (f"Report to {parent} using the ORRERY Mail MCP send_message tool, then stay available for follow-up Mail. "
+       "Use the native file edit tools and hold a file reservation for every edit. "
+       "After a resume, obtain any needed reservations again.\n"
+       if interactive == "1" else "The launcher will report your final result to the parent automatically.\n")
+    +
     f"Declared resources (worktree-anchored):\n{resource_text}\n\nCanonical task:\n"
 )
 with open(event_path, "w", encoding="utf-8") as fh:
@@ -448,6 +476,14 @@ with open(event_path, "w", encoding="utf-8") as fh:
 os.chmod(event_path, 0o600)
 PY
 rm -f "$TASK_FILE"
+
+if [[ "$INTERACTIVE" == 1 ]]; then
+  AGENT_NAME="$CHILD_NAME" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" \
+    "$PYTHON_BIN" "$INTERACTIVE_HELPER" prepare "$CHILD_TOKEN_FILE" "$WORKTREE_DIR" "$GEMINI_BIN" "$MODEL" "$EFFORT"
+  INTERACTIVE_PREPARED=true
+  RESERVATION_TOKEN="$DURABLE_TOKEN"
+  rm -f "$CHILD_TOKEN_FILE" "$CHILD_TOKEN_FILE.binding.json"
+fi
 
 cat > "$RUNNER_FILE" <<EOF
 #!/usr/bin/env bash
@@ -475,6 +511,12 @@ esac
 export "GIT_CONFIG_KEY_\${git_config_count}=core.excludesFile"
 export "GIT_CONFIG_VALUE_\${git_config_count}=\$git_excludes_file"
 export GIT_CONFIG_COUNT="\$((git_config_count + 1))"
+
+if [[ $(printf '%q' "$INTERACTIVE") == 1 ]]; then
+  rm -f -- "\$0"
+  exec $(printf '%q' "$PYTHON_BIN") $(printf '%q' "$INTERACTIVE_HELPER") run \
+    --task-file $(printf '%q' "$TASK_EVENT_FILE")
+fi
 
 set +e
 cat $(printf '%q' "$TASK_EVENT_FILE") | \
@@ -524,8 +566,21 @@ chmod 700 "$RUNNER_FILE"
 tmux new-session -d -s "$CHILD_NAME" -c "$WORKTREE_DIR" \
   -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_AGENT" \
   -e "AGENTSTACK_RESERVED_IDENTITY=1" \
+  -e "AGENTSTACK_GEMINI_INTERACTIVE=$INTERACTIVE" \
   "/bin/bash $(printf '%q' "$RUNNER_FILE")"
 TMUX_STARTED=true
+
+if [[ "$INTERACTIVE" == 1 ]]; then
+  identity="$(tmux display-message -p -t "=$CHILD_NAME:" '#{session_name}|#{session_id}|#{session_created}|#{pid}')"
+  deadline=$((SECONDS + 25))
+  until AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" "$PYTHON_BIN" "$INTERACTIVE_HELPER" ready "$CHILD_NAME" "$identity"; do
+    if (( SECONDS >= deadline )) || ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
+      echo "$PROG: Antigravity did not reach its interactive prompt. Check the CLI sign-in, worktree trust and Reader setup." >&2
+      exit 1
+    fi
+    sleep 0.25
+  done
+fi
 
 mkdir -p "$(dirname "$MANAGED_FILE")"
 grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null || printf '%s\n' "$CHILD_NAME" >> "$MANAGED_FILE"
