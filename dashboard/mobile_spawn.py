@@ -113,7 +113,9 @@ def _catalog_choices(value):
                 continue
             if url_key is not None and not _text(url_key, 256):
                 continue
+            locality = model.get('locality') or provider.get('locality')
             models.append({'provider': provider_id, 'provider_label': label,
+                           **({'locality': 'local'} if locality == 'local' else {}),
                            'model': model['id'], 'default': model.get('default') is True,
                            'harnesses': routes, 'url_index': index, 'url_key': url_key})
     dirs = []
@@ -199,7 +201,7 @@ class MobileSpawn:
             'catalog':token,
             'configurable':configurable,
             'models':[{key:value for key, value in model.items()
-                       if key in {'model','provider','provider_label','default','harnesses','url_index'}} for model in models],
+                       if key in {'model','provider','provider_label','locality','default','harnesses','url_index'}} for model in models],
             'directories':directories,
         }
 

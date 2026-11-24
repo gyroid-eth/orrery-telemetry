@@ -143,7 +143,7 @@ def test_antigravity_models_are_listed_without_forwarding_an_invalid_standalone_
         {'id': 'deepseek', 'label': 'DeepSeek',
          'models': [{'id': 'deepseek-fixture', 'harnesses': [{'id': 'dsh', 'available': True},
                                                              {'id': 'hermes', 'available': True}]}]},
-        {'id': 'local', 'label': 'Local',
+        {'id': 'local', 'label': 'Local', 'locality': 'local',
          'models': [{'id': 'local-fixture', 'url_index': 1, 'url_key': 'fixture-key',
                      'harnesses': [{'id': 'hermes', 'available': True}]}]},
     ]}
@@ -156,6 +156,7 @@ def test_antigravity_models_are_listed_without_forwarding_an_invalid_standalone_
     assert all(model['harnesses'][0]['launch_blocked'] for model in gemini)
     assert [(m['provider'], [h['key'] for h in m['harnesses']]) for m in models[-2:]] == [
         ('deepseek', ['dsh', 'hermes']), ('local', ['hermes'])]
+    assert models[-1]['locality'] == 'local' and 'url_key' not in models[-1]
     with pytest.raises(relay.mobile_spawn.SpawnError, match='invalid_launch'):
         store.launch('a'*32, {**payload(catalog), 'model': models.index(gemini[0]), 'harness': 'antigravity'})
     assert not submitted
