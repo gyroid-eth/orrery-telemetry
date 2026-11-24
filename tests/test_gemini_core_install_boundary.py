@@ -27,6 +27,7 @@ PROVIDER_PAYLOAD = (
     "dashboard/gemini_provider_runtime.py",
     "hooks/spawn_gemini_child.sh",
     "hooks/spawn_gemini_preregistered.sh",
+    "hooks/gemini_interactive.py",
 )
 # Static provider files that are not part of the runtime<->adapter contract.
 PROVIDER_STATIC_ASSETS = ("dashboard/assets/google.svg",)
