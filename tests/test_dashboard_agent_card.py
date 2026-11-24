@@ -1,6 +1,7 @@
 """Card reads use synthetic panes and session/launch metadata."""
 
 import json
+import sys
 
 import pytest
 
@@ -181,6 +182,8 @@ def test_bound_card_reads_wrapped_cua_definition(tmp_path, monkeypatch, without_
     row = dict(name=name, program=program, running=True, history_binding='bound',
                history_session_id=sid, transcript_path=str(tmp_path / 'transcript.jsonl'))
     registration = dict(agent_id=1, project_key='test', program=program)
+    # The launch predates macOS routing new selections through orrery-screen.
+    monkeypatch.setattr(sys, 'platform', 'darwin')
     assert server._agent_card_fields(row, {}, {}, registration, ())['computer_use'] == 'control'
 
 

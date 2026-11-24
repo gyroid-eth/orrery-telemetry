@@ -159,7 +159,8 @@ def read_record(path: str, agent: str) -> dict | None:
             raise RecordError("invalid claude_chrome flag")
         tools = _child_tools()
         try:
-            spec = tools.normalize(state.get("base"), state.get("tools"))
+            # Launch rules can change after a record has been saved.
+            spec = tools.normalize_selection(state.get("base"), state.get("tools"))
         except tools.ToolsError as exc:
             raise RecordError(f"invalid tools: {exc}") from exc
         if spec != {"base": state.get("base"), "tools": state.get("tools")}:

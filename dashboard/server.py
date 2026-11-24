@@ -4031,7 +4031,7 @@ def _claude_child_tools(session: str, sid: str) -> tuple[dict | None, str]:
         return None, f"Claude in Chrome launch record is invalid: {exc}"
     if state is None:
         return None, ""
-    spec = {"base": state["base"], "tools": state["tools"]}
+    spec = tools_module.normalize(state["base"], state["tools"])
     if state.get("browser_disabled"):
         spec["browser_disabled"] = True
     return (spec if state["version"] == 4 or tools_module.restrictive(spec) else None), ""
@@ -4251,7 +4251,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             mcp_config = _write_claude_resume_mcp_config(
                 session, registration, parent=child_state.get("parent_agent"),
                 servers=servers)
-            flags = "".join(" " + shlex.quote(flag) for flag in (tools_plan or {}).get("flags", ()))
+            tool_flags = tools_plan["flags"] if tools_plan is not None else tools.claude_native_screen_flags()
+            flags = "".join(" " + shlex.quote(flag) for flag in tool_flags)
             inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config{flags} --resume ", 1)
         if not legacy:
             if expected_history_session_id is not None:
@@ -5001,9 +5002,15 @@ def _launch_claude_conversation(session: str, sid: str, path: str, cwd: str, rea
             generation = screen_target["generation"] if screen is not None else ""
             environment[_CLAUDE_CONVERSATION_TOOLS_ENV] = f"{int(chrome)}:{generation}"
             config = json.dumps({"mcpServers": plan["servers"]}, separators=(",", ":"))
+            settings = {"disableAllHooks": True}
+            flags = plan["flags"]
+            if "--settings" in flags:
+                index = flags.index("--settings")
+                settings.update(json.loads(flags[index + 1]))
+                flags = flags[:index] + flags[index + 2:]
             command = [ABS_CLAUDE, "--resume", sid, "-n", session,
                        "--strict-mcp-config", "--mcp-config", config,
-                       "--settings", '{"disableAllHooks":true}', *plan["flags"],
+                       "--settings", json.dumps(settings, separators=(",", ":")), *flags,
                        *(["--chrome"] if chrome else []), "--append-system-prompt", prompt]
             inner = ('unset CHILD_REGISTRATION_TOKEN PARENT_AGENT CLAUDE_CHILD_MCP_CONFIG '
                      'AGENTSTACK_CLAUDE_LAUNCH_ID MCP_AGENT_MAIL_TOKEN; '
@@ -8078,9 +8085,6 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
         if provider == "claude":
             if "browser_use" in permission:
                 keep_browser_off = not permission["browser_use"]
-            if (permission.get("computer_use") in ("off", "view") and sys.platform == "darwin"
-                    and selection.computer_use_enabled(selection._load_claude_settings(claude_json), cwd)):
-                return {"ok": False, "error": "Disable the project's built-in computer use before changing this permission"}
     if provider == "codex":
         selection.codex_apply(config, spec)
         candidate = {"version": selection.CODEX_RECORD_VERSION, **spec}
@@ -8779,6 +8783,7 @@ def spawn_names_payload() -> dict:
     local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
         os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
     return {
+        "computer_use": sys.platform == "darwin",
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
@@ -9649,8 +9654,9 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
         request, error = _spawn_request(payload)
         if error:
             return error
-        if spec.provider not in ("claude", "codex") and spec.program not in harness_runtime.HARNESSES and (
-                payload.get("tools") or payload.get("base") not in (None, "default")):
+        if (spec.provider not in ("claude", "codex") and spec.program not in harness_runtime.HARNESSES
+                and (spec.program != "antigravity" or sys.platform != "darwin")
+                and (payload.get("tools") or payload.get("base") not in (None, "default"))):
             return {"ok": False,
                     "error": f"base and tools are not supported for provider: {spec.provider}"}
         return _spawn_launch(payload, request, spec, handoff, discard_handoff)
