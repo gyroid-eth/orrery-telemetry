@@ -667,7 +667,7 @@ const referenceError=()=>replyReference&&!referenceCurrent(replyReference)?'Targ
 function addReference(value,beforeFocus){
  if(phase!=='editing'||!previewOK||!target||value.agent!==name||!value.isCurrent())return false;
  beforeFocus?.();
- replyReference={value:{...value,text:value.text.replace(/\s+/gu,' ').trim()},target:referenceTarget()};
+ replyReference={value,target:referenceTarget()};
  render({restoreFocus:false});window.OrreryReaderReplyMotion?.confirmReference?.(sheet.querySelector('.reader-reference-card'));
  const field=q('#terminal-text');
  field?.focus({preventScroll:true});field?.setSelectionRange(field.value.length,field.value.length);
@@ -964,7 +964,8 @@ const draftText=()=>[text.replace(/[\r\n]+$/u,''),...attachments.map(attachment=
 const inputText=()=>{
  if(!replyReference)return draftText();
  const r=replyReference.value;
- return 'Reference: '+r.agent+' · '+r.role+' · '+r.ts+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draftText();
+ const heading=r.agent+' · '+r.role+(r.ts?' · '+r.ts:'');
+ return 'Reference: '+heading+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draftText();
 };
 const inputValid=()=>validText(draftText())&&validText(inputText())&&referenceCurrent(replyReference);
 function inputErrorNote(){
