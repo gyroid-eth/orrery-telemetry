@@ -397,6 +397,8 @@ curl -s -f --max-time 2 -X POST "http://127.0.0.1:${AGENTSTACK_PORT:-8770}/api/a
 
 If you need to clear a label, send an empty value to `http://127.0.0.1:${AGENTSTACK_PORT:-8770}/api/annotate`.
 
+The role says what the child is doing now, not what it was spawned for. Whenever you give an existing child a new task (see "Reuse before you retire" below), post its new `role` (and `group` if the work moved) with the same request in the same step as the task message. A roster that still shows the first task hides what each child is actually doing.
+
 ## 6. Monitor Progress
 
 Primary completion signal: the child sends an ORRERY Mail message to the parent. It reaches you as a notification in your session; if the notification says the body is complete, act on it without a `fetch_inbox`.
@@ -482,7 +484,7 @@ If the child reports uncertainty, partial completion, or skipped tests, preserve
 
 ### Reuse before you retire
 
-Do not retire a child the moment it reports. Sending a related follow-up task to the same child with `send_message` skips the spawn cost (tmux window, registration, bootstrap), keeps the context of the previous work, and keeps the parent-child edge on the dashboard. Reuse while the child still has roughly half its context; below that, compact it at the boundary (above) or spawn a fresh child for the next task. Reviewer children in particular stay alive so additional review angles go to the agent that already read the code.
+Do not retire a child the moment it reports. Sending a related follow-up task to the same child with `send_message` skips the spawn cost (tmux window, registration, bootstrap), keeps the context of the previous work, and keeps the parent-child edge on the dashboard. Reuse while the child still has roughly half its context; below that, compact it at the boundary (above) or spawn a fresh child for the next task. Update the child's dashboard role (section 5) when you send the follow-up task. Reviewer children in particular stay alive so additional review angles go to the agent that already read the code.
 
 When a child is truly finished, end its tmux session; `cleanup-child-agent.sh` retires the registration and removes its runtime files. Retire only agents you spawned and named explicitly.
 
@@ -515,5 +517,6 @@ Use acquire/release pairing rather than a short time window. Long legitimate ope
 - Messages, never raw tmux injection (the sole exception is `/compact`).
 - Wait with `agentstack-await-reply` or not at all; never with a loop of your own.
 - A child is reused before it is retired, and compacted at task boundaries, not mid-task.
+- A child's dashboard role always names its current task; update it with every new task.
 - Watch startup closely, then adjust cadence by risk.
 - Verify the child's output before reporting it as done.
