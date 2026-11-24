@@ -83,6 +83,10 @@ approval is required. The interactive launcher uses the legacy runtime. If
 the global runtime returns `GEMINI_INTERACTIVE_RUNTIME_UNSUPPORTED`, use its
 supported delegated route.
 
+### Reader
+
+With API 48 Telemetry and the matching Cockpit, managed interactive `agy` sessions are readable in the desktop and phone Reader. The existing `--configure-mcp` option adds the `orrery-reader` group to `hooks.json` and preserves the user's other groups. After setup, newly launched sessions show history from their first input. Text appears as Antigravity records it, and a finished compact appears as **Context compacted**. If a launch reports different conversation UUIDs, Reader waits for a new managed launch to establish its binding.
+
 Defaults:
 
 - binary: `agy`

@@ -20,13 +20,13 @@ Usage: scripts/install-gemini-provider.sh [options]
 
 Options:
   --install-dir PATH   ORRERY install dir (default ~/.agentstack)
-  --configure-mcp      add/update the Antigravity ORRERY Mail MCP entry
+  --configure-mcp      configure the Antigravity Mail MCP entry and Reader hook
   --dry-run            validate and print planned copies without mutation
   -h, --help           show this help
 
 This installer does not install Antigravity CLI, does not require `agy` for a
-dry run, and never changes Antigravity permission settings.  MCP configuration
-is changed only when --configure-mcp is explicit.
+dry run, and never changes Antigravity permission settings. Managed MCP and
+Reader hook configuration changes only when --configure-mcp is explicit.
 EOF
 }
 

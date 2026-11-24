@@ -89,7 +89,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":46}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":48}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -408,6 +408,10 @@ A receipt timestamp older than the current tmux `session_created` returns `stale
 Only `history_binding: bound` publishes `transcript_path` (the absolute child-owned `HERMES_HOME/state.db` path). Bound/stale rows include the evidence's `history_session_id` (native ID) and `history_receipt_ts` (the callback's original ISO timestamp, with UTC offset). Existing `program: hermes` identifies the format. Readers must verify **both the database path and session ID** and filter `messages.session_id`: multiple sessions share one HOME/database. This path is not a JSONL transcript.
 
 Binding verifies the project/agent registration, child-specific launch/input, pinned private HOME, self `on_session_start` callback, and exact CLI session in SQLite. It never selects by cwd, newest session, or modification time. Missing/mismatched proof or a launch/resume in preparation yields `unbound`; a receipt older than a new terminal launch without explicit exact resume yields `stale`. Neither publishes a path; `history_binding_reason` / `history_binding_reason_code` explain why. Success uses an empty explanation and code `bound`. Retired children remain readable while proof is retained; removal/purge unbinds them. Provider-internal switching/compression without a new callback can leave this binding on the earlier recorded segment; it never guesses descendant sessions or emergency diverted JSONL. Fresh Hermes TUI history uses the protected `/api/history` route described above.
+
+#### Antigravity (API 48)
+
+For managed interactive launches in legacy mode, the official hook binds the conversation UUID and its `transcript.jsonl` or `transcript_full.jsonl` path to the current Mail registration and tmux launch. The ordinary binding fields publish the path only when bound. Receiving more than one UUID for that launch returns `unbound` with `session_conflict`. Headless result logs are outside this binding.
 
 ### Other agent display fields
 
