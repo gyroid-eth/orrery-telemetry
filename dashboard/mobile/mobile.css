@@ -917,6 +917,37 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .conversation-step-icon.failed+.conversation-step-copy .conversation-step-outcome{color:var(--amber)}
 .conversation-step-duration{margin-left:auto;color:var(--ink-dim);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .conversation-step-target{color:var(--ink-dim);font-size:11px;line-height:1.35;overflow-wrap:anywhere;white-space:pre-wrap}
+.conversation-step{
+  --diff-add:color-mix(in srgb,var(--ln-delegate) 65%,var(--ink));
+  --diff-remove:color-mix(in srgb,var(--alert) 75%,var(--ink));
+}
+.mobile .conversation-step-diff-toggle,.mobile .conversation-step-diff-more{
+  display:inline-flex;align-items:baseline;gap:5px;min-width:0;padding:2px 4px;border:0;
+  border-radius:4px;background:transparent;color:var(--ink-dim);font:inherit;text-align:left;cursor:pointer;
+}
+.mobile .conversation-step-diff-toggle{margin:-3px -4px;min-height:24px;flex-wrap:wrap}
+.mobile .conversation-step-diff-toggle:is([aria-expanded=true],:hover,:focus-visible),
+.mobile .conversation-step-diff-more:is(:hover,:focus-visible){background:var(--hair-2);color:var(--ink)}
+.conversation-step-diff-toggle:focus-visible,.conversation-step-diff-more:focus-visible{
+  outline:2px solid var(--amber);outline-offset:2px
+}
+.mobile .conversation-step-diff-toggle[hidden],.conversation-step-diff [hidden]{display:none}
+.conversation-diff-added,.conversation-diff-removed{font:11px var(--mono);white-space:nowrap}
+.conversation-diff-added{color:var(--diff-add)}.conversation-diff-removed{color:var(--diff-remove)}
+.conversation-step-diff{
+  min-width:0;margin:6px 0 3px;border:1px solid var(--hair);border-radius:5px;overflow:hidden;
+  background:var(--hair-2);font:11px/1.45 var(--mono);
+}
+.conversation-step-diff-caption,.conversation-step-diff-header,.conversation-step-diff-note{
+  margin:0;padding:4px 6px;color:var(--ink-dim);overflow-wrap:anywhere;
+}
+.conversation-step-diff-caption,.conversation-step-diff-header{border-bottom:1px solid var(--hair)}
+.conversation-step-diff-hunk+.conversation-step-diff-hunk{border-top:1px solid var(--hair)}
+.conversation-step-diff-line{display:grid;grid-template-columns:1ch minmax(0,1fr);gap:5px;padding:0 6px}
+.conversation-step-diff-line[data-op="+"]{background:color-mix(in srgb,var(--ln-delegate) 14%,transparent);color:var(--diff-add)}
+.conversation-step-diff-line[data-op="-"]{background:color-mix(in srgb,var(--alert) 14%,transparent);color:var(--diff-remove)}
+.conversation-step-diff-text{overflow-wrap:anywhere;white-space:pre-wrap}
+.mobile .conversation-step-diff-more{padding:4px 6px;min-height:28px}
 .conversation-steps-notice{margin:4px 0 0 9px;color:var(--ink-dim);font-size:11px}
 .conversation-step-record>.conversation-tool-label,.conversation-step-record::before{display:none}
 .conversation-steps.is-paused *,.conversation-steps.is-paused *::before,.conversation-steps.is-paused *::after{animation-play-state:paused}

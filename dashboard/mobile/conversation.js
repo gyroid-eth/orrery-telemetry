@@ -164,7 +164,7 @@ SOFTWARE.
     return {groups,consumed,pending};
   }
 
-  function mount({host,mutate=fn=>fn(),onFocusLost=()=>{}}){
+  function mount({host,mutate=fn=>fn(),onFocusLost=()=>{},loadDiff}){
     const cards=new Map();let model={groups:[],consumed:new Set()},current={},visible=false,timer=0,serial=0,workingModel=false;
     const make=(tag,cls,value)=>{const node=root.document.createElement(tag);node.className=cls;if(value!==undefined)node.textContent=value;return node;};
     function changed(node,value){if(node.textContent!==value)node.textContent=value;}
@@ -187,6 +187,7 @@ SOFTWARE.
     }
     function setOpen(card,open){
       if(!open&&card.body.contains(root.document.activeElement))card.button.focus({preventScroll:true});
+      if(!open)for(const record of card.rows.values())closeDiff(record);
       card.open=open;card.node.classList.toggle('is-open',open);card.button.setAttribute('aria-expanded',String(open));
       card.body.inert=!open;
     }
@@ -212,8 +213,94 @@ SOFTWARE.
       const copy=make('div','conversation-step-copy'),top=make('div','conversation-step-top');
       const tool=make('span','conversation-step-tool'),outcome=make('span','conversation-step-outcome');
       const clock=make('span','conversation-step-duration'),detail=make('div','conversation-step-target');
-      top.append(tool,outcome,clock);copy.append(top,detail);node.append(copy);
-      return {node,tool,outcome,clock,detail,icon:null,status:'',fingerprint:''};
+      const toggle=make('button','conversation-step-diff-toggle'),panel=make('div','conversation-step-diff');
+      const added=make('span','conversation-diff-added'),removed=make('span','conversation-diff-removed');
+      toggle.type='button';toggle.hidden=panel.hidden=true;
+      panel.id='conversation-step-diff-'+(++serial)+'-'+Math.random().toString(36).slice(2);
+      toggle.setAttribute('aria-controls',panel.id);toggle.setAttribute('aria-expanded','false');
+      toggle.append(added,removed);
+      top.append(tool,toggle,outcome,clock);copy.append(top,detail,panel);node.append(copy);
+      const record={node,top,tool,outcome,clock,detail,toggle,panel,added,removed,ref:null,request:null,
+        icon:null,status:'',fingerprint:''};
+      toggle.addEventListener('click',()=>mutate(()=>toggleDiff(record),toggle));
+      return record;
+    }
+    function closeDiff(record){
+      if(record.panel.hidden)return;
+      if(record.panel.contains(root.document.activeElement)&&record.toggle.isConnected)
+        record.toggle.focus({preventScroll:true});
+      record.request?.abort();record.request=null;
+      record.panel.hidden=true;record.panel.replaceChildren();
+      record.toggle.setAttribute('aria-expanded','false');
+    }
+    function diffContent(panel,diff,stepPath){
+      const total=diff.hunks.reduce((count,hunk)=>count+hunk.lines.length,0);
+      const initialLines=8;
+      function paintDiff(limit){
+        const content=make('div','conversation-step-diff-content');
+        const path=diff.path===stepPath?'':diff.path;
+        if(diff.new_file||path){
+          const caption=make('div','conversation-step-diff-caption',diff.new_file?'New file':path);
+          if(diff.new_file&&path)caption.append(make('span','conversation-step-diff-path',' · '+path));
+          content.append(caption);
+        }
+        let remaining=limit;
+        for(const hunk of diff.hunks){
+          if(remaining<=0)break;
+          const group=make('div','conversation-step-diff-hunk');
+          if(hunk.header&&(!diff.new_file||diff.hunks.length>1))
+            group.append(make('div','conversation-step-diff-header',hunk.header));
+          for(const line of hunk.lines.slice(0,remaining)){
+            const row=make('div','conversation-step-diff-line');
+            row.dataset.op=line.op;
+            row.append(make('span','conversation-step-diff-mark',line.op==='-'?'−':line.op),
+              make('span','conversation-step-diff-text',line.text));
+            group.append(row);remaining--;
+          }
+          content.append(group);
+        }
+        if(diff.truncated)content.append(make('p','conversation-step-diff-note','Too long to show here'));
+        else if(total>limit){
+          const more=make('button','conversation-step-diff-more','Show '+(total-limit)+' more lines');
+          more.type='button';
+          more.addEventListener('click',()=>{paintDiff(total);panel.tabIndex=-1;panel.focus({preventScroll:true});});
+          content.append(more);
+        }
+        if(root.OrreryDemo?.on)root.OrreryDemo.maskContent?.(content);
+        panel.replaceChildren(content);
+      }
+      paintDiff(initialLines);
+    }
+    async function toggleDiff(record){
+      if(!record.panel.hidden){closeDiff(record);return;}
+      if(!record.ref)return;
+      const request=new AbortController();record.request=request;
+      const {panel,toggle}=record;
+      panel.hidden=false;toggle.setAttribute('aria-expanded','true');
+      const notice=make('p','conversation-step-diff-note','Loading diff…');
+      notice.setAttribute('role','status');panel.append(notice);
+      try{
+        const diff=await loadDiff(record.ref,request.signal);
+        if(record.request===request)diffContent(panel,diff,record.detailText);
+      }catch(error){
+        if(record.request===request)notice.textContent=error.message||'Diff unavailable';
+      }finally{
+        if(record.request===request)record.request=null;
+      }
+    }
+    function diffControl(record,step){
+      const stat=step.diff_stat,ref=step.diff_ref;
+      const valid=loadDiff&&/^[a-f0-9]{32}$/.test(ref)&&stat&&
+        Number.isSafeInteger(stat.added)&&stat.added>=0&&Number.isSafeInteger(stat.removed)&&stat.removed>=0;
+      const nextRef=valid?ref:null;
+      if(nextRef!==record.ref){
+        closeDiff(record);record.ref=nextRef;record.toggle.hidden=!nextRef;
+        if(nextRef)record.toggle.prepend(record.tool);else record.top.prepend(record.tool);
+      }
+      if(!nextRef)return;
+      changed(record.added,'+'+stat.added);
+      changed(record.removed,stat.new_file?'':'−'+stat.removed);
+      record.removed.hidden=stat.new_file;
     }
     function updateRow(record,step){
       const status=['done','failed','running'].includes(step.status)?step.status:'observed';
@@ -226,7 +313,9 @@ SOFTWARE.
       changed(record.outcome,status==='failed'?'Failed':status==='running'?'Running…':status==='observed'?'Observed':'');
       const start=time(step.started),end=time(step.ended);
       changed(record.clock,Number.isFinite(start)&&Number.isFinite(end)&&end>=start?duration((end-start)/1000):'');
-      changed(record.detail,text(step.detail));record.detail.hidden=!step.detail;
+      record.detailText=text(step.detail);
+      changed(record.detail,record.detailText);record.detail.hidden=!step.detail;
+      diffControl(record,step);
     }
     function title(card,value,working){
       if(card.title===value&&card.wave===working)return;
@@ -277,12 +366,17 @@ SOFTWARE.
       model=collect(events,provider,{working:workingModel,native:!['snapshot','fresh_tail'].includes(mode),activeCalls:model.pending});
       const wanted=new Set(model.groups.map(g=>g.id)),byId=new Map(rows.map(r=>[r.dataset.id,r]));
       for(const [id,card] of cards)if(!wanted.has(id)){
-        if(card.node.contains(root.document.activeElement))onFocusLost();card.node.remove();cards.delete(id);
+        if(card.node.contains(root.document.activeElement))onFocusLost();
+        for(const record of card.rows.values())closeDiff(record);
+        card.node.remove();cards.delete(id);
       }
       for(const g of model.groups){
         const existed=cards.has(g.id),card=cards.get(g.id)||create(g.id);cards.set(g.id,card);
         const ids=new Set(g.steps.map(s=>s.id));
-        for(const [id,record] of card.rows)if(!ids.has(id)){record.node.remove();card.rows.delete(id);}
+        for(const [id,record] of card.rows)if(!ids.has(id)){
+          if(record.node.contains(root.document.activeElement))card.button.focus({preventScroll:true});
+          closeDiff(record);record.node.remove();card.rows.delete(id);
+        }
         for(const [index,step] of g.steps.entries()){
           const fingerprint=JSON.stringify(step),record=card.rows.get(step.id)||createRow(existed);
           if(record.fingerprint!==fingerprint){updateRow(record,step);record.fingerprint=fingerprint;}
@@ -297,9 +391,10 @@ SOFTWARE.
       }
       paint();return model.consumed;
     }
-    return Object.freeze({sync,needsSync:context=>workingModel!==doingWork(context),
+    function closeDiffs(){for(const card of cards.values())for(const record of card.rows.values())closeDiff(record);}
+    return Object.freeze({sync,closeDiffs,needsSync:context=>workingModel!==doingWork(context),
       activity(context,isVisible){current=context||{};visible=isVisible;paint();return [...cards.values()].some(c=>!c.node.hidden&&(c.working||c.waiting));},
-      reset(){if(timer)root.clearInterval(timer);timer=0;for(const card of cards.values())card.node.remove();cards.clear();model={groups:[],consumed:new Set()};workingModel=false;},
+      reset(){closeDiffs();if(timer)root.clearInterval(timer);timer=0;for(const card of cards.values())card.node.remove();cards.clear();model={groups:[],consumed:new Set()};workingModel=false;},
     });
   }
   const api={collect,duration,elapsed,mount};
@@ -396,6 +491,12 @@ const previewMessages={
  preview_changed:'The file changed while it was read. Tap again.',
  history_slow:'Taking longer than usual: the computer is busy. Tap the file again.',
 };
+const diffMessages={
+ diff_expired:'Diff expired. Reopen the conversation and try again.',
+ diff_too_large:'Too long to show here',
+ diff_changed:'The record changed. Reopen the conversation.',
+ history_slow:'Taking longer than usual. Tap again to retry.',
+};
 async function enabled(){
  if(capability!==null)return capability;
  try{
@@ -419,6 +520,26 @@ async function request(token,slot){
   // the newer one owns the retry timer.
   if(c.signal.aborted&&!late)e.superseded=true;if(late)e.slow=true;throw e;
  }finally{clearTimeout(t);if(controllers[slot]===c)controllers[slot]=null;}
+}
+async function loadStepDiff(ref,signal){
+ if(!recordConfirmed||!REF.test(ref))throw Error('Diff unavailable');
+ const controller=new AbortController(),abort=()=>controller.abort();
+ signal.addEventListener('abort',abort,{once:true});
+ const timer=setTimeout(abort,WAIT);
+ try{
+  const response=await fetch('/view/conversation/diff?name='+encodeURIComponent(name)+'&ref='+ref,
+   {credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
+  const raw=await response.text();
+  if(new TextEncoder().encode(raw).length>64*1024)throw Error(diffMessages.diff_too_large);
+  const value=JSON.parse(raw);
+  if(!response.ok||value?.ok!==true){
+   const code=value?.error;
+   throw Error(Object.hasOwn(diffMessages,code)?diffMessages[code]:'Diff unavailable');
+  }
+  if(typeof value.path!=='string'||typeof value.new_file!=='boolean'||typeof value.truncated!=='boolean'||
+   !Array.isArray(value.hunks))throw Error('Diff unavailable');
+  return value;
+ }finally{clearTimeout(timer);signal.removeEventListener('abort',abort);}
 }
 function clock(ts){const d=new Date(ts);return Number.isFinite(d.getTime())?d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';}
 const markdown=()=>window.OrreryConversationMarkdown;
@@ -1125,7 +1246,7 @@ async function poll(){
   if(v.ok!==true){
    // A hidden, stale or changed record also hides any file opened from it;
    // a slow answer is only a delay and leaves it open.
-   if(v.error!=='history_slow'){recordConfirmed=false;lastRecordPoll=null;recordVersion++;dismissReferenceSelection();window.OrreryMobileTerminal?.refreshReference?.();closePreview();}showError(v);if(v.error==='history_changed')reset();}
+   if(v.error!=='history_slow'){recordConfirmed=false;lastRecordPoll=null;recordVersion++;dismissReferenceSelection();window.OrreryMobileTerminal?.refreshReference?.();closePreview();stepView?.closeDiffs();}showError(v);if(v.error==='history_changed')reset();}
   else{
    recordConfirmed=true;provider=({claude:'Claude',codex:'Codex'})[v.provider]||'';
    failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));
@@ -1177,7 +1298,9 @@ function mount(n){
  retryButton=make('button','conversation-retry','Retry');retryButton.type='button';retryButton.hidden=true;
  retryButton.onclick=()=>{retryButton.hidden=true;setStatus('Loading the record…');return poll();};
  list.append(olderButton);root.append(status,retryButton,list);
- stepView=window.OrreryMobileSteps.mount({host:list,mutate:(fn,button)=>{const top=button.getBoundingClientRect().top;fn();list.scrollTop+=button.getBoundingClientRect().top-top;following=atBottom();savedTop=list.scrollTop;},onFocusLost:()=>list.focus?.({preventScroll:true})});
+ stepView=window.OrreryMobileSteps.mount({host:list,loadDiff:loadStepDiff,
+  mutate:(fn,button)=>{const top=button.getBoundingClientRect().top;fn();list.scrollTop+=button.getBoundingClientRect().top-top;following=atBottom();savedTop=list.scrollTop;},
+  onFocusLost:()=>list.focus?.({preventScroll:true})});
  if(typeof ResizeObserver==='function'){mailResize=new ResizeObserver(()=>{if(list&&list.clientWidth!==mailWidth){mailWidth=list.clientWidth;layoutMailRoutes();}});mailResize.observe(list);}
  const g=gen;document.fonts?.ready?.then(()=>{if(g===gen)layoutMailRoutes();});poll();return root;
 }
@@ -1215,6 +1338,7 @@ document.addEventListener('visibilitychange',()=>{
  if(document.hidden){
   lastRecordPoll=null;
   stepView?.activity(stepContext(),false);
+  stepView?.closeDiffs();
   gen++;clearTimeout(timer);timer=0;
   if(controllers.preview&&previewRequest)previewRetry=true;
   for(const item of thumbnails.values())item.controller?.abort();

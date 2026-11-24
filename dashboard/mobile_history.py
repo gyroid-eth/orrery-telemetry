@@ -58,6 +58,9 @@ MAX_PREVIEW_SIDE = 8192
 MAX_PREVIEW_PIXELS = 8_000_000
 # Base64 of the largest accepted PNG plus a small JSON envelope.
 MAX_PREVIEW_UPSTREAM = MAX_PREVIEW_PNG * 4 // 3 + 64 * 1024
+MAX_DIFF_LINES = 400
+MAX_DIFF_BYTES = 64 * 1024
+DIFF_ERRORS = frozenset({'diff_unavailable', 'diff_too_large', 'diff_changed'})
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
 SHOW_FILES = re.compile(r'mcp__orrery[-_]mail__show_files\Z')
 THUMBNAIL_SIDE = 320
@@ -68,7 +71,7 @@ ERRORS = frozenset({
     'record_too_large', 'invalid_cursor', 'invalid_agent', 'history_slow',
     'preview_unavailable', 'preview_too_large', 'preview_type_denied', 'preview_path_denied',
     'preview_changed',
-})
+}) | DIFF_ERRORS
 
 
 class HistoryUnavailable(ValueError):
@@ -173,7 +176,7 @@ def project_markdown_images(raw, bodies, issue):
     return projected
 
 
-def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None):
+def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None, issue_diff=None):
     """Only displayed fields. Diffs, cockpit reference IDs, cursors and tool
     paths stay on the PC. ``issue`` turns a cockpit reference into this reader's
     own opaque ID; without it a file is a label only."""
@@ -206,6 +209,16 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
         result['variant'] = 'update'
     if step and kind == 'tool':
         result['step'] = step
+        if issue_diff and role == 'assistant' and (raw['kind'], step['phase']) in {
+            ('tool_result', 'result'), ('tool', 'complete'),
+        }:
+            stat, ref = raw['step'].get('diff_stat'), raw['step'].get('diff_ref')
+            if (step['status'] != 'failed' and isinstance(ref, str) and COCKPIT_REF.fullmatch(ref)
+                    and isinstance(stat, dict) and type(stat.get('new_file')) is bool
+                    and all(type(stat.get(k)) is int and 0 <= stat[k] < 2**53 for k in ('added', 'removed'))
+                    and (not stat['new_file'] or stat['removed'] == 0)):
+                step['diff_stat'] = {k: stat[k] for k in ('added', 'removed', 'new_file')}
+                step['diff_ref'] = issue_diff(ref)
     call_id = raw.get('tool_call_id')
     if raw.get('kind') == 'tool' and role == 'assistant' and isinstance(call_id, str) and TOKEN.fullmatch(call_id):
         result['tool_call_id'] = call_id
@@ -262,7 +275,7 @@ def claude_pasted_text(text):
     return re.sub(r'\A\r?\n|\r?\n\Z', '', match[2])
 
 
-def project_page(raw, issue=None):
+def project_page(raw, issue=None, issue_diff=None):
     """Newest displayable events within one bounded page.
 
     Returns (events, before, limited, omitted). When events are trimmed for
@@ -278,7 +291,9 @@ def project_page(raw, issue=None):
         items = [dict(x, text=claude_pasted_text(x['text'])) if isinstance(x, dict)
                  and x.get('kind') == 'text' and x.get('role') == 'user'
                  and isinstance(x.get('text'), str) else x for x in items]
-    pairs = [(e, x) for x in items for e in (project_event(x, issue=issue),) if e]
+    if raw.get('provider') not in ('claude', 'codex'):
+        issue_diff = None
+    pairs = [(e, x) for x in items for e in (project_event(x, issue=issue, issue_diff=issue_diff),) if e]
     trimmed = len(raw['events']) > 200 or len(pairs) > PAGE_EVENTS
     pairs = pairs[-PAGE_EVENTS:]
     limited = raw.get('limited') is True or trimmed
@@ -289,7 +304,7 @@ def project_page(raw, issue=None):
     if pairs and len(encode([pairs[0][0]])) > MAX_PAGE_BYTES:
         limited = True
         for text_limit, mail_limit in SHRINK_LIMITS:
-            small = project_event(anchor, text_limit, mail_limit, issue)
+            small = project_event(anchor, text_limit, mail_limit, issue, issue_diff)
             small['truncated'] = True
             if len(encode([small])) <= MAX_PAGE_BYTES:
                 pairs = [(small, anchor)]
@@ -306,6 +321,46 @@ def project_page(raw, issue=None):
     if before is not None and (not isinstance(before, str) or not UPSTREAM_CURSOR.fullmatch(before)):
         before = None
     return [e for e, _ in pairs], before, limited, omitted
+
+
+def project_diff(raw):
+    """Allow-list one recorded diff, with exact UTF-8 wire and line bounds."""
+    if (not isinstance(raw, dict) or not isinstance(raw.get('path'), str) or type(raw.get('new_file')) is not bool
+            or type(raw.get('truncated')) is not bool or not isinstance(raw.get('hunks'), list)):
+        raise HistoryUnavailable('diff_unavailable')
+    result = {'ok': True, 'path': _label(raw['path'], 1024), 'new_file': raw['new_file'],
+              'hunks': [], 'truncated': raw['truncated']}
+    size, count = len(encode(result)), 0
+    for item in raw['hunks']:
+        if (not isinstance(item, dict) or not isinstance(item.get('header'), str)
+                or not isinstance(item.get('lines'), list)):
+            raise HistoryUnavailable('diff_unavailable')
+        header, cut = _text(item['header'], 2048)
+        if cut:
+            result['truncated'] = True
+        hunk = {'header': header, 'lines': []}
+        hunk_size = len(encode(hunk)) + bool(result['hunks'])
+        if size + hunk_size > MAX_DIFF_BYTES or count >= MAX_DIFF_LINES:
+            result['truncated'] = True
+            break
+        result['hunks'].append(hunk)
+        size += hunk_size
+        for line in item['lines']:
+            if (not isinstance(line, dict) or line.get('op') not in (' ', '+', '-')
+                    or not isinstance(line.get('text'), str)):
+                raise HistoryUnavailable('diff_unavailable')
+            text, _ = _text(line['text'], MAX_DIFF_BYTES)
+            value = {'op': line['op'], 'text': text}
+            line_size = len(encode(value)) + bool(hunk['lines'])
+            if size + line_size > MAX_DIFF_BYTES or count >= MAX_DIFF_LINES:
+                result['truncated'] = True
+                if not hunk['lines']:
+                    result['hunks'].pop()
+                return result
+            hunk['lines'].append(value)
+            size += line_size
+            count += 1
+    return result
 
 
 def png_size(data):
@@ -426,7 +481,9 @@ class HistoryClient:
             error = raw.get('error') if isinstance(raw, dict) else None
             raise HistoryUnavailable(error if isinstance(error, str) else 'history_unavailable',
                                      raw.get('reason_code', '') if isinstance(raw, dict) else '')
-        events, older, limited, omitted = project_page(raw, lambda ref: self._issue_ref(name, ref))
+        events, older, limited, omitted = project_page(
+            raw, lambda ref: self._issue_ref(name, ref),
+            lambda ref: self._issue_ref(name, ref, kind='diff'))
         issued = self._issue_token(name, older) if older is not None else None
         provider = raw.get('provider') if raw.get('provider') in {'codex', 'claude', 'dsh', 'hermes'} else ''
         result = {'ok': True, 'agent': name, 'provider': provider, 'events': events,
@@ -440,15 +497,9 @@ class HistoryClient:
 
     def preview(self, name, ref, *, thumbnail=False):
         """One previewable file named by an ID this reader issued for ``name``."""
-        if not isinstance(name, str) or not NAME.fullmatch(name):
-            raise HistoryUnavailable('invalid_agent')
-        with self._lock:
-            self._expire()
-            entry = self._refs.get(ref) if isinstance(ref, str) and TOKEN.fullmatch(ref) else None
-        if entry is None or entry[0] != name:
-            raise LookupError('preview_expired')
+        cockpit_ref = self._resolve_ref(name, ref, 'preview')
         route = '/telemetry/conversation/preview?'
-        query = {'ref': entry[1], 'mobile': '1'}
+        query = {'ref': cockpit_ref, 'mobile': '1'}
         if thumbnail:
             query['thumbnail'] = '1'
         status, raw = self._get(route + urlencode(query),
@@ -456,7 +507,7 @@ class HistoryClient:
         legacy = status == 400 and isinstance(raw, dict) and raw.get('error') == 'invalid_query'
         if legacy:
             # Older bridge versions only accept the reference here.
-            status, raw = self._get(route + urlencode({'ref': entry[1]}),
+            status, raw = self._get(route + urlencode({'ref': cockpit_ref}),
                                     limit=MAX_PREVIEW_UPSTREAM, too_large='preview_too_large')
         if status != 200 or not isinstance(raw, dict) or raw.get('ok') is not True:
             error = raw.get('error') if isinstance(raw, dict) else None
@@ -472,10 +523,35 @@ class HistoryClient:
             raise HistoryUnavailable('preview_type_denied')
         return thumbnail_preview(preview) if thumbnail and legacy else preview
 
-    def _issue_ref(self, name, cockpit_ref):
-        """One phone ID per (agent, cockpit reference), renewed while its
+    def diff(self, name, ref):
+        cockpit_ref = self._resolve_ref(name, ref, 'diff')
+        status, raw = self._get('/telemetry/conversation/diff?' + urlencode({'ref': cockpit_ref}),
+                                limit=MAX_DIFF_BYTES, too_large='diff_too_large')
+        if status == 200 and isinstance(raw, dict) and raw.get('ok') is True:
+            return project_diff(raw)
+        error = raw.get('error') if isinstance(raw, dict) else None
+        if error == 'reference_expired':
+            raise LookupError('diff_expired')
+        if error in ('record_too_large', 'diff_too_large'):
+            raise HistoryUnavailable('diff_too_large')
+        if error in ('history_changed', 'diff_changed', 'preview_changed'):
+            raise HistoryUnavailable('diff_changed')
+        raise HistoryUnavailable('diff_unavailable')
+
+    def _resolve_ref(self, name, ref, kind):
+        if not isinstance(name, str) or not NAME.fullmatch(name):
+            raise HistoryUnavailable('invalid_agent')
+        with self._lock:
+            self._expire()
+            entry = self._refs.get(ref) if isinstance(ref, str) and TOKEN.fullmatch(ref) else None
+        if entry is None or entry[0] != name or entry[1][0] != kind:
+            raise LookupError(kind + '_expired')
+        return entry[1][1]
+
+    def _issue_ref(self, name, cockpit_ref, *, kind='preview'):
+        """One phone ID per (agent, kind, cockpit reference), renewed while its
         page is polled, like page tokens."""
-        return self._issue(self._refs, self._ref_keys, MAX_REFS, name, cockpit_ref)
+        return self._issue(self._refs, self._ref_keys, MAX_REFS, name, (kind, cockpit_ref))
 
     def _issue_token(self, name, cursor):
         """One token per (agent, cursor). Polling the same latest page reuses
