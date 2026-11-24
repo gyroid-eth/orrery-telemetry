@@ -4,10 +4,15 @@
   const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)');
   const running = new Set();
   const roll = [260, 20, 580], icon = [420, 18, 580], width = [300, 24, 580];
-  const word = [340, 26, 460], stagger = 70, maxSteps = 12, confirmationMs = 1800;
+  const word = [340, 26, 430], stagger = 70, flightMs = 610, confirmationMs = 1800;
   const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, value));
   const canAnimate = node => !!node?.animate && !reduce?.matches && !document.hidden;
   const svgNS = 'http://www.w3.org/2000/svg';
+  const eastAsian = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}、。！？；，．…]/u;
+  const wordRuns = /\s+|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}、。！？；，．…]+|[^\s\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}、。！？；，．…]+/gu;
+  const segmenter = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter('ja', {granularity:'word'}) : null;
+  const queued = [], flights = new WeakMap();
+  let queueIndex = 0, frame = 0, nextWord = 0, frontier = null, following = false, scroll = null;
 
   function span(className, text) {
     const node = document.createElement('span');
@@ -57,6 +62,7 @@
   }
 
   function cancelMotion() {
+    finishReplies();
     for (const effect of running) effect.cancel();
     running.clear();
   }
@@ -153,61 +159,180 @@
     }, confirmationMs);
   }
 
-  function revealReply(body) {
-    if (!canAnimate(body)) return;
+  function ranges(text) {
+    if (!segmenter || !eastAsian.test(text))
+      return Array.from(text.matchAll(/\S+/gu), match => [match.index, match.index+match[0].length]);
+    return Array.from(text.matchAll(wordRuns)).flatMap(match => {
+      if (!match[0].trim()) return [];
+      if (!eastAsian.test(match[0])) return [[match.index, match.index+match[0].length]];
+      return Array.from(segmenter.segment(match[0]), part => [match.index+part.index, match.index+part.index+part.segment.length]);
+    });
+  }
+  function tokenize(body, className, limit = Infinity) {
     const demo = window.OrreryDemo?.on ? window.OrreryDemo : null;
-    if (demo && !demo.projectText) return;
-    demo?.maskContent(body);
-    const skip = 'pre, code, button, a, table, .conversation-code, .conversation-table, [aria-hidden="true"]';
+    const cues = [], tails = [];
+    if (demo && !demo.projectText) return {cues, tails};
+    demo?.maskContent?.(body);
+    const skip = '.conversation-code-head, [aria-hidden="true"], [hidden]' +
+      (className==='reader-reply-word' ? ', button' : '');
     const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
       acceptNode: node => node.parentElement.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
     });
     const runs = [];
-    let wordCount = 0, chars = 0;
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    for (let node = walker.nextNode(); node && limit > 0; node = walker.nextNode()) {
       const projection = demo?.projectText(node), shown = projection?.text ?? node.data;
-      chars += shown.length;
-      if (chars > 4000 || runs.length >= 32) return;
-      const words = Array.from(shown.matchAll(/\S+/gu));
-      if (!words.length) continue;
-      runs.push({node, words, shown, projection});
-      wordCount += words.length;
+      const words = ranges(shown).slice(0, limit);
+      if (words.length) runs.push({node, words, shown, projection});
+      limit -= words.length;
     }
-
-    // Keep the stagger short by revealing groups in longer replies.
-    const perStep = Math.ceil(wordCount / maxSteps);
-    let index = 0;
     for (const {node, words, shown, projection} of runs) {
       const fragment = document.createDocumentFragment();
-      const cues = [];
       const part = (from, to) => {
         const text = document.createTextNode(shown.slice(from, to));
         projection?.write(text, from, to);
         return text;
       };
       let offset = 0;
-      for (let i = 0; i < words.length;) {
-        const count = Math.min(words.length - i, perStep - index % perStep);
-        const first = words[i], last = words[i + count - 1], end = last.index + last[0].length;
-        const cue = span('reader-reply-word');
-        cue.append(part(first.index, end));
-        fragment.append(part(offset, first.index), cue);
-        cues.push({cue, delay: Math.floor(index / perStep) * stagger});
+      for (const [start,end] of words) {
+        const cue = span(className);
+        cue.append(part(start,end));
+        fragment.append(part(offset,start),cue);
+        cues.push(cue);
         offset = end;
-        i += count;
-        index += count;
       }
-      fragment.append(part(offset, shown.length));
+      const rest = part(offset, shown.length);
+      if (className==='reader-mail-word' && rest.data.trim()){
+        const tail=span('');tail.append(rest);fragment.append(tail);tails.push(tail);
+      } else fragment.append(rest);
       node.replaceWith(fragment);
-      for (const {cue, delay} of cues) {
-        animate(cue, word, value => ({
-          opacity: clamp(value),
-          top: 6 * (1 - value) + 'px',
-          filter: 'blur(' + 4 * (1 - clamp(value)) + 'px)'
-        }), delay);
+    }
+    return {cues,tails};
+  }
+  function readingOrder(cues) {
+    const ordered = [];
+    for (let index=0;index<cues.length;) {
+      const cue=cues[index++],row=cue.closest('tr');
+      if (!row){ordered.push(cue);continue;}
+      const line=[cue];
+      while (index<cues.length&&cues[index].closest('tr')===row) line.push(cues[index++]);
+      // A wrapped left cell does not precede the top line of the right cell.
+      const positions=line.map(node=>({node,box:node.getBoundingClientRect()})).sort((a,b)=>a.box.top-b.box.top);
+      for (let start=0;start<positions.length;){
+        let end=start+1;
+        while (end<positions.length&&positions[end].box.top-positions[start].box.top<5) end++;
+        ordered.push(...positions.slice(start,end).sort((a,b)=>a.box.left-b.box.left).map(entry=>entry.node));
+        start=end;
       }
     }
+    return ordered;
+  }
+  const wordFrame = value => ({
+    opacity:clamp(value), top:6*(1-value)+'px', filter:'blur('+4*(1-clamp(value))+'px)',
+  });
+  const rise = (node, px, duration, delay=0, spring=[300,22]) => animate(node,[...spring,duration],
+    value=>({...translate(px*(1-value)),opacity:clamp(value)}),delay);
+  function unqueue({cue,decorations}) {
+    delete cue.dataset.replyQueued;
+    for (const decoration of decorations) delete decoration.dataset.replyQueued;
+  }
+  function finishReplies() {
+    cancelAnimationFrame(frame);frame=nextWord=0;
+    for (;queueIndex<queued.length;queueIndex++) unqueue(queued[queueIndex]);
+    queued.length=queueIndex=0;following=false;frontier=scroll=null;
+  }
+  function keepReplyInView() {
+    if (!frontier?.isConnected || !scroll?.isConnected || !following) return false;
+    const inset=parseFloat(getComputedStyle(scroll).scrollPaddingBottom)||0;
+    const overflow=frontier.getBoundingClientRect().bottom-scroll.getBoundingClientRect().bottom+inset;
+    if (overflow>0) scroll.scrollTop+=overflow;
+    return true;
+  }
+  function revealNext() {
+    frame=0;
+    if (document.hidden||reduce?.matches){finishReplies();return;}
+    while (queueIndex<queued.length&&!queued[queueIndex].cue.isConnected) unqueue(queued[queueIndex++]);
+    if (performance.now()>=nextWord&&queueIndex<queued.length){
+      const item=queued[queueIndex++];unqueue(item);
+      animate(item.cue,word,wordFrame);
+      for(const decoration of item.decorations)rise(decoration,0,190);
+      nextWord=performance.now()+item.interval;
+      frontier=item.cue;keepReplyInView();
+    }
+    if(queueIndex<queued.length)frame=requestAnimationFrame(revealNext);
+    else{
+      if(following&&scroll?.isConnected)scroll.scrollTop=scroll.scrollHeight;
+      queued.length=queueIndex=0;following=false;frontier=scroll=null;
+    }
+  }
+  function revealReply(body, list) {
+    if (!canAnimate(body)) return;
+    const cues=readingOrder(tokenize(body,'reader-reply-word').cues);
+    if(!cues.length)return;
+    const interval=Math.min(stagger,Math.max(34,820/Math.max(1,cues.length-1))),marked=new Set();
+    for(const cue of cues){
+      cue.dataset.replyQueued='';
+      const decorations=[];
+      for(let block=cue.closest('li,.conversation-table,.conversation-code');block;
+        block=block.parentElement?.closest('li,.conversation-table,.conversation-code')){
+        if(marked.has(block))continue;
+        marked.add(block);block.dataset.replyQueued='';decorations.push(block);
+      }
+      queued.push({cue,decorations,interval});
+    }
+    if(!frontier?.isConnected)frontier=cues[0];
+    scroll=list;following=true;
+    if(!frame)frame=requestAnimationFrame(revealNext);
+  }
+  function revealMail(article) {
+    if(!canAnimate(article))return;
+    const demo=window.OrreryDemo?.on?window.OrreryDemo:null;
+    demo?.maskContent?.(article);
+    for(const row of article.querySelectorAll('.conversation-mail')){
+      rise(row.querySelector('.conversation-mail-sender'),0,250);
+      animate(row.querySelector('.conversation-mail-arrow'),[190,19,450],
+        value=>({transform:'translateX('+(-8*(1-value))+'px)',opacity:clamp(value)}),85);
+      for(const recipient of row.querySelectorAll('.conversation-mail-recipients :is(.conversation-mail-peer,.conversation-mail-more)'))
+        rise(recipient,4,330,170);
+      const subject=row.querySelector('.conversation-mail-subject');
+      const {cues,tails}=tokenize(subject,'reader-mail-word',4);
+      rise(subject,0,220,245);
+      cues.forEach((cue,index)=>animate(cue,word,wordFrame,245+stagger*index));
+      for(const tail of tails)rise(tail,0,220,245+stagger*cues.length);
+      rise(row.querySelector('.conversation-mail-importance'),0,260,275,[420,32]);
+    }
+  }
+  function flyPrompt(row, origin, duration=flightMs) {
+    if(!origin?.width||!row?.isConnected||!canAnimate(row))return;
+    if(window.OrreryDemo?.on)window.OrreryDemo.maskContent?.(row);
+    const box=(row.querySelector('.conversation-reference-body')||row).getBoundingClientRect();
+    const x=origin.right-box.right,y=origin.top-box.top,opacity=origin.opacity??.72;
+    if(!box.width||Math.abs(x)+Math.abs(y)<1)return;
+    const effect=animate(row,[300,22,duration],value=>({
+      transform:'translate('+((1-value)*x)+'px,'+((1-value)*y)+'px)',opacity:opacity+(1-opacity)*clamp(value),
+    }));
+    if(effect)flights.set(row,effect);
+  }
+  function promptPosition(row) {
+    const flight=flights.get(row);
+    if(flight?.playState!=='running')return null;
+    const remaining=flight.effect.getTiming().duration-(flight.currentTime||0);
+    if(remaining<55)return null;
+    const {top,right,width}=(row.querySelector('.conversation-reference-body')||row).getBoundingClientRect();
+    return {top,right,width,remaining,opacity:Number(getComputedStyle(row).opacity)};
+  }
+  function acknowledge(heading) {
+    if(!canAnimate(heading))return;
+    const tick=span('reader-sent-ack','✓');tick.setAttribute('aria-hidden','true');
+    tick.title='Received by terminal';heading.append(tick);
+    const show=rise(tick,4,340);
+    const remove=()=>tick.remove();
+    show.finished.then(()=>{
+      const fade=animate(tick,[300,22,240],value=>({opacity:1-clamp(value)}),600);
+      if(fade)fade.finished.then(remove,remove);else remove();
+    },remove);
   }
 
-  window.OrreryReaderReplyMotion = Object.freeze({enhanceCopies, confirmReference, revealReply});
+  window.OrreryReaderReplyMotion = Object.freeze({enhanceCopies,confirmReference,revealReply,revealMail,
+    flyPrompt,promptPosition,acknowledge,keepReplyInView,finishReplies,followingReply:()=>following,
+    stopFollowing:()=>{following=false;}});
 })();

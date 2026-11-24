@@ -1112,20 +1112,35 @@ async function send(){
  if(phase!=='review'||!prepared||!previewOK)return;
  if(!referenceCurrent(preparedReference)){cancelIntent();phase='editing';message='';render();return;}
  sendFeedback?.begin(q('.reader-send-confirm'));
- const sentText=prepared.text,p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target};
+ const box=q('.terminal-exact')?.getBoundingClientRect();
+ const origin=box&&{top:box.top,right:box.right,width:box.width};
+ const p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target,
+  text:prepared.text,origin,at:Date.now(),display:null};
  prepared=null;preparedReference=replyReference=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
+ if(history&&tab==='conversation')p.display=conversation()?.beginPending(p.text,origin);
  try{
   const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
   if(g!==generation||!sheet.open||document.hidden)return;
   if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
-  // Local display only, until the same words appear in the verified record.
-  if(phase==='accepted'&&history){tab='conversation';composer=false;conversation()?.addPending(sentText);}
-  if(phase==='accepted')scheduleReceiptDismissal();
-  render();
- }catch(_){if(g===generation&&sheet.open){phase='unknown';render();}}
+  showSendReceipt(p);
+ }catch(_){if(g===generation&&sheet.open){phase='unknown';showSendReceipt(p);}}
  finally{if(g===generation){operationController=null;if(!document.hidden&&sheet.open)poll();}}
+}
+function showSendReceipt(p){
+ const accepted=phase==='accepted';
+ if(accepted&&history){tab='conversation';composer=false;}
+ render();
+ if(history){
+  const reader=conversation();
+  // The verified record remains authoritative. The local copy only shows
+  // this send while terminal confirmation and the matching record arrive.
+  if(p.display)reader?.finishPending(p.display,accepted);
+  else if(accepted)reader?.addPending(p.text,p.origin,p.at);
+  if(accepted)window.OrreryReaderReplyMotion?.acknowledge(q('.reader-bar h2'));
+ }
+ if(accepted)scheduleReceiptDismissal();
 }
 function scheduleReceiptDismissal(){
  clearTimeout(receiptTimer);
@@ -1141,8 +1156,7 @@ async function status(){
   if(g!==generation||!sheet.open)return;
   if(result.intent!==p.intent||result.target?.revision!==p.target.revision||!sameTarget(result.target))throw Error('unavailable');
   phase=result.state==='accepted'?'accepted':result.state==='refused'||result.state==='cancelled'||result.state==='expired'?'refused':'unknown';
-  if(phase==='accepted')scheduleReceiptDismissal();
-  render();
+  showSendReceipt(p);
  }catch(_){if(g===generation&&sheet.open){message='Receipt unavailable. Input was not sent again.';render();}}
  finally{if(g===generation)operationController=null;}
 }
@@ -1394,7 +1408,7 @@ function pauseView(){
  attachmentController?.abort();attachmentController=null;operationController?.abort();operationController=null;generation++;
  // Settle the visible phase even if an already resolved response reaches its
  // hidden-page guard without rejecting the aborted request.
- if(phase==='sending'){phase='unknown';render();}
+ if(phase==='sending'){phase='unknown';showSendReceipt(receipt);}
  else if(phase==='preparing'){phase='editing';message='Input was not sent. Review again.';render();}
  previewOK=false;
  const review=q('#terminal-review');if(review)review.disabled=true;
