@@ -2332,9 +2332,15 @@ tmux() {
     case "$1" in
         list-sessions) echo PersistentBot ;;
         capture-pane) echo Claude ;;
-        paste-buffer) printf 'paste %s\n' "$7" ;;
-        send-keys) printf 'submit %s %s\n' "$3" "$4" ;;
-        show-environment|load-buffer) : ;;
+        display-message)
+            [[ "$*" == 'display-message -p -t =PersistentBot #{pane_id}' ]] || return 98
+            printf '%%1\n'
+            ;;
+        submit-input)
+            [[ "$2" == '%1' && -s "$3" ]] || return 98
+            printf 'submit %s %s\n' "$2" "$(cat "$3")"
+            ;;
+        show-environment) : ;;
         *) return 98 ;;
     esac
 }
@@ -2347,7 +2353,10 @@ deliver_worker "$3" PersistentBot 12 Sender subject high 1
     )
     assert result.returncode == 0, result.stderr
     if mode == "interactive":
-        assert result.stdout.splitlines() == ["paste PersistentBot", "submit PersistentBot C-m", "success watcher"]
+        assert result.stdout.splitlines() == [
+            "submit %1 ORRERY Mail notification: message from Sender [high]: subject. Please call fetch_inbox to read it.",
+            "success watcher",
+        ]
         assert not signal_file.exists()
     else:
         assert result.stdout.splitlines() == ["headless_reply_failed persistent-headless"]

@@ -9,13 +9,14 @@ import tempfile
 import pytest
 from test_global_runtime_client_s2a import api,context
 from test_global_runtime_delivery import server
+from _tmux_prompt_editor import editor_command, wait_for_prompt
 
 ROOT=Path(__file__).resolve().parents[1]
 TMUX=runpy.run_path(str(ROOT/'bin/lib/runtime_tmux.py'))
 TARGET=runpy.run_path(str(ROOT/'bin/lib/runtime_target.py'))
 
 @pytest.fixture
-def target(server,monkeypatch):
+def target(server,monkeypatch,request,tmp_path):
     binary=shutil.which('tmux')
     if binary is None:pytest.skip('tmux unavailable')
     client=context(server,window=False)
@@ -24,8 +25,14 @@ def target(server,monkeypatch):
     directory=Path(base.name).resolve();socket=directory/'fixture.sock'
     command=[binary,'-S',str(socket),'-f','/dev/null']
     env={k:v for k,v in os.environ.items() if k not in ('TMUX','TMUX_PANE')}
+    env.pop('LC_ALL', None)
+    env['LC_CTYPE'] = 'C.UTF-8'
+    has_editor = getattr(request, 'param', False)
+    received = tmp_path/'target-submissions.jsonl'
     try:
-        created=subprocess.run([*command,'new-session','-d','-s','Beta','sleep 60'],env=env,capture_output=True,text=True)
+        created=subprocess.run([*command,'new-session','-d','-s','Beta',
+                                editor_command(received) if has_editor else 'sleep 60'],
+                               env=env,capture_output=True,text=True)
         assert created.returncode==0,created.stderr
         fields=subprocess.check_output([*command,'display-message','-p','#{pid}\t#{pane_id}\t#{pane_pid}\t#{session_id}'],env=env,text=True).strip().split('\t')
         monkeypatch.setenv('TMUX_TMPDIR',str(directory))
@@ -36,7 +43,9 @@ def target(server,monkeypatch):
         runtime_api={**api,'process_start':lambda pid,**kw:'fixture-start'}
         operator=TMUX['module_api']('runtime_operator')['RuntimeOperator'](server['config_path'],api=runtime_api)
         targets=TARGET['Targets'](operator,api=runtime_api,transport_api=TMUX)
-        yield dict(client=client,targets=targets,transport=TMUX['Transport'](socket,binary=binary),command=command,env=env,live=live,server=server,pane=fields[1],session=fields[3],monkeypatch=monkeypatch)
+        if has_editor:
+            wait_for_prompt(command, fields[1], env=env)
+        yield dict(client=client,targets=targets,transport=TMUX['Transport'](socket,binary=binary),command=command,env=env,live=live,server=server,pane=fields[1],session=fields[3],monkeypatch=monkeypatch,received=received)
     finally:
         subprocess.run([*command,'kill-server'],env=env,capture_output=True,check=False)
         base.cleanup()
@@ -184,8 +193,10 @@ def test_real_legacy_watcher_keeps_global_signal_and_delivers_healthy_legacy(tar
     for recipient,mid in [('Beta',1),('Gamma',2)]:
         directory=signals/recipient;directory.mkdir(mode=0o700,parents=True)
         (directory/(str(mid)+'.signal')).write_text(json.dumps({'message':{'id':mid,'from':'FixtureSender','subject':'fixture','body':'synthetic'}}))
-    subprocess.run([*target['command'],'new-session','-d','-s','Gamma',"printf 'Claude\\n❯ \\n'; cat"],env=target['env'],check=True,capture_output=True)
+    received=tmp_path/'gamma-submissions.jsonl'
+    subprocess.run([*target['command'],'new-session','-d','-s','Gamma',editor_command(received)],env=target['env'],check=True,capture_output=True)
     gamma_pane,gamma_pid=subprocess.check_output([*target['command'],'list-panes','-s','-t','=Gamma','-F','#{pane_id}\t#{pane_pid}'],env=target['env'],text=True).strip().split('\t')
+    wait_for_prompt(target['command'], gamma_pane, env=target['env'])
     commands=tmp_path/'commands';commands.mkdir()
     ps=commands/'ps';ps.write_text('#!/bin/sh\ncase "$*" in "-p '+str(target['live']['pid'])+' -o lstart="|"-p '+gamma_pid+' -o lstart=") printf "%s\\n" "fixture-start";; *) exit 2;; esac\n');ps.chmod(0o700)
     env={k:v for k,v in os.environ.items() if not k.startswith(('AGENTSTACK_','MCP_AGENT_')) and k not in ('TMUX','TMUX_PANE','PROJECT_KEY','PARENT_AGENT','AGENT_NAME','CHILD_REGISTRATION_TOKEN')}
@@ -201,9 +212,9 @@ def test_real_legacy_watcher_keeps_global_signal_and_delivers_healthy_legacy(tar
     assert (signals/'Beta/1.signal').exists() and not (signals/'Gamma/2.signal').exists()
     beta=subprocess.check_output([*target['command'],'capture-pane','-p','-t',target['pane']],env=target['env'],text=True)
     assert 'ORRERY Mail notification' not in beta
-    gamma=subprocess.check_output([*target['command'],'capture-pane','-p','-t',gamma_pane],env=target['env'],text=True)
-    # Read by exact pane ID below if tmux's display target needs disambiguation.
-    assert 'ORRERY Mail notification' in gamma
+    [delivered]=[json.loads(line) for line in received.read_text().splitlines()]
+    assert delivered.startswith('ORRERY Mail notification: message from FixtureSender')
+    assert 'fixture' in delivered
 
 
 def test_same_target_with_two_authorized_principals_invalidates_old_digest(target):

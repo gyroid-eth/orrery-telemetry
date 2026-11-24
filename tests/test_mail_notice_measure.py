@@ -472,17 +472,30 @@ def test_real_tty_no_echo_and_no_notice_before_closed_paste_and_cr():
     process = subprocess.Popen(sink_arguments('--event-fd', str(write_fd)), stdin=slave,
         stdout=slave, stderr=subprocess.PIPE, pass_fds=(write_fd,))
     pending = bytearray()
+
+    def read_screen_until(marker):
+        screen = bytearray()
+        deadline = time.monotonic() + 5
+        while marker not in screen:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0 and select.select([master], [], [], remaining)[0], bytes(screen)
+            screen.extend(os.read(master, 65536))
+        assert b'ORRERY Mail' not in screen
+        return screen
+
     try:
         assert receive_line(read_fd, pending)['event'] == 'sink_ready'
+        assert b'measurement-ready' in read_screen_until('❯ '.encode())
         assert not termios.tcgetattr(slave)[3] & termios.ECHO
         os.write(master, m.BEGIN + prompt() + b'\r')
+        assert b'[Pasted text #1]' not in read_screen_until('Pasting…'.encode())
         assert not select.select([read_fd], [], [], .1)[0]
         os.write(master, m.END)
+        read_screen_until(b'[Pasted text #1]')
         assert not select.select([read_fd], [], [], .1)[0]
         os.write(master, b'\r')
         assert receive_line(read_fd, pending)['event'] == 'receiver_notice'
-        screen = os.read(master, 65536)
-        assert b'measurement-ready' in screen and b'ORRERY Mail' not in screen
+        assert b'[Pasted text #1]' not in read_screen_until('❯ '.encode())
     finally:
         process.terminate()
         process.wait(timeout=5)
