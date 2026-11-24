@@ -111,6 +111,7 @@ def test_child_provider_receives_pinned_target_after_login_defaults(tmp_path, co
 
     env, _ = _launch_env(tmp_path, codex=codex)
     env["AGENTSTACK_PYTHON"] = sys.executable
+    env["AGENTSTACK_RUNTIME_DIR"] = str(tmp_path / "child's runtime")
     # A supported hooks override may customize helpers without duplicating
     # launch policy. The resolver must come from spawn_child.sh's own version.
     custom_hooks = tmp_path / "custom-hooks"
@@ -145,6 +146,8 @@ def test_child_provider_receives_pinned_target_after_login_defaults(tmp_path, co
     # namespace/protection. The child-scoped snapshots remain authoritative.
     run_env = {**env, **tmux_env, "AGENTSTACK_CODEX_BIN": str(cli), "CLAUDE_CHILD_BIN": str(cli), "AGENTSTACK_HOOKS_DIR": str(hooks),
                "PROJECT_KEY": "stale-login", "AGENTSTACK_PROJECT_KEY": "stale-login",
+               "AGENTSTACK_RUNTIME_DIR": "/stale/runtime", "AGENTSTACK_MCP_URL": "http://127.0.0.1:8/mcp",
+               "AGENTSTACK_MAIL_DISABLED": "1",
                "AGENTSTACK_EXTRA_PROTECTED_ROOTS": "/stale/login/extra",
                "AGENTSTACK_PROTECTED_ROOTS": "/stale/login/root", "GIT_DIR": "/stale/.git"}
     result = subprocess.run(["bash", "-c", inner], env=run_env, cwd=tmp_path,
@@ -153,6 +156,9 @@ def test_child_provider_receives_pinned_target_after_login_defaults(tmp_path, co
     seen = json.loads(dump.read_text())
     assert seen["cwd"] == str(nested)
     assert seen["env"]["PROJECT_KEY"] == "/shared/project"
+    if codex:
+        for key in ("AGENTSTACK_RUNTIME_DIR", "AGENTSTACK_PROJECT_KEY", "AGENTSTACK_MCP_URL"):
+            assert seen["env"][key] == tmux_env[key]
     assert seen["env"]["AGENTSTACK_PROTECTED_ROOTS"] == f"{vault}:{nested}"
     assert seen["env"]["AGENTSTACK_EXTRA_PROTECTED_ROOTS"] == str(vault)
     assert seen["env"]["AGENTSTACK_PROTECTION_CONTEXT"] == "workspace-v1"
