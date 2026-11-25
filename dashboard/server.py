@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 48
+API_GENERATION = 52
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -114,9 +114,10 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import agent_card, legacy_http_admission, claude_history, agy_history
+    from dashboard import agent_card, agent_process, legacy_http_admission, claude_history, agy_history
 except ModuleNotFoundError:  # direct script execution
     import agent_card
+    import agent_process
     import legacy_http_admission
     import claude_history
     import agy_history
@@ -2124,7 +2125,45 @@ def _card_claude_screen_mode(screen_launch, definition, project):
     return None
 
 
-def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None):
+def _card_process_permissions(row, session, kind, cwd, process_tree, screen_launch):
+    """Read the tools of a running agent that has no saved launch settings."""
+    pid = _agent_process_pid(session.get("pane_pid"), process_tree, row.get("program"))
+    if pid is None:
+        return {}
+    observed = agent_process.observe(
+        pid, process_tree, kind, cwd=cwd,
+        claude_json=_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"),
+        screen_mode=screen_launch["computer_use"] if screen_launch else None, name=row["name"])
+    return {**observed, "permission_source": "process"} if observed else {}
+
+
+def _saved_permission_candidate(name, program, registration):
+    """A Claude agent with no launch record of its own keeps its permissions in the saved record."""
+    return (program in {"claude", "claude-code"} and registration is not None and _valid(name)
+            and not os.path.lexists(os.path.join(RUNTIME_DIR, "child-agents", f"{name}.json")))
+
+
+def _card_saved_permissions(row, session, registration, resume_launch):
+    """How a saved choice reaches this agent, and what its next start gets."""
+    name = row["name"]
+    if session.get("mail_disabled") == "1" or not _saved_permission_candidate(name, row.get("program"), registration):
+        return {}
+    try:
+        saved = _agent_permissions_module().read(
+            RUNTIME_DIR, name, agent_id=registration["agent_id"], project_key=registration["project_key"]) or {}
+    except (ValueError, OSError, RuntimeError):
+        saved = {}  # Saving again replaces an unreadable record.
+    running = row.get("running") is True
+    if row.get("lifecycle") == "persistent" or (running and not resume_launch):
+        apply = "next_start"  # Its own launcher starts it; the dashboard must not restart it differently.
+    else:
+        apply = "restart" if running else "resume"
+    return {"permission_save_supported": True, "permission_apply": apply,
+            **{key + "_next": saved[key] for key in ("computer_use", "browser_use") if key in saved}}
+
+
+def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None,
+                       process_tree=None):
     name, program = row["name"], row.get("program")
     kind = agent_card.HARNESS_KIND.get(program)
     cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
@@ -2247,6 +2286,20 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
             # An older conversation-only launch has no evidence for its tools.
             computer = browser = None
 
+    observed = {}
+    if (permission_reason == _PERMISSION_SETTINGS_MISSING and computer is None and browser is None
+            and row.get("running") is True and session.get("mail_disabled") != "1"):
+        observed = _card_process_permissions(row, session, kind, cwd, process_tree, screen_launch)
+        computer, browser = observed.pop("computer_use", None), observed.pop("browser_use", None)
+    resume_launch = observed.pop("resume_launch", False)
+    if permission_reason == _PERMISSION_SETTINGS_MISSING and kind == "claude":
+        saved = _card_saved_permissions(row, session, registration, resume_launch)
+        observed.update(saved)
+        if saved.get("permission_apply") in ("restart", "resume"):
+            permission_reason = ""
+        elif saved:
+            permission_reason = "Saved permissions apply at the agent's next start"
+
     if row.get("lifecycle") == "persistent":
         permission_reason = "Persistent agents cannot change permissions on resume"
     elif row.get("surface") == "codex-app" or program == "codex-app":
@@ -2259,7 +2312,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
            if permission_reason != _PERMISSION_UNSUPPORTED else {}),
         "cwd": cwd, "model_id": model, "effort": effort, "harness_kind": kind,
         "ctx_window_tokens": harness_context.window_tokens(row.get("ctx_window")) if kind else None,
-        "computer_use": computer, "browser_use": browser,
+        "computer_use": computer, "browser_use": browser, **observed,
         "parent_state": parent_state, "parent_agent": parent,
     }
 
@@ -2463,7 +2516,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 registration = {"agent_id": registered["id"], "project_key": project_key,
                                 "program": registered["program"], "model": registered["model"]}
         row.update(_agent_card_fields(row, sessions.get(name, {}), runtime_by_name.get(name, {}),
-                                      registration, codex_catalog, screen_launch=screen_launches.get(name)))
+                                      registration, codex_catalog, screen_launch=screen_launches.get(name),
+                                      process_tree=process_tree))
         row.setdefault("permission_resume_supported", False)
         row.setdefault("permission_resume_reason", _PERMISSION_UNSUPPORTED)
         row["resume_capability"] = _resume_capability_for_row(
@@ -2475,6 +2529,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
         if row.get("mail_status") == "unavailable":
             row.update(permission_resume_supported=False,
                        permission_resume_reason="Conversation-only resume has no saved permissions")
+            if row.pop("permission_save_supported", None):
+                row.pop("permission_apply", None)
         elif row["permission_resume_supported"] and row["resume_capability"] not in {
                 "ready", "verification_required", "not_required"}:
             row.update(permission_resume_supported=False,
@@ -4095,6 +4151,13 @@ def _claude_resume_tools_capability(session: str, sid: str, transcript: str) -> 
     return None
 
 
+def _revoke_saved_generation(record, generation):
+    try:
+        _agent_permissions_module().revoke(RUNTIME_DIR, record, generation)
+    except (OSError, ValueError, RuntimeError, sqlite3.Error):
+        logging.warning("could not revoke an unused computer use generation for %s", record.get("agent_name"))
+
+
 def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: bool = False,
               conversation_tools: dict | None = None, expected_history_session_id: str | None = None) -> dict:
     """retire 済み / 過去セッションを tmux 再開する。
@@ -4222,6 +4285,7 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             allowed = _child_tools_module().claude_chrome_allowed_tools()
             inner += ' --allowed-tools ' + shlex.quote(','.join(allowed))
 
+    saved_record = saved_generation = None
     mail_was_retired = False
     mail_restore_attempted = False
     registration = None
@@ -4253,6 +4317,19 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
                 "config_unrestorable",
                 "this conversation was started with base/tools, and without its child "
                 "state it would resume with all of the user's MCP servers")
+        if child_state is None and not chrome:
+            # An agent without a launch record resumes with the permissions saved for it.
+            saved_permissions = _agent_permissions_module()
+            try:
+                saved_arguments, saved_record, saved_generation = saved_permissions.apply_to_claude(
+                    RUNTIME_DIR, session, [ABS_CLAUDE, "--resume", sid, "-n", session], launcher="resume",
+                    cwd=cwd, claude_json=_env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json"),
+                    agent_id=registration["agent_id"], project_key=registration["project_key"],
+                    origin=f"http://127.0.0.1:{PORT}", mail_env=MAIL_ENV_PATH)
+            except saved_permissions.AgentPermissionsError as exc:
+                raise _ResumeCapabilityError("config_unrestorable", str(exc)) from exc
+            if saved_arguments:
+                inner += " " + shlex.join(saved_arguments)
         if child_state is not None:
             tools = _child_tools_module()
             screen = tools.screen_definition(
@@ -4287,6 +4364,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
                                          restore_mail=mail_restore_attempted and mail_was_retired)
         if mail_restore_attempted and mail_was_retired and legacy_generation is None:
             _rollback_claude_mail(session, registration, result)
+        if saved_generation:
+            _revoke_saved_generation(saved_record, saved_generation)
         return result
     resume_environment = {
         "AGENT_NAME": session, "AGENTSTACK_RESERVED_IDENTITY": "1", "CLAUDECODE": "1",
@@ -4342,6 +4421,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
         open_terminal=open_terminal,
         replace_husk=replace_husk,
     )
+    if not launch.get("ok") and saved_generation:
+        _revoke_saved_generation(saved_record, saved_generation)
     if launch.get("ok"):
         if legacy_generation is not None:
             try:
@@ -7985,6 +8066,105 @@ def _permission_resume_material(session, sid, *, live=None):
 
 
 
+def _saved_permission_session(session):
+    """The registration of an agent whose permissions are saved, not launch-recorded; else None."""
+    if session.startswith(("warm-", "pending-")) or session in _persistent_profiles():
+        return None
+    registration = _claude_registration(session)
+    program = _agent_program(session)
+    if not _saved_permission_candidate(session, program, registration) or registration["program"] != program:
+        return None
+    return registration
+
+
+def _saved_permission_material(session, sid, registration, *, live=None):
+    """The same conversation, started by the dashboard's Resume when it is running."""
+    if not isinstance(sid, str) or not _PERMISSION_HISTORY_ID.fullmatch(sid):
+        raise ValueError("A valid history_session_id is required")
+    if live:
+        if not (re.fullmatch(r"\$\d+", live.get("session_id", "")) and live.get("created", 0) > 0):
+            raise ValueError(_PERMISSION_HISTORY_UNVERIFIED)
+        if live.get("mail_disabled") == "1":
+            raise ValueError("Conversation-only resume has no saved permissions")
+    binding = _claude_history_binding(session, session_created=live["created"] if live else None)
+    if binding.get("history_binding") != "bound" or binding.get("history_session_id") != sid:
+        raise ValueError(_PERMISSION_HISTORY_UNVERIFIED)
+    if live:
+        if not binding.get("history_receipt_ts"):
+            raise ValueError(_PERMISSION_HISTORY_UNVERIFIED)
+        tree = _process_tree_snapshot()
+        pid = _agent_process_pid(live.get("pane_pid"), tree, registration["program"])
+        own = agent_process.argv(pid) if pid else None
+        if not own:
+            raise ValueError(_PERMISSION_HISTORY_UNVERIFIED)
+        if not agent_process.dashboard_resume(own, session):
+            raise ValueError("Saved permissions apply at the agent's next start")
+    elif _claude_conversation_reason(session)[1]:
+        raise ValueError("Conversation-only resume has no saved permissions")
+
+
+def _jump_with_saved_permission(session, registration, permission, *, open_terminal, check_only):
+    """Save one permission, then resume the same conversation with it."""
+    sid = permission["history_session_id"]
+    boot = _child_resume_module().boot_time()
+    live = _child_session_live(session, boot)
+    if live is None:
+        return {"ok": False, "error": "Cannot confirm whether the agent has stopped"}
+    current = tmux_state().get(session) if live else None
+    if live and not current:
+        return {"ok": False, "error": _PERMISSION_HISTORY_UNVERIFIED}
+    if live and not check_only:
+        found = lookup_agent(session)
+        if not found or found.get("category") != "finished":
+            return {"ok": False, "error": "Exit the agent and confirm it has stopped before changing tools"}
+    _saved_permission_material(session, sid, registration, live=current if check_only else None)
+    if check_only:
+        if not os.path.isfile(ABS_CLAUDE):
+            return _resume_unavailable("cli_missing")
+        return {"ok": True, "action": "validated"}
+    path = _transcript_path(session)
+    if not path or os.path.basename(path)[:-6] != sid:
+        return {"ok": False, "error": "The agent's conversation changed before resume"}
+    key = "computer_use" if "computer_use" in permission else "browser_use"
+    _agent_permissions_module().save(
+        RUNTIME_DIR, session, agent_id=registration["agent_id"], project_key=registration["project_key"],
+        program=registration["program"], **{key: permission[key]})
+    _invalidate_resume_capability_cache(session)
+    capability = _resume_capability(session, registration["program"], category="gone", open_terminal=open_terminal)
+    if capability not in ("ready", "verification_required"):
+        return {**_resume_unavailable(capability), "saved": True}
+    result = do_resume(session, open_terminal=open_terminal)
+    if result.get("ok") and result.get("action") == "resumed":
+        result["tools_changed"] = True
+    return result
+
+
+def save_agent_permission(body: dict) -> dict:
+    """POST /api/agent-permissions: save one permission for the agent's next start."""
+    session = body.get("session")
+    choices = {key: body[key] for key in ("computer_use", "browser_use") if key in body}
+    if not isinstance(session, str) or not _valid(session):
+        return {"ok": False, "error": "invalid session name"}
+    if (set(body) - {"session", "computer_use", "browser_use"} or len(choices) != 1
+            or ("computer_use" in choices and choices["computer_use"] not in ("off", "view", "control"))
+            or ("browser_use" in choices and type(choices["browser_use"]) is not bool)):
+        return {"ok": False, "error": "Choose one valid computer_use or browser_use value"}
+    registration = _claude_registration(session)
+    program = _agent_program(session)
+    if (not _saved_permission_candidate(session, program, registration)
+            or registration["program"] != program):
+        return {"ok": False, "error": "Saved permissions are for Claude Code agents without a launch record"}
+    try:
+        record = _agent_permissions_module().save(
+            RUNTIME_DIR, session, agent_id=registration["agent_id"], project_key=registration["project_key"],
+            program=program, **choices)
+    except (ValueError, OSError, RuntimeError) as exc:
+        return {"ok": False, "error": str(exc)}
+    _invalidate_resume_capability_cache(session)
+    return {"ok": True, "action": "saved",
+            "saved": {key: record[key] for key in ("computer_use", "browser_use") if key in record}}
+
+
 def do_jump(session: str, *, open_terminal: bool | None = None,
             base=_TOOLS_UNSET, tools=_TOOLS_UNSET, permission=_TOOLS_UNSET, check_only=_TOOLS_UNSET) -> dict:
     """A tools request selects tools for a stopped agent's next launch."""
@@ -8005,6 +8185,16 @@ def do_jump(session: str, *, open_terminal: bool | None = None,
                             and type(permission["browser_use"]) is bool))):
             return {"ok": False, "error": "permission requires a history_session_id and one valid computer_use or browser_use value"}
         requested = True
+        saved_registration = _saved_permission_session(session)
+        if saved_registration is not None:
+            try:
+                with _child_resume_module().tools_change_lock(pathlib.Path(RUNTIME_DIR), session):
+                    return _jump_with_saved_permission(session, saved_registration, permission,
+                                                       open_terminal=open_terminal, check_only=check_only is True)
+            except _ResumeCapabilityError as exc:
+                return _resume_unavailable(exc.code)
+            except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                return {"ok": False, "error": str(exc)}
     if not requested and not os.path.lexists(os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")):
         return _do_jump(session, open_terminal=open_terminal)
     try:
@@ -9386,6 +9576,26 @@ def _spawn_request(payload: dict) -> tuple[dict | None, dict | None]:
 _CLAUDE_CHROME_DEVICE_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
 
+@functools.lru_cache(maxsize=1)
+def _agent_permissions_module():
+    """Load hooks/agent_permissions.py, the saved permissions of agents without a launch record.
+
+    Cached: the roster reads saved records on every refresh."""
+    for path in (
+        os.path.join(HOOKS_DIR, "agent_permissions.py"),
+        os.path.join(os.path.dirname(HERE), "hooks", "agent_permissions.py"),
+    ):
+        if not os.path.isfile(path):
+            continue
+        spec = importlib.util.spec_from_file_location("agentstack_agent_permissions", path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    raise RuntimeError("agent_permissions.py is unavailable")
+
+
 def _child_tools_module():
     """Load hooks/child_tools.py, the one parser of base/tools selections."""
     for path in (
@@ -10391,6 +10601,10 @@ def do_exit(session: str, *, history_session_id=_TOOLS_UNSET) -> dict:
             live = sessions.get(session)
             if not live or not re.fullmatch(r"\$\d+", live.get("session_id", "")):
                 return {"ok": False, "error": _PERMISSION_HISTORY_UNVERIFIED}
+            saved_registration = _saved_permission_session(session)
+            if saved_registration is not None:
+                _saved_permission_material(session, history_session_id, saved_registration, live=live)
+                return _do_exit(session, sessions=sessions, verified_program=saved_registration["program"])
             program, *_ = _permission_resume_material(session, history_session_id, live=live)
             return _do_exit(session, sessions=sessions, verified_program=program)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
@@ -11388,7 +11602,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:payload=json.loads(self.rfile.read(length))
                 except (json.JSONDecodeError,UnicodeDecodeError) as exc:
                     raise BackendError('QUERY_INVALID',400) from exc
-                if isinstance(payload, dict) and (
+                if path == "/api/agent-permissions" or isinstance(payload, dict) and (
                         path == "/api/jump" and ("permission" in payload or "check_only" in payload)
                         or path == "/api/exit" and "history_session_id" in payload):
                     raise BackendError('QUERY_INVALID',400)
@@ -11402,7 +11616,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._global_failure(exc)
             return
-        if path not in ("/api/jump", "/api/kill", "/api/exit",
+        if path not in ("/api/jump", "/api/kill", "/api/exit", "/api/agent-permissions",
                         "/api/annotate", "/api/spawn", "/api/reactivate",
                         "/api/jserr", "/api/wsl-anchor/lease"):
             self._send(404, b"not found", "text/plain")
@@ -11470,7 +11684,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if FRESH_MODE:
             if (path == "/api/jump" and ("permission" in body or "check_only" in body)
-                    or path == "/api/exit" and "history_session_id" in body):
+                    or path == "/api/exit" and "history_session_id" in body
+                    or path == "/api/agent-permissions"):
                 result = {"ok": False, "error": "Permission changes require a legacy CLI agent"}
             elif path=='/api/spawn':result=do_spawn(body)
             elif path in {'/api/jump','/api/exit','/api/kill'}:
@@ -11501,6 +11716,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = {"ok": False, "error": "Permission changes require a legacy CLI agent"}
             else:
                 result = do_exit(session, history_session_id=body["history_session_id"])
+        elif path == "/api/agent-permissions":
+            result = save_agent_permission(body)
         elif path == "/api/annotate":
             # 役割ラベルの upsert/削除。name は session でも name でも受ける。
             nm = body.get("name") or body.get("session") or ""

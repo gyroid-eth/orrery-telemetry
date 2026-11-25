@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Show or apply the computer and browser use saved for an agent.
+
+The dashboard saves these for agents that have no launch record of their own.
+The dashboard Resume and `agentstack-persistent` apply them by themselves. A
+launch script that starts Claude another way puts `exec` in front of its own
+command, unchanged:
+
+    agentstack-agent-permissions exec SampleAgent -- claude --model sample --channels plugin:sample
+
+`exec` appends the saved arguments (Claude in Chrome on or off, and the gated
+`orrery-screen` server for computer use) and replaces itself with the command.
+Without a saved record the command runs exactly as given.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import sys
+
+
+def _module():
+    home = Path(os.environ.get("AGENTSTACK_HOME") or Path(__file__).resolve().parent.parent)
+    for candidate in (Path(os.environ.get("AGENTSTACK_HOOKS_DIR", home / "hooks")), home / "hooks"):
+        target = candidate / "agent_permissions.py"
+        if target.is_file():
+            return runpy.run_path(str(target))
+    raise SystemExit("agentstack-agent-permissions: agent_permissions.py is unavailable")
+
+
+def _runtime():
+    return Path(os.path.expanduser(os.environ.get("AGENTSTACK_RUNTIME_DIR", "~/.agentstack/runtime")))
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="agentstack-agent-permissions", description=__doc__.split("\n\n")[0])
+    commands = parser.add_subparsers(dest="operation", required=True)
+    show = commands.add_parser("show", help="print the saved record as JSON")
+    show.add_argument("agent")
+    run = commands.add_parser("exec", help="apply the saved record to a Claude command and run it")
+    run.add_argument("agent")
+    run.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    module = _module()
+    error = module["AgentPermissionsError"]
+    runtime = _runtime()
+    try:
+        if args.operation == "show":
+            record = module["read"](runtime, args.agent)
+            print(json.dumps(record or {}, indent=2, sort_keys=True))
+            return 0
+        command = args.command[1:] if args.command[:1] == ["--"] else args.command
+        if not command:
+            parser.error("exec needs the command after --")
+        executable = shutil.which(command[0])
+        if not executable:
+            raise SystemExit(f"agentstack-agent-permissions: {command[0]} was not found")
+        extra = []
+        if Path(executable).name == "claude" or Path(command[0]).name == "claude":
+            extra, _record, _generation = module["apply_to_claude"](
+                runtime, args.agent, command, launcher="exec", cwd=os.getcwd(),
+                claude_json=os.path.expanduser(os.environ.get("AGENTSTACK_CLAUDE_JSON", "~/.claude.json")),
+                mail_env=os.environ.get("AGENTSTACK_MAIL_ENV") or None)
+        elif module["read"](runtime, args.agent):
+            raise SystemExit("agentstack-agent-permissions: saved permissions apply to Claude Code commands only")
+    except error as exc:
+        raise SystemExit(f"agentstack-agent-permissions: {exc}") from None
+    os.execv(executable, [*command, *extra])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

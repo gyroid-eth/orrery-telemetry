@@ -86,6 +86,13 @@ def project_agent(row):
     # task/group metadata or the remaining annotation dictionary.
     if isinstance(role, str) and role.strip() and not any(ord(c) < 32 or ord(c) == 127 for c in role):
         result['role'] = role.strip()[:40]
+    # Tool permissions are closed enums; nothing else about the launch crosses.
+    for key in ('computer_use', 'computer_use_next'):
+        if row.get(key) in ('off', 'view', 'control'):
+            result[key] = row[key]
+    for key in ('browser_use', 'browser_use_next'):
+        if type(row.get(key)) is bool:
+            result[key] = row[key]
     duration = row.get('work_disp')
     if (act == 'work' and isinstance(duration, str)
             and re.fullmatch(r'[0-9]{1,6}(?:s|m[0-9]{2}s|h[0-9]{2}m)', duration)):

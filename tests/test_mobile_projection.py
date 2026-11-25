@@ -15,6 +15,18 @@ def test_only_the_bounded_display_role_is_projected():
     assert row['role']=='R'*40 and 'annot' not in row and 'task' not in row and 'group' not in row
 
 
+def test_tool_permissions_are_closed_values_only():
+    from dashboard.mobile_projection import project_agent
+    row = project_agent(dict(name='Alpha', computer_use='off', computer_use_next='control',
+                             browser_use=True, browser_use_next=False, permission_source='process'))
+    assert {key: row.get(key) for key in ('computer_use', 'computer_use_next', 'browser_use', 'browser_use_next')} == {
+        'computer_use': 'off', 'computer_use_next': 'control', 'browser_use': True, 'browser_use_next': False}
+    assert 'permission_source' not in row
+    for invalid in (None, 'Control', 1, {'mode': 'control'}):
+        unknown = project_agent(dict(name='Alpha', computer_use=invalid, browser_use=invalid))
+        assert 'computer_use' not in unknown and 'browser_use' not in unknown
+
+
 def test_working_duration_is_only_the_current_upstream_display():
     from dashboard.mobile_projection import project_agent
     raw = dict(name='SampleAgent', running=True, state='run', act_state='work', work_disp='2m05s')
