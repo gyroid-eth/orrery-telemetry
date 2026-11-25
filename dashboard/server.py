@@ -289,6 +289,8 @@ def _render_dashboard_index(
     }
     if _dsh_enabled():
         config["dshEnabled"] = True
+    if not GLOBAL_MODE and _is_wsl():
+        config["mobileServe"] = True
     replacement = (
         "const AGENTSTACK_SERVER_DEFAULTS="
         + json.dumps(config, ensure_ascii=True, separators=(",", ":"))
@@ -10738,6 +10740,50 @@ def _screen_http():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _phone_serve(self):
+        def reply(code, payload):
+            self._send(code, json.dumps(payload).encode(), 'application/json; charset=utf-8')
+
+        if GLOBAL_MODE or not _is_wsl():
+            reply(404, {'ok': False, 'error': 'serve_unsupported'})
+            return
+        from ipaddress import ip_address
+        host = self.headers.get('Host', '')
+        local_hosts = {f'{name}:{self.server.server_port}' for name in ('localhost', '127.0.0.1', '[::1]')}
+        origin = self.headers.get('Origin')
+        posting = self.command == 'POST'
+        if (not ip_address(self.client_address[0]).is_loopback or host not in local_hosts
+                or not _same_origin_request(self)
+                or (posting or origin is not None) and origin != f'http://{host}'):
+            self.close_connection = True
+            reply(403, {'ok': False, 'error': 'serve_local_browser_required'})
+            return
+        if self.path != '/api/mobile-serve':
+            self.close_connection = True
+            reply(400, {'ok': False, 'error': 'serve_request_invalid'})
+            return
+        try:
+            from dashboard import mobile_serve
+        except ModuleNotFoundError:
+            import mobile_serve
+        if not posting:
+            reply(200, mobile_serve.preview())
+            return
+        lengths = self.headers.get_all('Content-Length', [])
+        if (self.headers.get_content_type() != 'application/json' or self.headers.get('Transfer-Encoding')
+                or len(lengths) != 1 or not re.fullmatch(r'[0-9]{1,3}', lengths[0])
+                or not 0 < int(lengths[0]) <= 256):
+            self.close_connection = True
+            reply(400, {'ok': False, 'error': 'serve_confirmation_invalid'})
+            return
+        try:
+            body = json.loads(self.rfile.read(int(lengths[0])))
+        except ValueError:
+            reply(400, {'ok': False, 'error': 'serve_confirmation_invalid'})
+            return
+        result = mobile_serve.confirm(body)
+        reply(200 if result['ok'] else 409, result)
+
     def _fresh_get(self, path):
         from agentstack_mail.storage_origin_contract import B1Error
         # Explicit allow-list: no unknown fresh read enters a legacy Mail,
@@ -10972,6 +11018,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == '/api/mobile-serve':
+            self._phone_serve()
+            return
         if path.startswith("/api/computer-use") and path in _screen_http().PATHS:
             _screen_http().respond(self, path, RUNTIME_DIR, HOOKS_DIR)
             return
@@ -11319,6 +11368,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_post(self):
         path = urlparse(self.path).path
+        if path == '/api/mobile-serve':
+            self._phone_serve()
+            return
         if path.startswith("/api/computer-use") and path in _screen_http().PATHS:
             _screen_http().respond(self, path, RUNTIME_DIR, HOOKS_DIR)
             return

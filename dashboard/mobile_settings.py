@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phone access settings and the launchd job that runs the mobile reader.
+"""Phone access settings and the service that runs the mobile reader.
 
 The cockpit's Settings panel calls this through ``agentstack-mobile``; a
 person can call it the same way. It owns three things and nothing else:
@@ -7,12 +7,12 @@ person can call it the same way. It owns three things and nothing else:
 * ``~/.agentstack/mobile.json`` (mode 0600): the two switches, the owner
   login and public origin the reader admits, and when the person said they
   reviewed who can reach the phone port;
-* the launchd job ``org.agentstack.mobile-relay`` that runs
+* the launchd job or WSL systemd user service that runs
   ``mobile_relay.py --config`` with that file;
 * a read-only look at Tailscale (signed-in name, Serve, Funnel).
 
-It never runs ``tailscale serve`` or changes an access policy, and the
-policy confirmation stays the person's word: nothing here verifies it.
+Phone access changes never alter Serve or the access policy. WSL Serve
+changes are a separate explicit action in the Telemetry dashboard.
 """
 from __future__ import annotations
 
@@ -32,9 +32,11 @@ import tempfile
 import time
 
 try:
-    from dashboard import mobile_relay
+    from dashboard import mobile_relay, mobile_systemd, wsl_anchor
 except ModuleNotFoundError:
     import mobile_relay
+    import mobile_systemd
+    import wsl_anchor
 
 LABEL = 'org.agentstack.mobile-relay'
 MAX_SETTINGS_BYTES = 4096
@@ -51,6 +53,7 @@ DEFAULTS = {
 REVIEWED_AT = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z')
 SERVE_PORT = 9443
 TAILSCALE_APP = '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
+WINDOWS_TAILSCALE = '/mnt/c/Program Files/Tailscale/tailscale.exe'
 COMMAND_TIMEOUT = 5
 START_WAIT = 5.0
 MIN_PYTHON = (3, 11)
@@ -151,10 +154,10 @@ def push_python():
 
 # --- outside world ------------------------------------------------------------
 
-def _run(argv, *, timeout=COMMAND_TIMEOUT):
+def _run(argv, *, timeout=COMMAND_TIMEOUT, env=None):
     try:
         done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
-                              timeout=timeout, check=False)
+                              timeout=timeout, check=False, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
     return done
@@ -169,6 +172,11 @@ def domain() -> str:
 
 
 def job_loaded() -> bool | None:
+    if mobile_systemd.is_wsl():
+        try:
+            return relay_unit().active()
+        except (OSError, mobile_systemd.UnitError):
+            return None
     done = _run([launchctl(), 'print', f'{domain()}/{LABEL}'])
     if done is None:
         return None
@@ -190,17 +198,32 @@ def tailscale_bin() -> str | None:
     found = shutil.which('tailscale')
     if found:
         return found
+    if mobile_systemd.is_wsl():
+        return (shutil.which('tailscale.exe')
+                or shutil.which(WINDOWS_TAILSCALE))
     return TAILSCALE_APP if os.access(TAILSCALE_APP, os.X_OK) else None
 
 
-def _json(argv):
-    done = _run(argv)
+def tailscale_run(argv, *, timeout=COMMAND_TIMEOUT):
+    if not mobile_systemd.is_wsl() or not argv[0].lower().endswith('.exe'):
+        return _run(argv, timeout=timeout)
+    try:
+        env = wsl_anchor.interop_env()
+    except OSError:
+        return None
+    return _run(argv, timeout=timeout, env=env)
+
+
+def _json(argv, *, empty_null=False):
+    done = tailscale_run(argv)
     if done is None or done.returncode != 0:
         return None
     try:
         value = json.loads(done.stdout)
     except ValueError:
         return None
+    if value is None and empty_null:
+        return {}
     return value if isinstance(value, dict) else None
 
 
@@ -221,7 +244,7 @@ def tailscale_state(listen_port: int) -> dict:
         login = user.get('LoginName') if isinstance(user, dict) and isinstance(user.get('LoginName'), str) else ''
         state.update(signed_in=status.get('BackendState') == 'Running',
                      dns_name=dns.rstrip('.'), login=login)
-    serve = _json([binary, 'serve', 'status', '--json'])
+    serve = _json([binary, 'serve', 'status', '--json'], empty_null=mobile_systemd.is_wsl())
     if serve is not None:
         state['serve'], state['funnel'] = serve_state(serve, state['dns_name'], listen_port)
     return state
@@ -248,8 +271,13 @@ def serve_state(serve: dict, dns_name: str, listen_port: int):
 # --- commands -----------------------------------------------------------------
 
 def job_python_missing() -> bool:
-    """True when the job's plist names a Python that is no longer there (a
-    Homebrew or venv interpreter removed after Phone access was turned on)."""
+    """True when the installed job's interpreter has been removed."""
+    if mobile_systemd.is_wsl():
+        try:
+            python = relay_unit().interpreter()
+        except (OSError, mobile_systemd.UnitError):
+            return False
+        return python is not None and not os.access(python, os.X_OK)
     try:
         job = plistlib.loads(plist_path().read_bytes())
         python = job['ProgramArguments'][0]
@@ -311,11 +339,7 @@ def _bootout():
     raise SettingsError('job_stuck')
 
 
-def apply(change: dict, *, now=None) -> dict:
-    """Merge a change from Settings, validate it, save it, and (re)start or stop
-    the job. Refuses before writing anything when the change is invalid or a
-    reader that launchd does not own holds the port (on or off: Settings does
-    not control that reader). A job that does not start leaves access off."""
+def _updated_settings(change: dict, now) -> dict:
     if not isinstance(change, dict) or set(change) - {'access', 'send', 'owner_login', 'public_origin', 'policy_reviewed'}:
         raise SettingsError('change_invalid')
     settings = load()
@@ -341,6 +365,50 @@ def apply(change: dict, *, now=None) -> dict:
         if sys.version_info < MIN_PYTHON:
             # The job runs the reader with this interpreter.
             raise SettingsError('python_too_old')
+    return settings
+
+
+def relay_unit() -> mobile_systemd.RelayUnit:
+    return mobile_systemd.RelayUnit(settings_path(), relay_script())
+
+
+def _apply_wsl(change: dict, now):
+    with mobile_systemd.locked(home()):
+        settings = _updated_settings(change, now)
+        unit = relay_unit()
+        active = unit.active()
+        port = settings['listen_port']
+        if not active and (settings['access'] or 'access' in change) and listening(port):
+            raise SettingsError('port_in_use')
+        if not settings['access']:
+            unit.remove()
+            save(settings)
+            return status()
+        if active:
+            unit.stop()
+        save(settings)
+        try:
+            unit.start(push_python() or sys.executable)
+            deadline = time.monotonic() + START_WAIT
+            while time.monotonic() < deadline:
+                if unit.active() and listening(port):
+                    return status()
+                time.sleep(0.1)
+            raise SettingsError('systemd_failed')
+        except (OSError, ValueError):
+            save({**settings, 'access': False})
+            unit.remove()
+            raise SettingsError('systemd_failed') from None
+
+
+def apply(change: dict, *, now=None) -> dict:
+    """Apply the existing cockpit settings contract to the platform's service."""
+    if mobile_systemd.is_wsl():
+        try:
+            return _apply_wsl(change, now)
+        except OSError:
+            raise SettingsError('systemd_failed') from None
+    settings = _updated_settings(change, now)
     loaded = job_loaded()
     if 'access' in change and loaded is False and listening(settings['listen_port']):
         raise SettingsError('port_in_use')
@@ -407,7 +475,7 @@ def main(argv=None) -> int:
             except ValueError:
                 raise SettingsError('change_invalid') from None
             result = apply(change)
-    except SettingsError as exc:
+    except (SettingsError, mobile_systemd.UnitError) as exc:
         print(json.dumps({'ok': False, 'error': str(exc)}))
         return 2
     print(json.dumps(result))
