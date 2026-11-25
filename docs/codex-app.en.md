@@ -95,6 +95,9 @@ Primary options:
 | --- | --- |
 | `--install-dir PATH` | Location for integration source and manifest |
 | `--runtime-dir PATH` | Location for the private socket, bindings, snapshot, delivery database, and logs |
+| `--agent-mail-env PATH` | Absolute path to an existing Mail bearer reference file. The token value is kept in that file |
+| `--signals-dir PATH` | Absolute path to the ORRERY Mail signals directory |
+| `--python-bin PATH` | Executable Python interpreter for the Bridge |
 | `--no-service` | Start neither launchd nor supervised background. The default outside macOS (no service is installed even without it) |
 | `--no-plugin` | Build the marketplace without registering the Codex plugin |
 | `--refresh-plugin-only` | Reinstall only an existing enabled Codex plugin from the deployed payload, without changing Bridge state |

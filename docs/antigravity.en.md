@@ -128,23 +128,17 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 ## Dashboard NEW AGENT
 
-With the optional provider payload installed and the Dashboard restarted,
-`NEW AGENT` shows an `Antigravity` engine tab. A launch reuses the delegated
-child path above through `spawn_gemini_preregistered.sh`.
+Install the optional provider and restart the dashboard to see Antigravity in NEW AGENT. On macOS, when the catalog advertises standalone support (API 50 or later), leave the parent blank to start an interactive agent. A standalone launch can use a working folder outside Git. Older catalogs and Linux/WSL require a parent for a dashboard launch.
 
 ![NEW AGENT with the Antigravity tab selected: the resources row sits under the task, and the footer explains what is still required](images/new_agent_capabilities_dark.png)
 
 ![The same state in the light theme](images/new_agent_capabilities_light.png)
 
-Requirements checked before ORRERY Mail registration, so a launch that cannot
-start does not leave a retained child identity behind:
+The dashboard checks launch requirements before registering with ORRERY Mail.
 
-- a parent agent: standalone Antigravity launches are rejected, and the parent
-  must have its local runtime owner token;
-- the launch directory must be inside a git repository, and the worktree base
-  (default `HEAD`) must resolve to a commit;
-- `agy`, `tmux`, the selected Python, `git`, the adapter hook, and the Gemini
-  provider helpers under `~/.agentstack/bin` must be present;
+- A delegated launch needs the parent's local owner credential.
+- Delegated launches and standalone launches with Isolation selected need a Git repository and a valid worktree base (default `HEAD`).
+- Make `agy`, `tmux`, the selected Python, the adapter hook, and provider helpers available.
 - `AGENTSTACK_GEMINI_MODELS`, when explicitly set, is the restrictive model
   allow-list. Otherwise, the picker combines the bundled `gemini-3.8-flash-{high,medium,low}`
   candidates with valid Gemini IDs from the installed `agy models` CLI. This
@@ -179,11 +173,10 @@ Engine and isolation rules:
   or `xhigh` where the catalog lists that variant), and the server
   rejects a request without one (`effort required for provider gemini`). The
   CLI launchers' `high` fallback is not applied to Dashboard launches.
-- **Isolated worktree is forced.** The isolation checkbox is locked on while
-  Antigravity is selected; switching to Claude or Codex restores the previous
-  choice, and hidden resource declarations are not sent to those providers.
-- **Resources are required.** Enter comma-separated paths relative to the
-  repository root, for example `src/**,tests/**`. Absolute paths, `..`, `~`,
+
+Delegated launches require an isolated worktree and resources. A standalone macOS launch creates a worktree when you choose Isolation. This launch does not require resources.
+
+Specify delegated resources as comma-separated paths relative to the repository root, for example `src/**,tests/**`. Absolute paths, `..`, `~`,
   control characters, a leading `-`, backslashes, and `.git` are rejected, as
   is any existing symlink component that resolves outside the repository. The
   adapter repeats the check inside the new worktree before reserving anything.
@@ -193,10 +186,7 @@ Engine and isolation rules:
   filesystem such as default APFS resolves names, so `.GI?/config` or `SR?/**`
   is judged against `.git` or `src` in any letter case.
 
-The launcher delivers the full task to Antigravity and reports the result to
-the parent automatically, so the Dashboard sends no separate task mail for an
-Antigravity child. Launch status, `/api/spawn-status`, and
-`dashboard/logs/spawn.log` record `provider=gemini`.
+The dedicated launcher passes the first task to the Antigravity CLI. The dashboard creates no separate task Mail for this provider. The macOS interactive route can receive follow-up tasks through Mail. Launch status and `/api/spawn-status` record `provider=gemini`.
 
 The core Dashboard modal interprets the provider `capabilities` contract. The
 optional payload only adds the Antigravity catalog item and its `/api/spawn`
@@ -215,12 +205,7 @@ leaves the launcher-owned shell runner alive so report/release/retire/cleanup ca
 finish. For a top-level interactive Antigravity session, `EXIT` keeps the normal
 interactive `/exit` path.
 
-ORRERY does not currently implement Antigravity conversation resume or native
-transcript history. Gone or retired Antigravity entries therefore fail closed
-instead of falling through to Claude/Codex transcript lookup. A top-level
-Antigravity session whose `agy` process has exited but whose human shell remains
-is kept attachable as `finished`; Dashboard jump does not kill that shell to
-attempt an unsupported resume.
+The macOS interactive route supports Reader and Resume when the dashboard can verify the saved registration and conversation. Resume reuses the working folder, or the worktree used at launch. A session without a verified history binding shows the reason. When an interactive Antigravity process has exited but a human shell remains, the terminal remains attachable as `finished`.
 
 ## Headless permission caveat
 

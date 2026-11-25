@@ -30,7 +30,7 @@ export PYTHONPATH="$PWD/integrations/chatgpt_mcp/src"
 export ORRERY_MCP_MODE=legacy
 export ORRERY_MCP_PROJECT_KEY='/actual/dashboard/project-key'
 export ORRERY_MCP_DASHBOARD_URL=http://127.0.0.1:8770
-export ORRERY_MCP_PORT=8791
+export ORRERY_MCP_PORT=8792
 python3 -m orrery_chatgpt_mcp pair --show-url
 python3 -m orrery_chatgpt_mcp check
 python3 -m orrery_chatgpt_mcp serve
@@ -40,13 +40,15 @@ For an actual fresh Dashboard, set ORRERY_MCP_MODE=fresh and unset ORRERY_MCP_PR
 
 Here, read-only describes the MCP API: it exposes no ORRERY configuration changes, agent registration, spawning or Mail sending operations. In fresh mode, the existing Dashboard GET /api/agents path uses Mail's owner_transaction (write=True / BEGIN IMMEDIATE), not a database read-only transaction. This pre-existing path is unchanged; read-only does not promise zero database writes or the absence of a write lock.
 
-Operator commands pair and pair --rotate do write this adapter's own private state. Its default is ~/.config/orrery-mcp-readonly/pairing.json, with directory/file modes 0700/0600. Keep secret URLs out of issues and shared documents. After rotation, change the tunnel's target to the new URL; the running adapter rejects the old one on the next request.
+The adapter defaults to **8792**. The cockpit defaults to 8791. An explicit `ORRERY_MCP_PORT` takes precedence. If the port is in use, choose another free port and use the same port in the pairing URL and the tunnel target.
+
+Operator commands pair and pair --rotate do write this adapter's own private state. Its default is `~/.config/orrery-mcp-readonly/pairing.json`, with directory/file modes 0700/0600. To select a different directory, set `ORRERY_MCP_STATE_DIR` to an absolute path and use the same value for `pair`, `check`, and `serve`. Keep secret URLs out of issues and shared documents. After rotation, change the tunnel's target to the new URL; the running adapter rejects the old one on the next request.
 
 ## Secure MCP Tunnel configuration
 
 Use an operator-provisioned dedicated [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). The adapter neither provisions tunnels nor changes authentication settings. Do not overwrite another service's tunnel or attach duplicate runtimes to it.
 
-Set tunnel-client's MCP_SERVER_URL (or profile mcp.server_urls[].url) to the complete http://127.0.0.1:8791/mcp/<paired-secret> URL. Preserve the entire secret path, not just /mcp. Tunnel-client creates a new request to that fixed local target, so the adapter receives Host: 127.0.0.1:8791. Do not allow the public Host or disable Host checks. Supported non-browser clients send no Origin; direct browser Origin requests get 403.
+Set tunnel-client's MCP_SERVER_URL (or profile mcp.server_urls[].url) to the complete `http://127.0.0.1:8792/mcp/<paired-secret>` URL. Preserve the entire secret path, not just /mcp. Tunnel-client creates a new request to that fixed local target, so the adapter receives `Host: 127.0.0.1:8792` in this example. Do not allow the public Host or disable Host checks. Supported non-browser clients send no Origin; direct browser Origin requests get 403.
 
 A conventional reverse proxy must authenticate and restrict access at its ingress, set Host to the fixed local authority and preserve the secret path. Never trust caller-supplied Forwarded-Host or simply remove arbitrary browser Origins to bypass the boundary. A proxy preserving the external Host correctly receives 403.
 

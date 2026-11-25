@@ -735,6 +735,10 @@ Only a real tmux session in the `running / finished` category is eligible. `warm
 
 On legacy API 46, optional `history_session_id` requires the current tmux session to agree with the saved conversation, registration, and launch origin before exit.
 
+## POST `/api/reactivate`
+
+Restore Mail reception for a running legacy agent. Send the JSON body `{"session":"<name>"}`. The dashboard checks that its tmux session exists, then asks ORRERY Mail to unretire the agent.
+
 ## POST `/api/kill`
 
 Request:
@@ -821,12 +825,12 @@ Request:
 | `task` | yes | Task body. The UI accepts up to 4,000 characters |
 | `name` | no | Remove hyphens when specified; must be `available` |
 | `dir` | no | Existing working directory. Defaults to the source repository |
-| `provider` | no | `claude` (default), `codex`, or an exact native connection ID from the catalog (legacy `deepseek`/`strata`, or an added ID such as `strata-epyc`). Do not replace it with its label or `kind` |
+| `provider` | no | `claude` (default), `codex`, `gemini` for the optional Antigravity provider, or an exact native connection ID from the catalog (legacy `deepseek`/`strata`, or an added ID such as `strata-epyc`). Do not replace it with its label or `kind` |
 | `harness` | DeepSeek / Local required | `dsh` or `hermes`. Claude optionally accepts `claude-code` (legacy alias `claudecode`), Codex `codex-cli` (legacy alias `codex`) |
 | `helper_model` | no | Omitted or `same` inherits the main model. DeepSeek / Local also accepts same-backend formal IDs in the selected model/harness `helper_models`; undeclared or foreign IDs are rejected |
 | `model` | DeepSeek / Local required | Formal ID matching an available provider/model/harness catalog entry. Existing Claude/Codex omitted-model defaults are unchanged |
 | `url_index`, `url_key` | dynamic Local required | Copy both from the selected model row. Index is a nonnegative integer; key binds the configured URL. A changed/reordered URL is refused and requires refreshed selection. These fields are not accepted for fixed-model or other providers |
-| `effort` | no | Send only explicit choices. Claude/Codex use model-specific metadata; DeepSeek/Local validate the selected model and harness capability. Omit to use CLI settings; unknown values are never guessed |
+| `effort` | Required for Antigravity | Send a value offered for the selected Antigravity model. For other providers, send only explicit choices. Codex uses model-specific metadata. DeepSeek/Local validate the selected model and harness capability. Claude rejects `effort`. Where omission is allowed, the CLI or harness default applies |
 | `role` | no | At most 40 characters |
 | `group` | no | At most 24 characters |
 | `worktree` | no | Isolated worktree |
@@ -887,7 +891,7 @@ Success:
 }
 ```
 
-With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a BCC audit copy for the parent (BCC raises no notification, so the parent is not woken by its own task); the registration summary / launcher prompt uses the first 80 characters.
+With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a BCC audit copy for the parent (BCC raises no notification, so the parent is not woken by its own task); the registration summary / launcher prompt uses the first 80 characters. The Antigravity launcher passes the task directly to its CLI without separate task Mail.
 
 Claude rejects `effort`. Codex accepts formal `gpt-*` IDs even when absent from cache; only an explicit `AGENTSTACK_CODEX_MODELS` restricts membership. The UI uses per-model effort metadata for choices and omitted defaults; explicit effort is passed through to Codex CLI for final validation. Omitted model and effort use the configured defaults, or the built-in policy when unset. Family aliases follow the newest eligible version in the fresh catalog, rejecting an absent family in a fresh catalog and using bundled fallback for unavailable or stale catalogs. Claude accepts well-formed formal IDs independently of local catalog membership or expiry; an explicit `AGENTSTACK_CLAUDE_MODELS` remains a strict allow-list, and invalid configuration blocks Claude launch. The fixed Claude default is `claude-opus-5-5`; it is rejected if an override excludes it and the request omits a model. Orrery never substitutes another model. See [Claude model catalog](configuration.en.md#claude-model-catalog).
 
@@ -934,6 +938,8 @@ Explicit same-intent replay from registration status sends `registration_sha256`
 
 ### Global runtime reads (API 18)
 
+`GET /api/global/clients` requires global operator admission. It lists fixed clients, or filters them by their agent name with `?name=<agent>`.
+
 `GET /api/runtime-observations?agent_ids=1,2` requires the existing HTTP operator admission. IDs are unique positive 63-bit integers, with 1–200 per request. Invalid input returns `QUERY_INVALID`. No public Mail tools are added. `global-runtime-observation.json` contains the single response schema.
 
 Each item returns `liveness`, nullable `act_state` / `ctx_used`, `session_count`, `parent_agent_id` / `parent_state`, and `activity_freshness` / `reason`. Tokens, pane captures and private paths are excluded. Unknown is never replaced with waiting or context zero. See [observation and capability checks](dashboard.en.md#global-runtime-observation).
@@ -942,6 +948,17 @@ Capabilities include `global_runtime_observation=1` and `operator_session=1`. Gl
 
 
 API 25: legacy managed `attempt_id` spawn/status requests are retired and return `unsupported_attempt`. Use standard `POST /api/spawn` and `GET /api/spawn-status?name=<name>`.
+
+## Local dashboard UI routes
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/mobile-serve` | Preview adding or removing phone Serve from the local WSL dashboard |
+| `POST /api/mobile-serve` | Confirm the preview's `action` and `revision` as JSON from the same-origin local browser on WSL |
+| `GET /api/wsl-anchor` | Report the legacy dashboard's WSL keepalive status and how long ago it was updated |
+| `POST /api/wsl-anchor/lease` | Renew a visible dashboard page's lease by `id`, or release it with `release` |
+
+See the [phone guide](mobile.en.md) and [WSL troubleshooting](troubleshooting.en.md) for the corresponding controls.
 
 <a id="mobile-reader-api-28"></a>
 
