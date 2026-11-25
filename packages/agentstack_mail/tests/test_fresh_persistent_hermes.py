@@ -29,15 +29,18 @@ def test_persistent_hermes_uses_native_plan_hooks_mail_and_end_record(tmp_path, 
             # Extend the existing real hook/proxy fixture at its final observation.
             native = binary.read_text() + "\nassert '--tui' in sys.argv\n"
             native += "assert not subprocess.run(['/bin/bash','-c','printenv TELEGRAM_BOT_TOKEN'],capture_output=True).stdout\n"
-            native += "import signal,time\nchild=None\n"
+            native += "import signal\nchild=None\n"
             if ending == 'requested-stop':
                 native += "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(90)'])\n"
                 native += "def stop(signum,_):\n child.wait(timeout=5)\n sys.exit(128+signum)\nsignal.signal(signal.SIGTERM,stop)\n"
-            native += "pathlib.Path(os.environ['TEST_TREE']).write_text(json.dumps([os.getpid(),os.getppid(),child.pid if child else None]))\n"
+            native += "tree=pathlib.Path(os.environ['TEST_TREE'])\n"
+            native += "pending=tree.with_suffix('.tmp')\n"
+            native += "pending.write_text(json.dumps([os.getpid(),os.getppid(),child.pid if child else None]))\npending.replace(tree)\n"
             native += "pathlib.Path(os.environ['TEST_STARTED']).touch()\n"
             if ending == 'unexpected-exit':native += 'sys.exit(23)\n'
             if ending == 'session-change':native += "try:guard.session_started(str(uuid.uuid4()))\nexcept RuntimeError:pass\n"
-            if ending != 'normal':native += 'import time\ntime.sleep(30)\n'
+            if ending in {'requested-stop', 'session-change'}:
+                native += 'signal.pause()\n'
             binary.write_text(native)
             # Observe only this fixture's known parent/child PIDs; sandbox ps is unavailable.
             observer = root / 'bin/lib/process_observation.py'
@@ -67,16 +70,20 @@ def process_snapshot(*, include_groups=False, **_):
             for name in ('TMUX','TMUX_PANE'):env.pop(name, None)
             env['TELEGRAM_BOT_TOKEN'] = 'synthetic-secret'
             argv = [sys.executable, str(root / 'bin/agentstack-persistent'), 'run', '--profile', str(profile)]
-            log = (tmp_path / 'launch.log').open('w')
+            log_path = tmp_path / 'launch.log'
+            log = log_path.open('w')
             process = subprocess.Popen(argv, env=env, stdout=log, stderr=log, start_new_session=True)
             try:
-                for _ in range(800):
-                    if (tmp_path / 'started').exists():break
-                    assert process.poll() is None, (tmp_path / 'launch.log').read_text()
-                    await asyncio.sleep(.05)
-                else:pytest.fail('native did not become ready')
-                if ending == 'requested-stop':process.send_signal(signal.SIGTERM)
-                await asyncio.to_thread(process.wait, timeout=40)
+                started = tmp_path / 'started'
+                if ending == 'requested-stop':
+                    # Only the signal-driven case needs readiness before the
+                    # launcher exits. pytest-timeout bounds the whole test.
+                    while not started.exists():
+                        assert process.poll() is None, log_path.read_text()
+                        await asyncio.sleep(.05)
+                    process.send_signal(signal.SIGTERM)
+                await asyncio.to_thread(process.wait)
+                assert started.exists(), log_path.read_text()
                 first = current(client)
                 if ending == 'requested-stop':
                     child = json.loads((tmp_path / 'tree.json').read_text())[2]

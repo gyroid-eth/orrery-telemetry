@@ -17,6 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "integrations/codex_app/src"))
 sys.path.insert(0, str(ROOT / "packages/agentstack_mail/src"))
+from agentstack_codex_app import daemon_runtime
 from agentstack_codex_app.daemon_runtime import (
     DaemonRuntime,
     DaemonError,
@@ -295,8 +296,27 @@ def test_unknown_creation_is_finalized_only_for_the_same_numeric_row(native):
     runtime.close()
 
 
-def test_native_missing_listed_peer_is_reported_as_that_peer_only(native):
-    x = native
+@pytest.fixture
+def native_peer_lookup(native, monkeypatch):
+    # The daemon's two-second production deadline is for outages. The peer
+    # contract tests wait for an actual reply from their private server under
+    # the suite's test-wide deadline.
+
+    def transport(*args, **kwargs):
+        return HttpJsonRpcTransport(*args, **{**kwargs, "timeout": None})
+
+    request = enroll._request
+
+    def inspect(*args, **kwargs):
+        return request(*args, **{**kwargs, "timeout": None})
+
+    monkeypatch.setattr(daemon_runtime, "HttpJsonRpcTransport", transport)
+    monkeypatch.setattr(enroll, "_request", inspect)
+    return native
+
+
+def test_native_missing_listed_peer_is_reported_as_that_peer_only(native_peer_lookup):
+    x = native_peer_lookup
     profile = {**x["profile"], "peers": [*x["profile"]["peers"], {"name": "GoneLake", "id": 999}]}
     path = write(x["root"] / "missing-peer.json", profile)
     runtime = DaemonRuntime.open(path)
@@ -309,9 +329,9 @@ def test_native_missing_listed_peer_is_reported_as_that_peer_only(native):
         runtime.close()
 
 
-def test_native_not_found_contract_and_changed_text_is_an_outage(native):
+def test_native_not_found_contract_and_changed_text_is_an_outage(native_peer_lookup):
     """Pins Mail's not-found line, the only text the client reads as missing."""
-    x = native
+    x = native_peer_lookup
     client = x["client"]
     with pytest.raises(AgentNotFoundError):
         client.whois(
