@@ -897,7 +897,7 @@ Codex のモデル省略または `sol` で既定を変更した場合、preview
 }
 ```
 
-`standalone: true` では `parent` を空に固定し、`PARENT_AGENT` を subprocess environment から削除します。synthetic self-mail は作らず、task の先頭4000文字を launcher へ直接渡します。通常 child は parent を sender とする inbox message と CC audit trail を作り、登録 summary / launcher prompt は先頭80文字です。
+`standalone: true` では `parent` を空に固定し、`PARENT_AGENT` を subprocess environment から削除します。synthetic self-mail は作らず、task の先頭4000文字を launcher へ直接渡します。通常 child は parent を sender とする inbox message と、parent 自身への BCC の audit trail を作り（BCC には通知が出ないので、parent が自分の依頼で起こされない）、登録 summary / launcher prompt は先頭80文字です。
 
 API 50 の `gemini` は、macOS で `/api/spawn-names` に `capabilities.standalone: true` を返します。親なしでは `dir` が作業フォルダになり、`worktree: true` を選んだ場合だけ Git が必要です。親付きの起動には従来どおり worktree と `resources` が必要です。
 

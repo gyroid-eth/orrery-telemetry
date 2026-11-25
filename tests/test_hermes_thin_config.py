@@ -427,6 +427,17 @@ class ThinConfig(unittest.TestCase):
             self.generate()
         self.assertEqual((path / 'SKILL.md').read_text(), 'user skill')
 
+    def test_personal_skills_leave_hermes_links_and_config_unchanged(self):
+        # Personal skills reach dsh only; Hermes keeps the product links.
+        personal = self.base / 'claude-config'
+        (personal / 'skills/delegate').mkdir(parents=True)
+        (personal / 'skills/delegate/SKILL.md').write_text('---\nname: delegate\ndescription: personal\n---\n')
+        self.generate()
+        before = (self.profile / 'config.yaml').read_bytes()
+        self.generate(personal_skills_home=str(personal), skill_roots=[str(personal / 'skills')])
+        self.assertEqual((self.profile / 'skills/delegate').resolve(), (ROOT / 'skills/delegate').resolve())
+        self.assertEqual((self.profile / 'config.yaml').read_bytes(), before)
+
     def test_native_personality_kept_with_shared_instructions(self):
         (self.source / 'hermes_cli/personality.py').write_text("BUILTIN_PERSONALITIES: dict = {'concise': 'Be concise'}\n")
         self.save(self.profile / 'config.yaml', {'display': {'personality': 'concise'}})
