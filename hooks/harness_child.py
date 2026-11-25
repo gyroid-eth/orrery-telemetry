@@ -230,9 +230,7 @@ def generate_plan(document, runner):
     document['mcp_selection'] = child_tools.native_plan(document['tools'], cwd=document['cwd'],
         managed_screen=managed_screen,
         claude_json=os.environ.get('AGENTSTACK_CLAUDE_JSON',str(Path.home()/'.claude.json')),
-        codex_config=child_tools._defaults_codex_config(
-            str(Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))) / 'config.toml'),
-            os.environ.get('AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY', '')))
+        codex_config=child_tools.native_codex_config())
     merged_mcp = read(document['mcp_base_config'])
     merged_mcp['mcpServers'].update(document['mcp_selection']['servers'])
     selected_mcp = state_dir / 'selected-mcp.json'

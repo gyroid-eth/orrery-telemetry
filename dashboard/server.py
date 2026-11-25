@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 48
+API_GENERATION = 49
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -8887,6 +8887,31 @@ def _spawn_catalog_providers():
 
 
 
+def _native_browser_directories(dirs):
+    """Which preset folders can copy Chrome DevTools into a native child."""
+    selection = _child_tools_module()
+    spec = {'base': 'mail-only', 'tools': {'mcp': ['chrome-devtools']}}
+    settings = _env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json")
+    codex_config = selection.native_codex_config(resume=_child_resume_module())
+    available = []
+    for directory in dirs:
+        if _resolve_spawn_directory(directory) is None:
+            continue
+        try:
+            selection.native_plan(spec, cwd=os.path.expanduser(directory), claude_json=settings,
+                                  codex_config=codex_config)
+        except selection.ToolsError:
+            continue
+        available.append(directory)
+    return available
+
+
+def _spawn_browser_modes():
+    tools = _child_tools_module()
+    config = tools.native_codex_config(resume=_child_resume_module())
+    return tools.launch_browser_modes(config)
+
+
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     if sys.platform == "win32":
@@ -8926,6 +8951,9 @@ def spawn_names_payload() -> dict:
         "adjectives": adjectives,
         "naming": "adjective-scientist",
         "dirs": dirs,
+        "native_browser_dirs": _native_browser_directories(dirs) if local_catalog and not FRESH_MODE else [],
+        "supports_browser_off": not FRESH_MODE,
+        **({"browser_modes": _spawn_browser_modes()} if not FRESH_MODE else {}),
         "models": list(claude_models),
         "default_model": claude_default,
         "providers": [
@@ -9541,6 +9569,10 @@ def _spawn_tools_args(payload: dict, provider: str, chrome: bool,
     if "browser" in tools:
         device = tools["browser"]["device"]
         args += ["--tools", "browser:" + device if device else "browser"]
+    if tools.get("browser_off"):
+        args += ["--tools", "no-browser"]
+    if "browser_mode" in tools:
+        args += ["--tools", "browser-mode:" + tools["browser_mode"]]
     if "chrome_extension" in tools:
         args += ["--tools", "chrome-extension"]
     if "screen" in tools:
