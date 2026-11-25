@@ -67,6 +67,7 @@ class Frame:
     slash_picker: bool = False
     selected_command: str | None = None
     scrolled: bool = False
+    full_draft: bool = False
 
     @property
     def identity(self):
@@ -202,7 +203,8 @@ def frame(metadata, lines, pane):
                 selected_command = _slash_selection(lines, plain, start, codex=codex)
         return Frame(*base, draft, waiting, menu or selected_command is not None,
                      bool(hermes), boxed, bracketed, command,
-                     slash_picker=slash_picker, selected_command=selected_command)
+                     slash_picker=slash_picker, selected_command=selected_command,
+                     full_draft=framed or (codex and (not tail or bool(footer))))
     return Frame(*base,None,False)
 
 
@@ -291,59 +293,119 @@ def capture(command,pane):
     return frame(metadata,screen.splitlines(),pane) if separator else None
 
 
-def submit(command,admit,pane,text,*,deadline=None):
+def same_notice(observed, text):
+    """Resume only a fully visible, literal notice, including soft wraps."""
+    if (not observed.draft or observed.waiting or observed.selected or not observed.full_draft
+            or not observed.allows_paste(text) or '\n' in text):
+        return False
+    # tmux strips padding at the ends of display rows. A wrapped row can
+    # break within a word, or at the one unpainted space between words.
+    parts = observed.draft.splitlines()
+    pattern = ' ?'.join(re.escape(part.strip(' ')) for part in parts)
+    return re.fullmatch(pattern, text) is not None
+
+
+def submit(command,admit,pane,text,*,deadline=None,recovery=None,on_wait=None):
     """Watcher path. Refused means a prompt was never pasted."""
     end=time.monotonic()+TIMEOUT if deadline is None else deadline
     fd=None
-    pasted=False
+    buffer=None
+    pending=False
+
+    def defer(reason):
+        if on_wait is not None:
+            on_wait(reason)
+        return 'unknown' if pending else 'refused'
+
     try:
         current=capture(command,pane)
         if current is None:
-            return 'refused'
+            return defer('input_not_found')
         fd=try_lock(current)
-        if fd is None or not admit():
-            return 'refused'
+        if fd is None:
+            return defer('pane_locked')
+        if not admit():
+            return defer('pane_changed')
         before=capture(command,pane)
-        if not before or before.identity!=current.identity or not before.empty or not before.allows_paste(text):
-            return 'refused'
-        name='orrery-submit-'+uuid.uuid4().hex
-        try:
-            if command('load-buffer','-b',name,'-',input=text).returncode:
-                return 'refused'
+        if not before or before.identity!=current.identity:
+            return defer('pane_changed')
+        identity=before.identity
+        entered=recovery.identity if recovery is not None else None
+        if entered is not None:
+            if entered!=identity:
+                return defer('previous_pane_changed')
+            if before.empty:
+                # The previous process reached Enter on this exact pane.
+                # The cleared editor is the same receipt we wait for below.
+                return 'accepted'
+        resume=recovery is not None and same_notice(before,text)
+        if not resume:
+            if before.draft is None:
+                return defer('input_not_found')
+            if before.waiting:
+                return defer('editor_waiting')
+            if before.scrolled:
+                return defer('scrolled_draft')
+            if not before.empty:
+                return defer('editor_not_empty')
+            if not before.allows_paste(text):
+                return defer('paste_unavailable')
+            buffer='orrery-submit-'+uuid.uuid4().hex
+            if command('load-buffer','-b',buffer,'-',input=text).returncode:
+                return defer('load_buffer_failed')
             if time.monotonic()>=end or not admit():
-                return 'refused'
+                return defer('pane_changed')
             current=capture(command,pane)
-            if not current or current.identity!=before.identity or not current.empty or not current.allows_paste(text):
-                return 'refused'
-            pasted=True  # A timeout after the command starts cannot prove absence.
-            if command('paste-buffer','-r','-p','-d','-b',name,'-t',pane).returncode:
-                return 'unknown'
-            previous=None
-            while time.monotonic()<end:
+            if not current or current.identity!=identity:
+                return defer('pane_changed')
+            if not current.empty or not current.allows_paste(text):
+                return defer('editor_changed')
+            pending=True  # A timeout after the command starts cannot prove absence.
+            if command('paste-buffer','-r','-p','-d','-b',buffer,'-t',pane).returncode:
+                return defer('paste_failed')
+
+        matches=same_notice if resume else ready
+        previous=before.draft if resume else None
+        while time.monotonic()<end:
+            view=capture(command,pane)
+            if not view or view.identity!=identity:
+                return defer('pane_changed')
+            if entered is not None and view.empty:
+                return 'accepted'
+            draft=view.draft if matches(view,text) else None
+            if draft is not None and draft==previous:
+                if not admit() or time.monotonic()>=end:
+                    return defer('pane_changed')
                 view=capture(command,pane)
-                if not view or view.identity!=before.identity:return 'unknown'
-                draft=view.draft if ready(view,text) else None
-                if draft is not None and draft==previous:
-                    if not admit() or time.monotonic()>=end:return 'unknown'
-                    view=capture(command,pane)
-                    if view and view.identity==before.identity and ready(view,text):
-                        if command('send-keys','-t',pane,'C-m').returncode:
-                            return 'unknown'
-                        break
-                previous=draft
-                time.sleep(POLL)
-            else:return 'unknown'
-            while time.monotonic()<end:
-                view=capture(command,pane)
-                if not view or view.identity!=before.identity:return 'unknown'
-                if view.empty:return 'accepted'
-                time.sleep(POLL)
-            return 'unknown'
-        finally:
-            try:command('delete-buffer','-b',name)
-            except (OSError,RuntimeError,subprocess.TimeoutExpired):pass
+                if not view or view.identity!=identity:
+                    return defer('pane_changed')
+                if matches(view,text):
+                    if recovery is not None:
+                        try:
+                            recovery.before_enter(identity)
+                        except OSError:
+                            return defer('submission_state_unavailable')
+                    pending=True
+                    if command('send-keys','-t',pane,'C-m').returncode:
+                        return defer('enter_failed')
+                    break
+            previous=draft
+            time.sleep(POLL)
+        else:
+            return defer('draft_not_confirmed')
+        while time.monotonic()<end:
+            view=capture(command,pane)
+            if not view or view.identity!=identity:
+                return defer('pane_changed')
+            if view.empty:
+                return 'accepted'
+            time.sleep(POLL)
+        return defer('enter_not_confirmed')
     except (OSError,RuntimeError,subprocess.TimeoutExpired):
-        return 'unknown' if pasted else 'refused'
+        return defer('terminal_unavailable')
     finally:
+        if buffer is not None:
+            try:command('delete-buffer','-b',buffer)
+            except (OSError,RuntimeError,subprocess.TimeoutExpired):pass
         if fd is not None:os.close(fd)
 

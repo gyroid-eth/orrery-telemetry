@@ -244,7 +244,10 @@ except Exception:
 entry = data.get(compound)
 if not entry:
     sys.exit(0)
-if entry.get("last_result") == "success" or entry.get("terminal") is True:
+if entry.get("last_result") == "success" or entry.get("last_success_epoch"):
+    print("delivered")
+    sys.exit(1)
+if entry.get("terminal") is True:
     sys.exit(1)
 last_attempt = int(entry.get("last_attempt_epoch", 0) or 0)
 if int(time.time()) - last_attempt >= cooldown:
@@ -254,10 +257,11 @@ PY
 }
 
 state_mark_result() {
-    python3 - "$STATE_FILE" "$1" "$2" "$3" "$4" <<'PY'
+    local waiting
+    waiting=$(python3 - "$STATE_FILE" "$1" "$2" "$3" "$4" "${5:-}" <<'PY'
 import fcntl, json, sys, time
 from pathlib import Path
-path, agent, msg_key, result, source = sys.argv[1:6]
+path, agent, msg_key, result, source, reason = sys.argv[1:]
 compound = f"{agent}:{msg_key}"
 p = Path(path)
 p.parent.mkdir(parents=True, exist_ok=True)
@@ -287,14 +291,27 @@ try:
         entry["last_success_ts"] = entry["last_attempt_ts"]
     if result == "session_not_found":
         entry["terminal"] = True
+    waiting = None
+    if reason:
+        count = entry.get("wait_count", 0) + 1
+        if count == 3 or (count > 3 and reason != entry.get("wait_reason")):
+            waiting = f"attempts={count} reason={reason}"
+        entry.update(wait_count=count, wait_reason=reason)
+    else:
+        entry.pop("wait_count", None)
+        entry.pop("wait_reason", None)
     data[compound] = entry
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(p)  # atomic swap so a reader never sees a half-written file
+    if waiting:
+        print(waiting)
 finally:
     fcntl.flock(lock, fcntl.LOCK_UN)
     lock.close()
 PY
+    ) || return $?
+    if [[ -n "$waiting" ]]; then log "  Waiting: agent=$1 message=$2 $waiting"; fi
 }
 
 acquire_delivery_lease() {
@@ -573,12 +590,22 @@ handle_signal_file() {
     mtime="${mtime:-0}"
     body_snippet="${body_snippet:-}"
     body_truncated="${body_truncated:-0}"
+    if [[ -z "$msg_id" && "$per_msg_file" == "1" && "${signal_file##*/}" =~ ^([0-9]+)\.signal$ ]]; then
+        msg_id="${BASH_REMATCH[1]}"
+    fi
     msg_key="${msg_id:-mtime-${mtime}-${signal_identity}}"
 
     # `set -e` 下で `|| return` だと return が直前の exit code を継承して
     # 関数が non-zero で抜け、呼び出し元の while ループが止まる。
     # 早期スキップは `return 0` を明示してスクリプト継続を保証する。
-    state_should_attempt "$agent_name" "$msg_key" || return 0
+    local previous
+    if ! previous=$(state_should_attempt "$agent_name" "$msg_key"); then
+        if [[ "$previous" == "delivered" && "$per_msg_file" == "1" ]]; then
+            discard_absent_signal "$signal_file" "$signal_identity"
+            rm -f "${STATE_DIR}/notify-locks/${agent_name}-${msg_key}.receipt" 2>/dev/null || true
+        fi
+        return 0
+    fi
 
     # 割り込みの閾値。既定は low = 従来どおり全部通す。
     #
@@ -604,13 +631,13 @@ handle_signal_file() {
         sleep 0.1
     done
     # 枠待ちの間に別配送経路が成功していれば二重配送しない。
-    state_should_attempt "$agent_name" "$msg_key" || return 0
+    state_should_attempt "$agent_name" "$msg_key" >/dev/null || return 0
     local lease_owner
     lease_owner=$(acquire_delivery_lease "$agent_name" "$msg_key") || return 0
     # 直前の確認から lease 取得までの間に、前の worker が success を書いて lease を
     # 手放していることがある。その lease を取ると同じ msg の worker がもう1つ走るので、
     # 取った後にもう一度確かめ、不要なら自分の lease を返して終える。
-    if ! state_should_attempt "$agent_name" "$msg_key"; then
+    if ! state_should_attempt "$agent_name" "$msg_key" >/dev/null; then
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
@@ -668,7 +695,7 @@ deliver_worker() {
 
     # Exit 10 allows the ordinary tmux checks, including for interactive persistent agents.
     if [[ "$headless_rc" -ne 10 ]]; then
-        state_mark_result "$agent_name" "$msg_key" "headless_reply_failed" "persistent-headless"
+        state_mark_result "$agent_name" "$msg_key" "headless_reply_failed" "persistent-headless" "headless_reply_failed"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
@@ -678,6 +705,7 @@ deliver_worker() {
     local mail_disabled
     mail_disabled=$(run_to "$TMUX_TIMEOUT" tmux show-environment -t "=$session_name" AGENTSTACK_MAIL_DISABLED 2>/dev/null) || mail_disabled=""
     if [[ "$mail_disabled" == "AGENTSTACK_MAIL_DISABLED=1" ]]; then
+        state_mark_result "$agent_name" "$msg_key" "mail_disabled" "watcher" "mail_disabled"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
@@ -686,7 +714,7 @@ deliver_worker() {
     # successful inventory proves absence; timeout or denied lookup does not.
     local sessions
     if ! sessions=$(run_to "$TMUX_TIMEOUT" tmux list-sessions -F '#{session_name}' 2>/dev/null); then
-        state_mark_result "$agent_name" "$msg_key" "session_lookup_failed" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "session_lookup_failed" "watcher" "session_lookup_failed"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
@@ -708,13 +736,13 @@ deliver_worker() {
     last_lines=$(run_to "$TMUX_TIMEOUT" tmux capture-pane -t "$session_name" -p -S -5 2>/dev/null) || rc=$?
     if [ "$rc" -ne 0 ]; then
         # capture が時間内に返らない = server stall。inject せず後で再試行。
-        state_mark_result "$agent_name" "$msg_key" "capture_timeout" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "capture_timeout" "watcher" "capture_timeout"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
     if echo "$last_lines" | grep -qE '(\$ ?$|% ?$)' && \
        ! echo "$last_lines" | grep -qE '(❯|Claude|claude|ctx:|Sonnet|Opus|Haiku|›)'; then
-        state_mark_result "$agent_name" "$msg_key" "bare_shell" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "bare_shell" "watcher" "bare_shell"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
@@ -738,6 +766,7 @@ deliver_worker() {
     # before constructing/injecting a notification into the resumed conversation.
     mail_disabled=$(run_to "$TMUX_TIMEOUT" tmux show-environment -t "=$session_name" AGENTSTACK_MAIL_DISABLED 2>/dev/null) || mail_disabled=""
     if [[ "$mail_disabled" == "AGENTSTACK_MAIL_DISABLED=1" ]]; then
+        state_mark_result "$agent_name" "$msg_key" "mail_disabled" "watcher" "mail_disabled"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
@@ -746,31 +775,41 @@ deliver_worker() {
     local pane_id
     pane_id=$(run_to "$TMUX_TIMEOUT" tmux display-message -p -t "=$session_name" '#{pane_id}' 2>/dev/null) || pane_id=""
     if [[ ! "$pane_id" =~ ^%[0-9]+$ ]]; then
-        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher" "pane_not_found"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
-    local paste_file submit_rc=0
+    local paste_file submit_rc=0 submit_reason
     paste_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify.XXXXXX") || paste_file=""
     if [[ -z "$paste_file" ]] || ! printf '%s' "$prompt" > "$paste_file"; then
         [[ -n "$paste_file" ]] && rm -f "$paste_file"
-        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher" "input_file_unavailable"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
     # The helper shares the pane lock with Cockpit and checks the visible
     # input before Enter. A refused or unknown send leaves the signal pending.
-    run_to "$((TMUX_TIMEOUT + 2))" tmux submit-input "$pane_id" "$paste_file" 2>/dev/null || submit_rc=$?
+    local receipt_file="${STATE_DIR}/notify-locks/${agent_name}-${msg_key}.receipt"
+    # Keep normal output on the watcher log and read only the helper's diagnostic.
+    {
+        submit_reason=$(AGENTSTACK_NOTIFY_RECEIPT="$receipt_file" \
+            run_to "$((TMUX_TIMEOUT + 2))" tmux submit-input "$pane_id" "$paste_file" 2>&1 >&4) || submit_rc=$?
+    } 4>&1
     rm -f "$paste_file"
     if (( submit_rc != 0 )); then
         local result="submit_failed"
         if (( submit_rc == 3 )); then result="submit_deferred"; fi
-        state_mark_result "$agent_name" "$msg_key" "$result" "watcher"
+        case "$submit_reason" in
+            input_not_found|pane_locked|pane_changed|previous_pane_changed|editor_waiting|scrolled_draft|editor_not_empty|paste_unavailable|load_buffer_failed|editor_changed|paste_failed|enter_failed|draft_not_confirmed|enter_not_confirmed|terminal_unavailable|submission_state_unavailable) ;;
+            *) submit_reason="$result" ;;
+        esac
+        state_mark_result "$agent_name" "$msg_key" "$result" "watcher" "$submit_reason"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
 
     state_mark_result "$agent_name" "$msg_key" "success" "watcher"
+    rm -f "$receipt_file" 2>/dev/null || true
     release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
     log "  Injected notification into '$agent_name' (session: $session_name)"
     # Per-message files are watcher-owned (each represents one delivery); unlink

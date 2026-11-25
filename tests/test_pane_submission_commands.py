@@ -103,3 +103,18 @@ def test_watcher_reads_the_end_of_a_scrolled_claude_draft():
             'Fetch inbox to read the rest.')
     assert submission['ready'](view, text)
     assert not submission['ready'](view, 'A different prompt that ends elsewhere.')
+    assert not submission['same_notice'](view, text)
+
+
+def test_a_preexisting_notice_needs_an_exact_complete_visible_editor():
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    line = 'ORRERY Mail notification: message from Sender. Please read it.'
+    metadata = '/tmp/fixture.sock\t100\t%1\t200\t2\t0\t15\t1\tclaude'
+    border = '─' * 24
+    view = submission['frame'](metadata, [border, '❯ ORRERY Mail notification: message',
+                                        '  from Sender. Please read it.', border], '%1')
+    assert submission['same_notice'](view, line)
+    assert not submission['same_notice'](view, line.replace('from Sender', 'from  Sender'))
+    view = submission['frame'](metadata, [border, '❯ ORRERY Mail notification: message',
+                                        '  from Sender. Please read it.', ' extra draft text', border], '%1')
+    assert not submission['same_notice'](view, line)

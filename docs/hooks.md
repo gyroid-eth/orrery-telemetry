@@ -193,7 +193,7 @@ dangerous command pattern の検査は `AGENTSTACK_MONITOR_DANGER_CHECK=1` の�
 
 guard方式の変更を反映する更新では、旧watcherと配送workerを通常の管理元で停止してから新しいwatcherを起動します。古いguardは自動削除しません。片付ける場合も、旧workerが動いたままlockを削除しないでください。
 
-配送先は agent 名と完全一致する tmux session だけです。bare shell や無関係 session を避け、通知 text を literal send した後、submit を別 call の `C-m` で送ります。tmux call は timeout 付き worker に分離し、server stall が watcher 全体を止めないようにします。
+配送先は agent 名と完全一致する tmux session だけです。legacy watcher は貼り付け後の入力欄を確かめ、別の呼び出しで `C-m` を送ります。通知の全文が見えて一致する場合は Enter だけで再開します。ほかの下書きや一部が隠れた下書きは保留します。Enter の直前に pane を記録するため、再起動しても同じ pane の入力欄が空なら配送を確定できます。保留が 3 回続くと watcher log に agent・メッセージ・理由を記録し、その後は理由が変わったときにまた記録します。tmux 呼び出しはタイムアウト付きの worker で行います。
 
 ## Codex との違い
 

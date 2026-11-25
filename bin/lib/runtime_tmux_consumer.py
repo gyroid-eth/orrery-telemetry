@@ -1,8 +1,52 @@
 """Private legacy adapter: resolve once, re-admit actual target before effects."""
+import hashlib
+import json
 import os
 from pathlib import Path
 import runpy
 import sys
+import tempfile
+
+
+class NotificationReceipt:
+    """Persist the Enter boundary independently of the watcher's worker."""
+
+    def __init__(self, path, text):
+        self.path = Path(path)
+        self.digest = hashlib.sha256(text.encode()).hexdigest()
+        self.identity = None
+        self.confirmed = False
+        try:
+            record = json.loads(self.path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return
+        self.confirmed = record['confirmed'] is True
+        if not self.confirmed and record['digest'] != self.digest:
+            raise ValueError('notification changed during submission')
+        socket, server, pane, process = record['pane']
+        self.identity = Path(socket), server, pane, process
+
+    def before_enter(self, identity):
+        if self.identity is None:
+            self._save(identity, confirmed=False)
+            self.identity = identity
+
+    def confirm(self):
+        self._save(self.identity, confirmed=True)
+
+    def _save(self, identity, *, confirmed):
+        socket, server, pane, process = identity
+        entry = {'pane': [str(socket), server, pane, process],
+                 'digest': self.digest, 'confirmed': confirmed}
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=self.path.parent,
+                                         prefix='.notify-receipt-', delete=False) as handle:
+            temporary = Path(handle.name)
+            try:
+                json.dump(entry, handle)
+                handle.flush()
+                temporary.replace(self.path)
+            finally:
+                temporary.unlink(missing_ok=True)
 
 
 def main(argv):
@@ -17,7 +61,22 @@ def main(argv):
             with Path(argv[2]).open(encoding='utf-8') as handle:
                 text=handle.read(262145)
             if not text.strip() or len(text.encode('utf-8'))>262144:return 2
-            return {'accepted':0,'refused':3,'unknown':4}[consumer.submit_text(argv[1],text)]
+            receipt_path = os.environ.get('AGENTSTACK_NOTIFY_RECEIPT')
+            if not receipt_path:
+                return {'accepted':0,'refused':3,'unknown':4}[consumer.submit_text(argv[1],text)]
+            try:
+                receipt = NotificationReceipt(receipt_path, text)
+                if receipt.confirmed:
+                    return 0
+                result = consumer.submit_text(
+                    argv[1], text, recovery=receipt,
+                    on_wait=lambda reason: print(reason, file=sys.stderr))
+                if result == 'accepted':
+                    receipt.confirm()
+            except (OSError, ValueError, KeyError, TypeError):
+                print('submission_state_unavailable', file=sys.stderr)
+                return 2
+            return {'accepted':0,'refused':3,'unknown':4}[result]
         if argv and (argv[0] in ('attach','attach-session') or (argv[0]=='new-session' and '-A' in argv)):
             if argv[0]=='new-session' and consumer.transport.identity is None:
                 api['private_directory'](consumer.transport.path.parent,create=True)
