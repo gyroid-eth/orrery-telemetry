@@ -127,6 +127,8 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 private な `harness_state_dir` に初期 prompt・native launch plan・native 専用の短い指示を保存します。指示の正本は `bin/lib/harness_instructions.md` で、既存の共通 renderer が起動・Mail 等の共通規則を取り込みます。初回起動と同じ ID の再開で、dsh の `AGENTS.md` / Hermes の system prompt へ渡します。ORRERY の子作成・raw 認証回復・他 runtime 専用の手順は載せません。共有編集の予約と自己専用 scratch の区別、停止条件は保持します。dsh の tool-subagent や Hermes の auxiliary/delegation 設定、skills の配布は変えません。Claude / Codex の指示本文も不変です。
 
+dsh の子は、Claude の子と同じ利用者の skill（`$CLAUDE_CONFIG_DIR/skills`、未設定なら `~/.claude/skills`）も読みます。dsh-tui では skill の探索を agent preset が持つので、起動計画の環境に `DSH_AGENTS_HOME` として Claude の設定 dir を渡し、`$DSH_AGENTS_HOME/skills` として探させます。dsh が有効と認めた個人 skill の frontmatter の名前が製品 skill と一致するときは、個人 skill を優先します。過去の link を外す対象は、行き先が同じ製品 skill のものに限ります。起動と再開のたびに、link を変える直前に読み直します。個人 skill のディレクトリが検査中に消えた場合や、アクセスできない場合は、製品の skill を link して起動し、理由を子の `harness_state_dir` の `personal-skills.json` に残します。個人 skill のために利用者の設定や skill を書き換えることはありません。`DSH_AGENTS_HOME` を変えるので、dsh 既定の `~/.agents` の skill と `AGENTS.md` は読まれなくなり、代わりに `$CLAUDE_CONFIG_DIR/AGENTS.md` があれば読まれます。Hermes の子の skill は従来どおり製品の skill です。
+
 鍵や親 token の値は指示に含めません。追加の stdio/HTTP MCP は共通の tool 選択からコピーし、明示指定の承認や filter を native config に写せない場合は起動を止めます。installer の既定に含まれる項目は、native config に写せるものを適用し、使えない項目を通知して外します。native tool の adapter は、既存の鍵読取・登録・予約 hook の判定を呼びます。
 
 Hermes の新しい子は、世代の外にある profiles 実体の

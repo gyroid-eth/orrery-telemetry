@@ -171,7 +171,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 You can choose a child's tools when you start it, for example `/delegate "<task>" --base mail-only --tools screen:read:windows-mcp`. In `/api/spawn` the fields are `base` and `tools` ([API](api.en.md#post-apispawn)). `hooks/child_tools.py` is the single interpreter of both.
 
 - **`--base` omitted or `default`**: a Claude child's only MCP server is ORRERY Mail, while the browser (Claude in Chrome) still depends on the user's Claude settings. A Codex child follows the `inherit` profile above. dsh and Hermes children inherit only the enabled Chrome MCP definition from Codex, alongside authenticated Mail (see below). Whatever `--tools` selects is added on top
-- **`--base mail-only`**: the child gets ORRERY Mail and only what `--tools` selects. A Claude child also gets `--no-chrome` unless a browser was selected. A Codex child gets the same disabling as `--codex-mcp orrery-only`, and then enables the selected servers and plugins (combining it with `--codex-mcp inherit` is rejected)
+- **`--base mail-only`**: added MCP servers are ORRERY Mail and servers explicitly selected with `--tools`. Built-in harness tools, such as web search and fetch where available, remain usable. A Claude child also gets `--no-chrome` unless a browser was selected. A Codex child gets the same disabling as `--codex-mcp orrery-only`, and then enables the selected servers and plugins (combining it with `--codex-mcp inherit` is rejected)
 
 | `--tools` | Claude child | Codex child |
 |---|---|---|
@@ -185,6 +185,10 @@ You can choose a child's tools when you start it, for example `/delegate "<task>
 ### The default browser for dsh and Hermes
 
 With `base=default`, native children inherit the enabled `chrome-devtools` server, or the one server running `chrome-devtools-mcp`, from `CODEX_HOME/config.toml` (otherwise `~/.codex/config.toml`) and the Codex child overlay. Other Codex MCP servers are not added. The `command`, `args`, `env` and `cwd` are the same definition, so `--autoConnect` connects to the user's usual signed-in Chrome. Without a configured, enabled browser the child still gets only Mail. `base=mail-only` does not add the browser automatically. Environment values are not displayed.
+
+Explicit `--tools mcp:chrome-devtools` on dsh or Hermes uses the same Codex Chrome MCP definition. If Codex has no browser definition, it uses the Claude user or launch-folder definition. The phone Browser control uses this selection. A person still answers Chrome’s connection prompt.
+
+New Agent offers Off, Temporary Chrome, and My Chrome. Temporary Chrome uses a temporary profile for the child that is removed when Chrome closes. My Chrome uses your usual Chrome via Claude in Chrome for Claude Code or Chrome DevTools `--autoConnect` for the other supported harnesses. If Chrome asks for connection permission on the first connection, browser actions wait until you respond on the Mac. Antigravity hides the choices when its global Chrome MCP is enabled because workspace settings cannot replace it.
 
 This follows Codex's default MCP inheritance, which differs from explicit `--tools browser` and its classified tool exposure and individual approvals. Explicit native browser selection also discovers the Codex definition, but stops while dsh and Hermes cannot express those approval requirements. Default inheritance also refuses Codex-specific tool filters/approvals or other unrepresentable settings, rather than dropping them and broadening permissions. Supported definitions contain only the stdio `command`, `args`, `env`, `cwd` and `enabled` fields. The CLI displays `Harness prepare failed: unsupported_mcp_selection` (or `Harness resume-prepare failed: unsupported_mcp_selection` during resume preparation). `native_mcp_selection_unsupported` and `native_mcp_approval_unsupported` are internal exception reasons, not the displayed diagnostic.
 

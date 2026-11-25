@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 48
+API_GENERATION = 49
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -7332,9 +7332,19 @@ def agent_history_payload(name: str = "", hours: int | None = 24,
 
 
 try:
-    from dashboard.terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal, reader_compaction)
+    from dashboard.terminal_state import (
+        _ASK_CODEX_RE, _ASK_Q_RE, _CTX_CODEX_LEFT_RE,
+        _CTX_CODEX_USED_RE, _CTX_RE, _QUESTION_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE,
+        _WORK_RE, codex_model_effort, compact_readiness, compact_refusal,
+        current_modal_activity, reader_compaction,
+    )
 except ModuleNotFoundError:
-    from terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal, reader_compaction)
+    from terminal_state import (
+        _ASK_CODEX_RE, _ASK_Q_RE, _CTX_CODEX_LEFT_RE,
+        _CTX_CODEX_USED_RE, _CTX_RE, _QUESTION_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE,
+        _WORK_RE, codex_model_effort, compact_readiness, compact_refusal,
+        current_modal_activity, reader_compaction,
+    )
 # --------------------------------------------------------------------------- #
 # Agent runtime probe — コンテキスト残量(HP) + 動作状態を tmux ペインから読む
 #   Claude Code / Codex の TUI 表示を read-only パース。新データ源は持たない。
@@ -7792,56 +7802,7 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     if composer is not None:
         return "wait", ""
 
-    # Claude wraps the permission modal before tmux captures it. Its heading
-    # can be above the 16-line window, while the menu must end the capture.
-    permission = " ".join(" ".join(current[-32:]).split()).replace("❯ ", "")
-    # The menu lists only the permissions still missing, so after one is
-    # granted it shrinks to that setting and "Try again".
-    if ("Computer use needs macOS permissions " in permission
-            and " Open System Settings → " in permission
-            and permission.endswith(" Try again Enter to confirm · Esc to cancel")):
-        return "ask", ""
-
-    # These footer controls must still be current. Looking at the last control
-    # rather than reversing work/ask priority also preserves new work after an
-    # answered modal that remains in the scrollback.
-    rows = [row.strip() for row in current[-16:] if row.strip()]
-    if not rows:
-        return "wait", ""
-    # Codex hook trust has its own footer, not the normal command-approval one.
-    # Require the complete current menu transcribed from the reviewed screen;
-    # the title or a prose explanation of hook trust is not an approval UI.
-    hook = rows[-7:]
-    if (len(hook) == 7 and hook[0] == "Hooks need review"
-            and re.fullmatch(r"[1-9]\d* hooks? (?:is|are) new or changed\.", hook[1])
-            and hook[2] == "Hooks can run outside the sandbox after you trust them."
-            and [re.sub(r"^[›❯>]\s*", "", row) for row in hook[3:6]] == [
-                "1. Review hooks", "2. Trust all and continue",
-                "3. Continue without trusting (hooks won't run)"]
-            and any(re.match(r"[›❯>]\s*[123]\.", row) for row in hook[3:6])
-            and hook[6] == "enter confirm · esc skip"):
-        return "ask", ""
-    # The existing question literal may put its footer before numbered choices.
-    # Only those choices may follow it; arbitrary later output is not current UI.
-    for index, row in enumerate(rows):
-        if (_QUESTION_RE.fullmatch(row)
-                and all(re.fullmatch(r"[❯>›]?\s*\d+\.\s+.+", option)
-                        for option in rows[index + 1:])):
-            return "question", ""
-    if _ASK_CODEX_RE.fullmatch(rows[-1]) or _ASK_YN_RE.search(rows[-1]):
-        return "ask", ""
-    for index, row in enumerate(rows):
-        if _ASK_Q_RE.match(row) and rows[index + 1:]:
-            options = rows[index + 1:]
-            # Claude's edit approval places this control hint after the menu.
-            # Keep the question and numbered choices mandatory; arbitrary later
-            # output must still invalidate an old approval screen.
-            if options[-1] in {"Esc to cancel", "Esc to cancel · Tab to amend"}:
-                options = options[:-1]
-            if (any(_ASK_OPT_RE.match(option) for option in options)
-                    and all(re.fullmatch(r"[❯>›]?\s*\d+\.\s+.+", option) for option in options)):
-                return "ask", ""
-    return "wait", ""
+    return current_modal_activity(current) or "wait", ""
 
 
 def _parse_runtime(text: str) -> dict:
@@ -8887,6 +8848,31 @@ def _spawn_catalog_providers():
 
 
 
+def _native_browser_directories(dirs):
+    """Which preset folders can copy Chrome DevTools into a native child."""
+    selection = _child_tools_module()
+    spec = {'base': 'mail-only', 'tools': {'mcp': ['chrome-devtools']}}
+    settings = _env_path("AGENTSTACK_CLAUDE_JSON", "~/.claude.json")
+    codex_config = selection.native_codex_config(resume=_child_resume_module())
+    available = []
+    for directory in dirs:
+        if _resolve_spawn_directory(directory) is None:
+            continue
+        try:
+            selection.native_plan(spec, cwd=os.path.expanduser(directory), claude_json=settings,
+                                  codex_config=codex_config)
+        except selection.ToolsError:
+            continue
+        available.append(directory)
+    return available
+
+
+def _spawn_browser_modes():
+    tools = _child_tools_module()
+    config = tools.native_codex_config(resume=_child_resume_module())
+    return tools.launch_browser_modes(config)
+
+
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     if sys.platform == "win32":
@@ -8926,6 +8912,9 @@ def spawn_names_payload() -> dict:
         "adjectives": adjectives,
         "naming": "adjective-scientist",
         "dirs": dirs,
+        "native_browser_dirs": _native_browser_directories(dirs) if local_catalog and not FRESH_MODE else [],
+        "supports_browser_off": not FRESH_MODE,
+        **({"browser_modes": _spawn_browser_modes()} if not FRESH_MODE else {}),
         "models": list(claude_models),
         "default_model": claude_default,
         "providers": [
@@ -9541,6 +9530,10 @@ def _spawn_tools_args(payload: dict, provider: str, chrome: bool,
     if "browser" in tools:
         device = tools["browser"]["device"]
         args += ["--tools", "browser:" + device if device else "browser"]
+    if tools.get("browser_off"):
+        args += ["--tools", "no-browser"]
+    if "browser_mode" in tools:
+        args += ["--tools", "browser-mode:" + tools["browser_mode"]]
     if "chrome_extension" in tools:
         args += ["--tools", "chrome-extension"]
     if "screen" in tools:
@@ -10032,7 +10025,9 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             "project_key": project_key,
             "sender_name": parent,
             "to": [child_name],
-            "cc": [parent],
+            # The parent's audit copy. Mail signals to/cc recipients only, so
+            # bcc keeps the parent from being notified of its own task mail.
+            "bcc": [parent],
             "subject": subject,
             "body_md": "\n".join(body_lines),
             "importance": "high",
