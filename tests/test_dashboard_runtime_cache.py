@@ -670,6 +670,28 @@ def test_claude_edit_approval_footer_does_not_promote_old_or_incomplete_ui(text)
     assert server._parse_runtime(text)["act_state"] == "wait"
 
 
+_CLAUDE_SCROLLED_HOOK = (
+    "Hook PreToolUse:Bash requires confirmation\n"
+    "Do you want to proceed?\n"
+    "❯ 1. Yes\n"
+    "  2. No\n"
+    "↑ 58 more lines\n"
+    "Esc to cancel · Tab to amend\n"
+)
+
+
+@pytest.mark.parametrize("text,expected", [
+    (_CLAUDE_SCROLLED_HOOK, "ask"),
+    (_CLAUDE_SCROLLED_HOOK.replace("↑ 58 more lines", "↓ 1 more line"), "ask"),
+    (_CLAUDE_SCROLLED_HOOK + _CLAUDE_INPUT, "wait"),
+    (_CLAUDE_SCROLLED_HOOK + "⏺ The command finished.\n", "wait"),
+    (_CLAUDE_SCROLLED_HOOK.replace("↑ 58 more lines", "↑ 58 more lines of output"), "wait"),
+    (_CLAUDE_SCROLLED_HOOK.replace("❯ 1. Yes\n  2. No\n", ""), "wait"),
+])
+def test_scrolled_claude_hook_requires_a_current_menu(text, expected):
+    assert server._parse_runtime(text)["act_state"] == expected
+
+
 def test_current_work_after_claude_edit_approval_remains_work():
     parsed = server._parse_runtime(
         _CLAUDE_EDIT_APPROVAL + "\n✳ Stewing… (7s · ↓ 1.1k tokens)\n" + _CLAUDE_INPUT
