@@ -15,16 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('editor,editor_text,selection,accepted', [
     ('claude', '/log', '/log', True),
     ('claude', '/log', '/login', False),
-    ('claude', '/log', None, False),
+    ('claude', '/log', None, True),
     ('claude', '/log note', None, True),
     ('claude-wrapped', '/compact', '/compact', True),
     ('claude-wrapped', '/compact', '/compact-later', False),
     ('codex', '/compact', '/compact', True),
     ('codex', '/comp', '/compact', False),
-    ('codex', '/compact', None, False),
+    ('codex', '/compact', None, True),
     ('codex', 'A plain notice', None, True),
 ])
-def test_watcher_submits_only_proven_slash_completion(monkeypatch, editor, editor_text, selection, accepted):
+def test_watcher_submits_matching_or_picker_free_slash_draft(monkeypatch, editor, editor_text, selection, accepted):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
     paste = sent = False
