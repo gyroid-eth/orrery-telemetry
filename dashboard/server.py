@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 50
+API_GENERATION = 53
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -114,9 +114,10 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import agent_card, legacy_http_admission, claude_history, agy_history
+    from dashboard import agent_card, agent_process, legacy_http_admission, claude_history, agy_history
 except ModuleNotFoundError:  # direct script execution
     import agent_card
+    import agent_process
     import legacy_http_admission
     import claude_history
     import agy_history
@@ -2124,7 +2125,19 @@ def _card_claude_screen_mode(screen_launch, definition, project):
     return None
 
 
-def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None):
+def _card_process_permissions(session, process_tree, program, kind):
+    @functools.cache
+    def read(pid):
+        return agent_process.argv(pid)
+
+    pid = _agent_process_pid(
+        session.get("pane_pid"), process_tree, program,
+        match=lambda pid, _name, _program: agent_process.matches_harness(read(pid), kind),
+    )
+    return agent_process.observe(pid, process_tree, kind, read=read)
+
+
+def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None, process_tree=None):
     name, program = row["name"], row.get("program")
     if program == "antigravity" and registration and _valid(name):
         children = Path(RUNTIME_DIR) / "child-agents"
@@ -2264,6 +2277,11 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
             # An older conversation-only launch has no evidence for its tools.
             computer = browser = None
 
+    observed = {}
+    if (permission_reason == _PERMISSION_SETTINGS_MISSING and computer is None and browser is None
+            and row.get("running") is True and session.get("mail_disabled") != "1"):
+        observed = _card_process_permissions(session, process_tree, program, kind)
+
     if row.get("lifecycle") == "persistent":
         permission_reason = "Persistent agents cannot change permissions on resume"
     elif row.get("surface") == "codex-app" or program == "codex-app":
@@ -2276,7 +2294,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
            if permission_reason != _PERMISSION_UNSUPPORTED else {}),
         "cwd": cwd, "model_id": model, "effort": effort, "harness_kind": kind,
         "ctx_window_tokens": harness_context.window_tokens(row.get("ctx_window")) if kind else None,
-        "computer_use": computer, "browser_use": browser,
+        "computer_use": computer, "browser_use": browser, **observed,
         "parent_state": parent_state, "parent_agent": parent,
     }
 
@@ -2480,7 +2498,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 registration = {"agent_id": registered["id"], "project_key": project_key,
                                 "program": registered["program"], "model": registered["model"]}
         row.update(_agent_card_fields(row, sessions.get(name, {}), runtime_by_name.get(name, {}),
-                                      registration, codex_catalog, screen_launch=screen_launches.get(name)))
+                                      registration, codex_catalog, screen_launch=screen_launches.get(name),
+                                      process_tree=process_tree))
         row.setdefault("permission_resume_supported", False)
         row.setdefault("permission_resume_reason", _PERMISSION_UNSUPPORTED)
         row["resume_capability"] = _resume_capability_for_row(

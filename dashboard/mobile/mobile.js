@@ -76,7 +76,46 @@ function readerProfile(name,recordedModel=''){
  }
  return profile;
 }
-window.OrreryMobileProfile={forName:readerProfile,face(name,model){const e=face(readerProfile(name,model)||{name},1);e.setAttribute('aria-hidden','true');return e;}};
+const PERMISSION_MODES={off:'Off',view:'View',control:'Control'};
+function paintPermissions(box){
+ const rows=(snapshot?.agents||[]).filter(a=>a.name===box.dataset.agent),a=rows.length===1?rows[0]:{};
+ const marks=[];
+ if(a.running===true){
+  const computer=Object.hasOwn(PERMISSION_MODES,a.computer_use)?a.computer_use:null;
+  const browser=typeof a.browser_use==='boolean'?a.browser_use?'on':'off':null;
+  if(computer||a.computer_use_reason)marks.push(['computer',computer||'unknown',PERMISSION_MODES[computer]||'Unknown',a.computer_use_reason]);
+  if(browser||a.browser_use_reason)marks.push(['browser',browser||'unknown',browser==='on'?'On':browser==='off'?'Off':'Unknown',a.browser_use_reason]);
+ }
+ const signature=JSON.stringify(marks);if(box.dataset.signature===signature)return;box.dataset.signature=signature;
+ const labelFor=kind=>kind==='computer'?'Computer use':'Browser use';
+ const permissionMark=([kind,state,value,reason])=>{
+  const label=labelFor(kind)+': '+value+(reason?'. '+reason:'');
+  const mark=node('span','reader-permission');mark.dataset.kind=kind;mark.dataset.state=state==='control'?'on':state;
+  mark.setAttribute('role','img');mark.title=label;mark.setAttribute('aria-label',label);
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),use=document.createElementNS('http://www.w3.org/2000/svg','use');
+  svg.setAttribute('class','mobile-icon');svg.setAttribute('aria-hidden','true');use.setAttribute('href','#icon-launch-'+kind);svg.append(use);mark.append(svg);
+  return mark;
+ };
+ const elements=marks.filter(mark=>mark[1]!=='unknown').map(permissionMark);
+ const unresolved=marks.filter(mark=>mark[1]==='unknown');
+ if(unresolved.length){
+  const details=node('details','reader-permission-details'),summary=node('summary','reader-permission-summary');
+  const icons=unresolved.map(permissionMark);
+  summary.setAttribute('aria-label',icons.map(mark=>mark.title).join('. '));
+  for(const icon of icons)icon.setAttribute('aria-hidden','true');
+  summary.append(...icons,node('span','reader-permission-unknown','Unknown'));
+  const reasons=node('div','reader-permission-reasons');
+  if(unresolved.length===2&&unresolved[0][3]===unresolved[1][3]){
+   reasons.textContent=unresolved[0][3];
+  }else{
+   for(const [kind,,,reason] of unresolved)reasons.append(node('div','',labelFor(kind)+': '+reason));
+  }
+  details.append(summary,reasons);elements.push(details);
+ }
+ box.replaceChildren(...elements);
+ box.hidden=!marks.length;
+}
+window.OrreryMobileProfile={forName:readerProfile,paintPermissions,face(name,model){const e=face(readerProfile(name,model)||{name},1);e.setAttribute('aria-hidden','true');return e;}};
 function person(name){const a=snapshot.agents.find(x=>x.name===name)||{name,provider:'',model:'',locality:null};const e=node('div','person');e.append(face(a),node('span','name',name));return e;}
 function syncView(){
  const graphPanel=$('#graph-panel'),wasHidden=graphPanel.hidden;
@@ -313,6 +352,7 @@ function render(data){
  window.OrreryMobileWorkspace?.refresh();
  window.OrreryMobileConversation?.refreshProfiles?.();
  window.OrreryMobileConversation?.refreshActivity?.();
+ for(const box of document.querySelectorAll('.reader-permissions[data-agent]'))paintPermissions(box);
  $('#snapshot-note').textContent='Snapshot observed '+time(data.observed_at)+'. Account usage unavailable. Context arcs are separate.';
 }
 function syncFilters(){
@@ -1246,7 +1286,11 @@ function changePane(){if(busy()||phase==='unknown')return;window.OrreryMobileCom
 function paneButton(label,cls=''){const b=action(label,'terminal-pane-button '+cls,changePane);b.disabled=busy()||phase==='unknown';return b;}
 function readerBar(){
  const bar=make('div','reader-bar'),who=make('div','reader-person'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>{portrait.remove();};
- const initials=make('span','reader-initials',name.slice(0,2)),title=make('h2','',name);title.id='terminal-title';who.append(initials,portrait,title,make('span','reader-state'));bar.append(who);
+ const initials=make('span','reader-initials',name.slice(0,2)),title=make('h2','',name);title.id='terminal-title';title.title=name;
+ // Permission marks sit under the name so they never take its width.
+ const label=make('div','reader-name'),permissions=make('div','reader-permissions');permissions.dataset.agent=name;permissions.hidden=true;label.append(title,permissions);
+ who.append(initials,portrait,label,make('span','reader-state'));bar.append(who);
+ window.OrreryMobileProfile?.paintPermissions?.(permissions);
  const icons={conversation:['Conversation','M3 4h6l3 2 3-2h6v15h-6l-3 2-3-2H3z M12 6v15'],terminal:['Terminal','m5 7 5 5-5 5 M13 17h6'],close:['Close Conversation','m6 6 12 12 M18 6 6 18']};
  for(const value of ['conversation','terminal','close']){
   if(value==='terminal'&&!enabled)continue;
