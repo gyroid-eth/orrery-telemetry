@@ -992,7 +992,10 @@ def _agy_inherited_servers(path, scope):
 
 def _agy_managed_browser_conflict(servers):
     return any(isinstance(value, dict) and value.get("disabled") is not True
-               and _codex_chrome_server(name, value) for name, value in servers.items())
+               and (_codex_chrome_server(name, value)
+                    or (isinstance(value.get("command"), str)
+                        and os.path.basename(value["command"]) == "chrome-devtools-mcp"))
+               for name, value in servers.items())
 
 
 def claude_config(proxy: dict, *, claude_json: str, servers: dict | None = None) -> dict:

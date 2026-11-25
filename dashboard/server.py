@@ -5605,7 +5605,7 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False):
             "AGENTSTACK_HOME": str(Path(HOOKS_DIR).parent), "AGENTSTACK_HOOKS_DIR": HOOKS_DIR,
             "AGENTSTACK_WORKTREE_ROOT": _worktree_root(),
             "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": project,
-            "AGENTSTACK_PORT": str(PORT),
+            **({"AGENTSTACK_PORT": str(PORT)} if state["gemini_launch"].get("standalone") is True else {}),
             "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
             "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
             "AGENT_NAME": session, "PARENT_AGENT": state.get("parent_agent", ""),

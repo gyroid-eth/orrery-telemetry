@@ -179,18 +179,10 @@ def _configure_standalone(directory, plan, mcp):
         raise
 
 
-def _delegated_mcp_path(cwd, mail_command, *, resume):
+def _delegated_mcp_path(cwd):
     path = _guard_config(cwd).with_name("mcp_config.json")
     if path.exists() or path.is_symlink():
-        if not resume:
-            raise ValueError("The worktree already has .agents/mcp_config.json")
-        config = child_resume._load_state(path)
-        servers = config.get("mcpServers")
-        managed = {"orrery-mail", "chrome-devtools", child_tools.SCREEN_SERVER}
-        if (set(config) != {"mcpServers"} or not isinstance(servers, dict)
-                or not servers.keys() <= managed
-                or servers.get("orrery-mail") != {"command": mail_command, "args": []}):
-            raise ValueError("Antigravity worktree MCP configuration is no longer managed")
+        raise ValueError("The worktree already has .agents/mcp_config.json")
     return path
 
 
@@ -276,24 +268,28 @@ def run(runtime, name, task_file=None, conversation=None):
     config_dir = None
     try:
         standalone = plan.get("standalone") is True
-        mail_command = str(_home() / "bin" / "agentstack-gemini-mcp")
-        mcp_path = None if standalone else _delegated_mcp_path(cwd, mail_command, resume=bool(conversation))
-        generation = uuid.uuid4().hex
-        mcp, screen_mode = child_tools.agy_launch_config(
-            mail_command, _tool_selection(plan), runtime=str(runtime), project=project, child=name,
-            mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
-            generation=generation, cwd=cwd if standalone else None,
-            resume_from=(plan.get("screen_generation") or "") if conversation else None,
-        )
-        if standalone:
-            directory = path.with_suffix(".agy-config")
-            _configure_standalone(directory, plan, mcp)
-            config_dir = directory
-        else:
-            child_resume._atomic_json(mcp_path, mcp)
+        # Delegated resumes defer to the existing workspace and user MCP policy.
+        screen_mode = "off"
+        if standalone or conversation is None:
+            mail_command = str(_home() / "bin" / "agentstack-gemini-mcp")
+            mcp_path = None if standalone else _delegated_mcp_path(cwd)
+            generation = uuid.uuid4().hex
+            mcp, screen_mode = child_tools.agy_launch_config(
+                mail_command, _tool_selection(plan), runtime=str(runtime), project=project, child=name,
+                mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
+                generation=generation, cwd=cwd if standalone else None,
+                resume_from=(plan.get("screen_generation") or "") if conversation else None,
+            )
+            if standalone:
+                directory = path.with_suffix(".agy-config")
+                _configure_standalone(directory, plan, mcp)
+                config_dir = directory
+            else:
+                child_resume._atomic_json(mcp_path, mcp)
+            if screen_mode is not None or conversation:
+                plan = {**plan, "screen_generation": generation if screen_mode is not None else None,
+                        "screen_launch_mode": screen_mode or "off", "screen_tmux": identity}
         if screen_mode is not None or conversation:
-            plan = {**plan, "screen_generation": generation if screen_mode is not None else None,
-                    "screen_launch_mode": screen_mode or "off", "screen_tmux": identity}
             child_resume.prepare_active_state(runtime, name, project_key=project, program=PROGRAM,
                                               gemini_launch=plan)
         env["AGENTSTACK_AGY_HISTORY_LAUNCH"] = subprocess.check_output(

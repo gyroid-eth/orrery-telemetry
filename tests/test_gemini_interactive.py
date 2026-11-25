@@ -273,10 +273,9 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
         ".agents", ".agents/hooks.json"]
 
 
-@pytest.mark.parametrize("standalone", [True, False])
 @pytest.mark.parametrize(("lowered", "expected"), [("view", screen_state.VIEW_TOOLS), ("off", ())])
-def test_resume_rotates_the_screen_binding_and_keeps_a_lower_operator_mode(
-        tmp_path, monkeypatch, standalone, lowered, expected):
+def test_standalone_resume_rotates_the_screen_binding_and_keeps_a_lower_operator_mode(
+        tmp_path, monkeypatch, lowered, expected):
     cwd = (tmp_path / "workspace").resolve()
     cwd.mkdir()
     runtime = tmp_path / "runtime"
@@ -293,9 +292,9 @@ def test_resume_rotates_the_screen_binding_and_keeps_a_lower_operator_mode(
     monkeypatch.setenv("AGENTSTACK_PORT", "+53162")
     monkeypatch.setenv("TMUX_PANE", "%4")
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
-    agy.prepare(runtime, NAME, PROJECT, "" if standalone else "FixtureParent",
+    agy.prepare(runtime, NAME, PROJECT, "",
                 source=source, cwd=cwd, binary=sys.executable, model="gemini-fixture",
-                effort="high", standalone=standalone, tools=["screen:operate"])
+                effort="high", standalone=True, tools=["screen:operate"])
     monkeypatch.setattr(agy.subprocess, "check_output",
                         lambda argv, **_: IDENTITY if argv[0] == "tmux" else "history-fixture")
     launches = []
@@ -303,7 +302,7 @@ def test_resume_rotates_the_screen_binding_and_keeps_a_lower_operator_mode(
     def launch(argv, **_):
         if argv[0] == "/bin/bash":
             return SimpleNamespace(returncode=0)
-        config_dir = Path(argv[argv.index("--add-dir") + 1]) if standalone else cwd
+        config_dir = Path(argv[argv.index("--add-dir") + 1])
         config = json.loads((config_dir / ".agents/mcp_config.json").read_text())
         bind_path = Path(config["mcpServers"]["orrery-screen"]["env"]["AGENTSTACK_SCREEN_BINDING_FILE"])
         settings = json.loads(argv[argv.index("--settings") + 1])
@@ -340,6 +339,63 @@ def test_resume_rotates_the_screen_binding_and_keeps_a_lower_operator_mode(
     assert resumed["generation"] != initial["generation"]
     assert not launches[0][0].exists()
     assert launches[1][1:] == ("http://127.0.0.1:53163", [f"mcp(orrery-screen/{tool})" for tool in expected])
+
+
+@pytest.mark.parametrize("policy", ["disabled", "filtered", "legacy"])
+def test_delegated_resume_preserves_the_workspace_mcp_and_adds_no_screen_grants(managed, monkeypatch, policy):
+    runtime, cwd, state = managed
+    state_path = child_resume._paths(runtime, NAME)[0]
+    plan = state["gemini_launch"]
+    generation = "a" * 32
+    if policy == "legacy":
+        plan.pop("tools")
+    else:
+        plan.update(tools=["screen:operate"], screen_generation=generation)
+    child_resume._atomic_json(state_path, state)
+    monkeypatch.setattr(screen_state, "_python", lambda _: sys.executable)
+    launch_mode = "view" if policy == "legacy" else "control"
+    screen, _ = screen_state.launch_definition(runtime, PROJECT, NAME, generation, launch_mode,
+                                               origin="http://127.0.0.1:53162")
+    if policy == "disabled":
+        screen["disabled"] = True
+    if policy == "filtered":
+        screen.update(enabledTools=["list_windows"], disabledTools=["click"])
+    mcp = cwd / ".agents/mcp_config.json"
+    child_resume._atomic_json(mcp, {"mcpServers": {
+        "orrery-mail": {"command": str(agy._home() / "bin/agentstack-gemini-mcp"), "args": []},
+        "orrery-screen": screen,
+        "chrome-devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest", "--isolated"]},
+        "fixture-extra": {"command": "/fixture/extra"},
+    }})
+    before, inode = mcp.read_bytes(), mcp.stat().st_ino
+    store = screen_state.Store(runtime)
+    retained_launches = store.list()
+    assert retained_launches[0]["computer_use"] == launch_mode
+    monkeypatch.setattr(agy.child_tools, "agy_launch_config", lambda *a, **kw: pytest.fail("regenerated MCP"))
+    monkeypatch.setattr(Path, "home", lambda: runtime.parent)
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", PROJECT)
+    monkeypatch.setenv("AGENTSTACK_PORT", "53163")
+    monkeypatch.setenv("TMUX_PANE", "%4")
+    monkeypatch.setattr(agy.subprocess, "check_output",
+                        lambda argv, **_: IDENTITY if argv[0] == "tmux" else "history-fixture")
+    invocations = []
+
+    def launch(argv, **_):
+        if argv[0] != "/bin/bash":
+            invocations.append(argv[-2:])
+            settings = json.loads(argv[argv.index("--settings") + 1])
+            assert all(not rule.startswith("mcp(orrery-screen/)")
+                       for rule in settings["permissions"]["allow"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", launch)
+    child_resume.mark_retired(runtime, NAME, retention_days=30)
+    child_resume.begin_resume(runtime, NAME, agent_id=52, project_key=PROJECT, program="antigravity")
+    assert agy.run(runtime, NAME, conversation=SID) == 0
+    assert invocations == [["--conversation", SID]]
+    assert (mcp.read_bytes(), mcp.stat().st_ino) == (before, inode)
+    assert store.list() == retained_launches
 
 
 @pytest.mark.parametrize(("resume_from", "expected"), [("", "view"), ("e" * 32, "off")])
@@ -384,17 +440,16 @@ def test_standalone_prepare_rejects_incompatible_mcp_before_creating_state(stand
     assert not runtime.exists()
 
 
-@pytest.mark.parametrize(("server_name", "command", "message"), [
-    ("desktop", "/fixture/cua-driver", "workspace Antigravity MCP server 'desktop'"),
-    ("browser", "/fixture/chrome-devtools-mcp", "workspace Antigravity browser MCP"),
+@pytest.mark.parametrize(("server_name", "enabled", "message"), [
+    ("desktop", {"command": "/fixture/cua-driver"}, "workspace Antigravity MCP server 'desktop'"),
+    ("browser", {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"]},
+     "workspace Antigravity browser MCP"),
+    ("browser", {"command": "/fixture/bin/chrome-devtools-mcp"}, "workspace Antigravity browser MCP"),
 ])
-def test_standalone_off_checks_workspace_mcp(standalone_preflight, server_name, command, message):
+def test_standalone_off_checks_workspace_mcp(standalone_preflight, server_name, enabled, message):
     runtime, _, prepare = standalone_preflight
     config = runtime.parent / "selected/.agents/mcp_config.json"
     config.parent.mkdir()
-    enabled = {"command": command}
-    if server_name == "browser":
-        enabled = {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"]}
     config.write_text(json.dumps({"mcpServers": {server_name: enabled}}))
     with pytest.raises(ValueError, match=message):
         prepare(tools=["browser-mode:off"])
@@ -424,8 +479,12 @@ def test_standalone_resume_reports_new_incompatible_mcp_before_start(standalone_
         server._gemini_interactive_module.cache_clear()
 
 
-def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch):
+@pytest.mark.parametrize("standalone", [True, False])
+def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch, standalone):
     runtime, cwd, state = managed
+    if standalone:
+        state["gemini_launch"]["standalone"] = True
+        state.pop("parent_agent")
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
     monkeypatch.setattr(server, "PORT", 53163)
     monkeypatch.setenv("AGENTSTACK_PORT", "+9999")
@@ -447,7 +506,8 @@ def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch):
         assert argv[-3:-1] == ["/bin/bash", "-c"]
         assert "AGENTSTACK_GEMINI_INTERACTIVE=1" in argv
         assert f"AGENTSTACK_RUNTIME_DIR={runtime}" in argv
-        assert "AGENTSTACK_PORT=53163" in argv
+        ports = [arg for arg in argv if arg.startswith("AGENTSTACK_PORT=")]
+        assert ports == (["AGENTSTACK_PORT=53163"] if standalone else [])
         assert argv[-1].split("; ", 1)[0].endswith(" || exit $?")
         assert " wait-for agentstack-resume-" in argv[-1]
         assert f"--conversation {SID}" in argv[-1]
