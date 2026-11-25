@@ -128,9 +128,13 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 ## Dashboard NEW AGENT
 
-With the optional provider payload installed and the Dashboard restarted,
-`NEW AGENT` shows an `Antigravity` engine tab. A launch reuses the delegated
-child path above through `spawn_gemini_preregistered.sh`.
+When the optional provider is installed and Dashboard restarts, **NEW AGENT**
+offers Antigravity. On macOS, you can leave the parent blank and open an
+interactive agent in the selected folder, including a folder outside Git.
+The CLI receives the first task once and supports Mail, Reader, and Resume.
+ORRERY loads its Mail and hook settings from a private directory for that
+launch and removes the directory when the agent exits. The selected folder and
+personal configuration need no changes.
 
 ![NEW AGENT with the Antigravity tab selected: the resources row sits under the task, and the footer explains what is still required](images/new_agent_capabilities_dark.png)
 
@@ -139,12 +143,12 @@ child path above through `spawn_gemini_preregistered.sh`.
 Requirements checked before ORRERY Mail registration, so a launch that cannot
 start does not leave a retained child identity behind:
 
-- a parent agent: standalone Antigravity launches are rejected, and the parent
-  must have its local runtime owner token;
-- the launch directory must be inside a git repository, and the worktree base
-  (default `HEAD`) must resolve to a commit;
-- `agy`, `tmux`, the selected Python, `git`, the adapter hook, and the Gemini
-  provider helpers under `~/.agentstack/bin` must be present;
+- Linux/WSL launches and delegated macOS launches require a parent and its
+  local owner credential.
+- Launches with a worktree require a Git repository and a base that resolves
+  to a commit (default `HEAD`).
+- The launcher requires `agy`, `tmux`, the selected Python, the adapter hook,
+  and the Gemini provider helpers.
 - `AGENTSTACK_GEMINI_MODELS`, when explicitly set, is the restrictive model
   allow-list. Otherwise, the picker combines the bundled `gemini-3.8-flash-{high,medium,low}`
   candidates with valid Gemini IDs from the installed `agy models` CLI. This
@@ -178,10 +182,9 @@ Engine and isolation rules:
   `SPAWN` disabled until `low`, `medium`, or `high` is chosen, and the server
   rejects a request without one (`effort required for provider gemini`). The
   CLI launchers' `high` fallback is not applied to Dashboard launches.
-- **Isolated worktree is forced.** The isolation checkbox is locked on while
-  Antigravity is selected; switching to Claude or Codex restores the previous
-  choice, and hidden resource declarations are not sent to those providers.
-- **Resources are required.** Enter comma-separated paths relative to the
+- **Delegated launches use an isolated worktree.** On macOS, a standalone
+  launch creates a worktree when you select Isolation.
+- **Delegated launches require resources.** Enter comma-separated paths relative to the
   repository root, for example `src/**,tests/**`. Absolute paths, `..`, `~`,
   control characters, a leading `-`, backslashes, and `.git` are rejected, as
   is any existing symlink component that resolves outside the repository. The
@@ -192,9 +195,9 @@ Engine and isolation rules:
   filesystem such as default APFS resolves names, so `.GI?/config` or `SR?/**`
   is judged against `.git` or `src` in any letter case.
 
-The launcher delivers the full task to Antigravity and reports the result to
-the parent automatically, so the Dashboard sends no separate task mail for an
-Antigravity child. Launch status, `/api/spawn-status`, and
+The launcher delivers the first task to Antigravity. Delegated launches on
+Linux/WSL report to the parent when they exit. Interactive agents on macOS
+can receive follow-up requests through Mail. `/api/spawn-status` and
 `dashboard/logs/spawn.log` record `provider=gemini`.
 
 The core Dashboard modal interprets the provider `capabilities` contract. The

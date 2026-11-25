@@ -38770,8 +38770,11 @@ function spawnSelectedProviderCapabilities(){
   const provider=spmProviders.find(item=>item.id===spmSelectedProvider);
   return provider&&provider.capabilities||{};
 }
+function spawnProviderStandalone(caps){
+  return caps.standalone===true&&!SPM('spm-parent').value.trim();
+}
 function spawnProviderAcceptsResources(caps){
-  return !!(caps&&(caps.resources_required||caps.resources));
+  return !spawnProviderStandalone(caps)&&!!(caps.resources_required||caps.resources);
 }
 function spawnProviderDisplayModelLabel(provider,modelId){
   const id=String(modelId||'').trim();
@@ -38808,7 +38811,7 @@ function spawnProviderRequirementsMissing(){
   if(!selected||!selected.available)return 'Choose an available model and Harness';
   const caps=spawnSelectedProviderCapabilities();
   const input=SPM('spm-resources');
-  if(caps.resources_required&&
+  if(caps.resources_required&&spawnProviderAcceptsResources(caps)&&
      !(input&&input.value.split(',').some(item=>item.trim())))
     return 'resources are required for this provider';
   if(caps.effort_required&&(!spmEffortExplicit||!spmSelectedEffort))
@@ -38848,8 +38851,9 @@ function applySpawnProviderCapabilities(provider){
     input.oninput=updateSpawnButton;
   }
   const worktree=SPM('spm-worktree');
+  const requiresWorktree=!!caps.worktree_required&&!spawnProviderStandalone(caps);
   if(worktree){
-    if(caps.worktree_required){
+    if(requiresWorktree){
       if(!spmWorktreeForced)spmWorktreeChoice=worktree.checked;
       spmWorktreeForced=true;
       worktree.checked=true;
@@ -38858,7 +38862,7 @@ function applySpawnProviderCapabilities(provider){
       spmWorktreeForced=false;
       worktree.checked=spmWorktreeChoice;
     }
-    worktree.disabled=!!caps.worktree_required;
+    worktree.disabled=requiresWorktree;
     SPM('spm-wt-base').classList.toggle('on',worktree.checked);
   }
   // Claude in Chrome is a Claude CLI flag; other providers never carry it.
@@ -39264,6 +39268,10 @@ function setSpawnStat(msg,cls){
 
 // worktree チェックで base rev フィールドを expand
 document.addEventListener('change',e=>{
+  if(e.target&&e.target.id==='spm-parent'){
+    applySpawnProviderCapabilities(spmProviders.find(item=>item.id===spmSelectedProvider));
+    updateSpawnButton();
+  }
   if(e.target&&e.target.id==='spm-worktree'){
     SPM('spm-wt-base').classList.toggle('on',e.target.checked);
   }

@@ -92,9 +92,11 @@ def _catalog_choices(value):
                     continue
                 harness_id = harness['id']
                 key = _harness_key(harness_id)
-                # These are the tools-aware launch paths supported by the
-                # mobile form. The desktop retains the other provider options.
-                if key not in _TOOLS_HARNESSES:
+                capabilities = provider.get('capabilities')
+                antigravity = (provider_id == 'gemini' and key == 'antigravity'
+                               and isinstance(capabilities, dict)
+                               and capabilities.get('standalone') is True)
+                if key not in _TOOLS_HARNESSES and not antigravity:
                     continue
                 effort = _effort_policy(provider, model, harness)
                 if effort['effort_required'] and not effort['efforts']:
@@ -126,7 +128,7 @@ def _catalog_choices(value):
 def _options(model, route, directory, task, role, effort, computer, browser, configurable):
     payload = {'task':task, 'model':model['model'], 'provider':model['provider'],
                'dir':directory['path'], 'standalone':True, 'headless':True, 'async':True}
-    legacy = {'claude':'claude-code', 'codex':'codex'}
+    legacy = {'claude':'claude-code', 'codex':'codex', 'gemini':'antigravity'}
     if route['key'] != legacy.get(model['provider']):
         payload['harness'] = route['id']
     if model['url_index'] is not None:
@@ -139,6 +141,8 @@ def _options(model, route, directory, task, role, effort, computer, browser, con
         return payload
     if role:
         payload['role'] = role
+    if route['key'] == 'antigravity':
+        return payload
     native = route['key'] in {'dsh', 'hermes'}
     mcp = ['cua-driver'] if computer else []
     if browser and native:
@@ -234,6 +238,7 @@ class MobileSpawn:
             route = next((item for item in model['harnesses'] if item['id'] == value['harness']), None)
             if (route is None or (effort is None and route['effort_required'])
                     or (effort is not None and effort not in route['efforts'])
+                    or (route['key'] == 'antigravity' and (value['computer'] or value['browser']))
                     or (not configurable and (role or value['computer'] or value['browser']))):
                 raise SpawnError('invalid_launch', 400)
             if len(self._receipts) >= RECEIPT_LIMIT:

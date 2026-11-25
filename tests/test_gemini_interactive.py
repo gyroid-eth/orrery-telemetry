@@ -110,6 +110,78 @@ def test_roster_status_is_bound_to_this_tmux_generation(managed, monkeypatch, ca
     assert (observed["model_id"], observed["effort"], observed["act_state"]) == ("gemini-fixture", "high", None)
 
 
+def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_folder(tmp_path, monkeypatch):
+    cwd = tmp_path / "vault"
+    own_hooks = cwd / ".agents" / "hooks.json"
+    own_hooks.parent.mkdir(parents=True)
+    own_hooks.write_text('{"existing":{}}')
+    runtime = tmp_path / "runtime"
+    source = tmp_path / "temporary-token"
+    source.write_text("fixture-credential")
+    source.chmod(0o600)
+    child_resume._atomic_json(Path(str(source) + ".binding.json"), REGISTRATION)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", PROJECT)
+    monkeypatch.setenv("PARENT_AGENT", "Unrelated")
+    monkeypatch.setenv("AGENTSTACK_PROXY_PARENT_AGENT", "Unrelated")
+    monkeypatch.setenv("TMUX_PANE", "%4")
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.chdir(cwd)
+    agy.prepare(runtime, NAME, PROJECT, "", source=source, cwd=cwd,
+                binary=sys.executable, model="gemini-fixture", effort="high", standalone=True)
+    state_path = runtime / "child-agents" / f"{NAME}.json"
+    state = child_resume._load_state(state_path)
+    assert agy.launch_parent(state) == "" and "parent_agent" not in state
+    assert state["gemini_launch"]["cwd"] == str(cwd.resolve())
+    card = server._agent_card_fields({"name": NAME, "program": "antigravity"}, {}, {}, REGISTRATION, ())
+    assert card["parent_state"] == "top" and card["parent_agent"] is None
+    assert own_hooks.read_text() == '{"existing":{}}'
+
+    def check_output(argv, **_kwargs):
+        if argv[0] == "tmux":
+            return IDENTITY
+        assert argv[-3:] == ["prepare", "52", IDENTITY]
+        return "fixture-nonce"
+
+    launches = []
+
+    def launch(argv, *, env, **_kwargs):
+        if argv[0] == "/bin/bash":
+            return SimpleNamespace(returncode=0)
+        added = Path(argv[argv.index("--add-dir") + 1])
+        assert added.parent == state_path.parent and added != cwd
+        assert "PARENT_AGENT" not in env and "AGENTSTACK_PROXY_PARENT_AGENT" not in env
+        assert env["AGENTSTACK_AGY_HISTORY_LAUNCH"] == "fixture-nonce"
+        assert Path.cwd() == cwd.resolve()
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        assert settings["trustedWorkspaces"] == [str(cwd.resolve()), str(added)]
+        config = json.loads((added / ".agents" / "mcp_config.json").read_text())
+        assert set(config["mcpServers"]) == {"orrery-mail"}
+        hooks = json.loads((added / ".agents" / "hooks.json").read_text())
+        assert any("PreToolUse" in hook for hook in hooks.values())
+        assert any("SessionStart" in hook for hook in hooks.values())
+        assert sorted(path.name for path in added.rglob("*.json")) == ["hooks.json", "mcp_config.json"]
+        assert "fixture-credential" not in str(hooks) + str(config)
+        launches.append(argv[-2:])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "check_output", check_output)
+    monkeypatch.setattr(agy.subprocess, "run", launch)
+    task = tmp_path / "handoff"
+    child_resume._atomic_json(task, {"message": {"content": "One initial task."}})
+    assert agy.run(runtime, NAME, task_file=task) == 0
+    assert not task.exists()
+    assert not state_path.with_suffix(".agy-config").exists()
+
+    child_resume.mark_retired(runtime, NAME, retention_days=30)
+    child_resume.begin_resume(runtime, NAME, agent_id=52, project_key=PROJECT, program="antigravity")
+    assert agy.run(runtime, NAME, conversation=SID) == 0
+    assert launches == [["-i", "One initial task."], ["--conversation", SID]]
+    assert not state_path.with_suffix(".agy-config").exists()
+    assert sorted(path.relative_to(cwd).as_posix() for path in cwd.rglob("*")) == [
+        ".agents", ".agents/hooks.json"]
+
+
 def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch):
     runtime, cwd, state = managed
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))

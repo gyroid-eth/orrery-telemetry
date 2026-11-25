@@ -134,6 +134,29 @@ def test_read_only_relay_denies_spawn_before_upstream():
         assert request(port,'POST','/view/spawn',{})[0] == 405
 
 
+@pytest.mark.parametrize('supported', [False, True])
+def test_antigravity_needs_standalone_capability_and_forwards_its_native_options(supported):
+    provider = {'id':'gemini','label':'Antigravity','efforts':['low','high'],
+                'capabilities':{'standalone':supported, 'resources_required':True, 'effort_required':True},
+                'models':[{'id':'gemini-fixture','default':True}],
+                'harnesses':[{'id':'antigravity','available':True,'default':True}]}
+    submitted = []
+    def launch(body):
+        submitted.append(body)
+        return {'ok':True,'child_name':'FixtureCurie'}
+
+    store = MobileSpawn(lambda: {**CATALOG,'providers':[provider]}, launch, lambda _: {})
+    catalog = store.catalog('a'*32, configurable=True)
+    assert bool(catalog['models']) is supported
+    if supported:
+        value = dict(payload(catalog), harness='antigravity', browser=False, computer=False)
+        assert store.launch('a'*32, value) == {'state':'ready','name':'FixtureCurie'}
+        assert submitted == [{
+            'task':value['task'],'model':'gemini-fixture','provider':'gemini','dir':'/workspace',
+            'standalone':True,'headless':True,'async':True,'effort':'high','role':'Review',
+        }]
+
+
 def test_lost_acknowledgement_stays_unknown_even_if_confirmation_is_repeated():
     submitted = []
     submitted_event = threading.Event()

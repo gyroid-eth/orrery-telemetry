@@ -231,7 +231,9 @@ def test_gemini_mac_spawn_passes_managed_screen_to_the_adapter(monkeypatch, gemi
 # --------------------------------------------------------------------------- #
 # Catalog and the single explicit-effort policy owner
 # --------------------------------------------------------------------------- #
-def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform=platform))
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
     monkeypatch.setattr(
         server,
@@ -258,7 +260,7 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
             "resume": False,
             "runtime": True,
             "transcript": False,
-            "standalone": False,
+            "standalone": platform == "darwin",
             "worktree_required": True,
             "resources_required": True,
         },
@@ -349,7 +351,8 @@ def test_gemini_spawn_requires_explicit_effort(tmp_path):
     assert result == {"ok": False, "error": "effort required for provider gemini"}
 
 
-def test_gemini_spawn_rejects_standalone_and_invalid_engine_options(tmp_path):
+def test_gemini_spawn_rejects_standalone_on_linux_and_invalid_engine_options(tmp_path, monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="linux"))
     common = {
         "parent": "Parent-Curie",
         "task": "inspect the dashboard",
@@ -830,6 +833,34 @@ def test_gemini_spawn_dispatches_existing_preregistered_adapter(gemini_env):
     assert not list(gemini_env.runtime.glob("provider-gemini-*"))
 
 
+def test_gemini_standalone_dispatches_without_git_parent_or_reservations(gemini_env, monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="darwin"))
+    monkeypatch.setenv("PARENT_AGENT", "Unrelated")
+    picked = gemini_env.tmp / "picked folder"
+    picked.mkdir()
+    payload = _gemini_payload(gemini_env, dir=str(picked), standalone=True)
+    del payload["parent"], payload["resources"]
+
+    preview = server.do_spawn(dict(payload, dry_run=True))
+    assert preview["ok"] and preview["standalone"] and not preview["worktree"]
+    assert "--standalone" in preview["argv"] and "--worktree" not in preview["argv"]
+    assert preview["argv"][-1] == str(picked)
+    assert not gemini_env.launches.mcp_calls
+
+    result = server.do_spawn(payload)
+    assert result["ok"] and result["standalone"] and not result["worktree"]
+    assert [method for method, _ in gemini_env.launches.mcp_calls] == [
+        "register_agent", "set_contact_policy"]
+    [(args, kwargs)] = gemini_env.launches.launched
+    assert args[5:] == ["--standalone", "--model", "gemini-3.8-flash-medium",
+                        payload["task"], str(picked)]
+    assert "PARENT_AGENT" not in kwargs["env"]
+    assert kwargs["env"]["AGENTSTACK_GEMINI_RESOURCES"] == ""
+    assert not list(picked.iterdir())
+    assert server.do_spawn(dict(payload, worktree=True))["error"] == "provider gemini requires a git repository"
+    assert server.do_spawn(dict(payload, resources="notes.md"))["error"] == "resources require a parent for provider gemini"
+
+
 def test_native_spawn_still_sends_task_mail(gemini_env):
     result = server.do_spawn({"parent": "Parent", "name": "Zesty-Bohr", "task": "work",
                               "dir": str(gemini_env.repo)})
@@ -1134,6 +1165,12 @@ SPM('spm-parent').value='Parent';SPM('spm-task').value='work';SPM('spm-dir').val
 resetSpawnProviderCapabilities();
 renderSpawnProviders(normalizeSpawnProviders(CATALOG));
 out.initialClaude=state();
+SPM('spm-parent').value='';
+selectSpawnProvider('gemini');
+chooseEffort('medium');
+out.geminiStandalone=state();
+selectSpawnProvider('claude');
+SPM('spm-parent').value='Parent';
 selectSpawnProvider('gemini');
 out.geminiSelected=state();
 SPM('spm-resources').value='src/**';SPM('spm-resources').oninput();
@@ -1185,6 +1222,7 @@ def _extract_ui_script(rendered: str) -> str:
 
 def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="darwin"))
     catalog = {"providers": [
         {"id": "claude", "label": "Claude", "program": "claude-code",
          "models": ["claude-sonnet-5"], "default_model": "claude-sonnet-5", "efforts": None},
@@ -1203,6 +1241,13 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     base_payload = {"task": "work", "dir": "/repo", "role": "", "group": "", "parent": "Parent"}
     assert out["initialClaude"]["payload"] == {**base_payload, "provider": "claude",
                                                "model": "claude-sonnet-5"}
+    standalone = out["geminiStandalone"]
+    assert not standalone["worktree"] and not standalone["resourcesShown"]
+    assert not standalone["locked"] and not standalone["launchDisabled"]
+    assert standalone["payload"] == {
+        "task": "work", "dir": "/repo", "role": "", "group": "", "standalone": True,
+        "provider": "gemini", "model": "gemini-3.8-flash-high", "effort": "medium",
+    }
     assert out["geminiSelected"] | {"payload": None} == {
         "worktree": True, "locked": True, "resourcesShown": True, "resources": "",
         "effort": "", "launchDisabled": True,

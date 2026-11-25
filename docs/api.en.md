@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":48}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":49}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -815,12 +815,12 @@ Request:
 | `task` | yes | Task body. The UI accepts up to 4,000 characters |
 | `name` | no | Remove hyphens when specified; must be `available` |
 | `dir` | no | Existing working directory. Defaults to the source repository |
-| `provider` | no | `claude` (default), `codex`, or an exact native connection ID from the catalog (legacy `deepseek`/`strata`, or an added ID such as `strata-epyc`). Do not replace it with its label or `kind` |
+| `provider` | no | `claude` (default), `codex`, `gemini`, or an exact native connection ID from the catalog (legacy `deepseek`/`strata`, or an added ID such as `strata-epyc`). Send the catalog ID |
 | `harness` | DeepSeek / Local required | `dsh` or `hermes`. Claude optionally accepts `claude-code` (legacy alias `claudecode`), Codex `codex-cli` (legacy alias `codex`) |
 | `helper_model` | no | Omitted or `same` inherits the main model. DeepSeek / Local also accepts same-backend formal IDs in the selected model/harness `helper_models`; undeclared or foreign IDs are rejected |
 | `model` | DeepSeek / Local required | Formal ID matching an available provider/model/harness catalog entry. Existing Claude/Codex omitted-model defaults are unchanged |
 | `url_index`, `url_key` | dynamic Local required | Copy both from the selected model row. Index is a nonnegative integer; key binds the configured URL. A changed/reordered URL is refused and requires refreshed selection. These fields are not accepted for fixed-model or other providers |
-| `effort` | no | Send only explicit choices. Claude/Codex use model-specific metadata; DeepSeek/Local validate the selected model and harness capability. Omit to use CLI settings; unknown values are never guessed |
+| `effort` | Antigravity required | Claude/Codex use model-specific metadata. DeepSeek/Local validate the selected model and harness capability. For Antigravity, choose `low`, `medium`, or `high` |
 | `role` | no | At most 40 characters |
 | `group` | no | At most 24 characters |
 | `worktree` | no | Isolated worktree |
@@ -882,6 +882,8 @@ Success:
 ```
 
 With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a CC audit trail; the registration summary / launcher prompt uses the first 80 characters.
+
+In API 49, the `gemini` entry from `/api/spawn-names` on macOS advertises `capabilities.standalone: true`. A standalone launch uses `dir` as its working folder. Git is required only when `worktree: true` is selected. Delegated launches still require a worktree and `resources`.
 
 Claude rejects `effort`. Codex accepts formal `gpt-*` IDs even when absent from cache; only an explicit `AGENTSTACK_CODEX_MODELS` restricts membership. The UI uses per-model effort metadata for choices and omitted defaults; explicit effort is passed through to Codex CLI for final validation. Omitted model and effort use the configured defaults, or the built-in policy when unset. Family aliases follow the newest eligible version in the fresh catalog, rejecting an absent family in a fresh catalog and using bundled fallback for unavailable or stale catalogs. Claude accepts well-formed formal IDs independently of local catalog membership or expiry; an explicit `AGENTSTACK_CLAUDE_MODELS` remains a strict allow-list, and invalid configuration blocks Claude launch. The fixed Claude default is `claude-opus-5-5`; it is rejected if an override excludes it and the request omits a model. Orrery never substitutes another model. See [Claude model catalog](configuration.en.md#claude-model-catalog).
 

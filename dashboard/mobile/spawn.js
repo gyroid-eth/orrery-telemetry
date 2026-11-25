@@ -135,9 +135,10 @@
     if (!next) return;
     const provider = catalog.models[Number(model.value)].provider;
     const key = provider + '/' + next.key;
+    tools.hidden = !catalog.configurable || next.key === 'antigravity';
     if (route !== key) {
       dismissToolHelp();
-      const on = catalog.configurable && next.key !== 'dsh';
+      const on = !tools.hidden && next.key !== 'dsh';
       for (const control of [computer, browser]) control.setAttribute('aria-checked', String(on));
       for (const motion of toggleMotion) motion?.sync(false);
     }
@@ -283,8 +284,8 @@
     selection = {
       catalog:catalog.catalog, model:Number(model.value), harness:harness.value, directory:Number(directory.value),
       task:task.value.trim(), role:catalog.configurable ? role.value.trim() : '',
-      effort:effort.value || null, computer:catalog.configurable && checked(computer),
-      browser:catalog.configurable && checked(browser),
+      effort:effort.value || null, computer:!tools.hidden && checked(computer),
+      browser:!tools.hidden && checked(browser),
     };
     const labels = [
       summaryValue('Model and harness', 'launch-model', model.selectedOptions[0].textContent + ' with ' + route.label),
@@ -292,7 +293,7 @@
     ];
     if (route.efforts.length) labels.push(summaryValue('Effort', 'working', effortLabel(selection.effort || route.default_effort)));
     if (selection.role) labels.push(summaryValue('Role', 'agents', selection.role));
-    if (catalog.configurable) {
+    if (!tools.hidden) {
       labels.push(summaryValue('Computer use', 'launch-computer', selection.computer ? 'On' : 'Off'));
       labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));
     }
