@@ -412,7 +412,10 @@ def test_shortcut_root_document_navigation_accepts_only_the_authenticated_shell(
     extra=[] if origin is None else [('Origin',origin)]
     status,headers,body=shortcut_request(port,method=method,extra=extra)
     assert status==200
-    expected=(Path(relay.__file__).parent/'mobile/index.html').read_bytes()
+    expected=(Path(relay.__file__).parent/'mobile/index.html').read_text(encoding='utf-8')
+    expected=expected.replace('<title>ORRERY</title>','<title>ORRERY · viewer</title>').replace(
+        'name="apple-mobile-web-app-title" content="ORRERY"',
+        'name="apple-mobile-web-app-title" content="ORRERY · viewer"').encode('utf-8')
     assert headers['Content-Type']=='text/html; charset=utf-8'
     assert int(headers['Content-Length'])==len(expected)
     assert body==(expected if method=='GET' else b'')

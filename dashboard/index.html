@@ -2807,6 +2807,15 @@
         <p class="st-note">WAITING FOR /api/quotas</p>
       </div>
     </section>
+    <section class="st-sec" id="st-phone-serve" hidden>
+      <h3 class="st-h">Phone access<span id="phone-serve-backend">WSL</span></h3>
+      <p class="st-h" id="phone-serve-status" role="status"></p>
+      <div class="st-foot" style="gap:6px">
+        <button class="st-reset" id="phone-serve-review" type="button">Review Serve</button>
+        <button class="st-reset" id="phone-serve-cancel" type="button" hidden>Cancel</button>
+        <button class="st-reset" id="phone-serve-confirm" type="button" aria-describedby="phone-serve-status" hidden></button>
+      </div>
+    </section>
   </div>
 </aside>
 
@@ -35544,6 +35553,7 @@ initNetCtl();
     if(!isOpen())return;
     drawer.classList.remove('on');drawer.setAttribute('aria-hidden','true');
     btn.setAttribute('aria-expanded','false');
+    resetPhoneServe();
     if(lastFocus&&typeof lastFocus.focus==='function'&&document.contains(lastFocus))lastFocus.focus();
     else btn.focus();
   }
@@ -35556,6 +35566,86 @@ initNetCtl();
     if(drawer.contains(ev.target)||btn.contains(ev.target))return;
     close();
   });
+  const phoneServe=document.getElementById('st-phone-serve');
+  const reviewServe=document.getElementById('phone-serve-review');
+  const cancelServe=document.getElementById('phone-serve-cancel');
+  const confirmServe=document.getElementById('phone-serve-confirm');
+  const serveBackend=document.getElementById('phone-serve-backend');
+  const serveStatus=document.getElementById('phone-serve-status');
+  const serveErrors={
+    tailscale_missing:'Tailscale was not found.',
+    tailscale_status_unavailable:'Could not reach the Tailscale client.',
+    tailscale_sign_in:'Sign in to Tailscale.',
+    tailscale_dns_unavailable:'Check MagicDNS in Tailscale.',
+    serve_status_unavailable:'Could not read the Tailscale Serve configuration.',
+    serve_port_in_use:'HTTPS 9443 has a Serve or Funnel configuration managed elsewhere.',
+    phone_relay_required:'Turn on Phone access in Cockpit first.',
+    phone_address_mismatch:'Check the address on the phone in Cockpit.',
+    serve_preview_changed:'The Serve configuration changed. Review it again.',
+    serve_command_failed:'Tailscale did not confirm the change. Check Serve status and permissions.',
+    serve_change_unverified:'Check the new Serve configuration in Tailscale.',
+    serve_receipt_invalid:'Could not verify the saved Serve configuration.',
+    mobile_settings_busy:'Phone settings are busy. Try again.',
+  };
+  let servePlan=null,serveRequest=0;
+  function resetPhoneServe(message=''){
+    ++serveRequest;
+    servePlan=null;
+    reviewServe.hidden=false;
+    reviewServe.disabled=false;
+    confirmServe.hidden=true;
+    confirmServe.disabled=false;
+    cancelServe.hidden=true;
+    serveBackend.textContent='WSL';
+    serveStatus.textContent=message;
+  }
+  if(AGENTSTACK_SERVER_DEFAULTS.mobileServe && location.protocol==='http:'
+      && ['127.0.0.1','localhost','[::1]'].includes(location.hostname)){
+    phoneServe.hidden=false;
+    reviewServe.addEventListener('click',async()=>{
+      const request=++serveRequest;
+      reviewServe.disabled=true;
+      serveStatus.textContent='Checking Tailscale…';
+      try{
+        const response=await fetch('/api/mobile-serve');
+        const plan=await response.json();
+        if(request!==serveRequest)return;
+        if(!plan.ok){resetPhoneServe(serveErrors[plan.error]||'Serve is unavailable.');return;}
+        servePlan=plan;
+        const label=plan.action==='add'?'Add':'Remove';
+        serveBackend.textContent=plan.backend==='windows'?'WINDOWS TAILSCALE':'TAILSCALE IN WSL';
+        serveStatus.textContent=label+' HTTPS '+plan.port+' → '+plan.target;
+        reviewServe.hidden=true;
+        cancelServe.hidden=false;
+        confirmServe.hidden=false;
+        confirmServe.textContent=label+' Serve';
+        confirmServe.focus();
+      }catch{
+        if(request===serveRequest)resetPhoneServe('Could not check Serve.');
+      }
+    });
+    cancelServe.addEventListener('click',()=>{resetPhoneServe();reviewServe.focus();});
+    confirmServe.addEventListener('click',async()=>{
+      if(!servePlan)return;
+      const {action,revision}=servePlan;
+      servePlan=null;
+      const request=++serveRequest;
+      confirmServe.disabled=true;
+      cancelServe.hidden=true;
+      serveStatus.textContent='Updating Tailscale…';
+      try{
+        const response=await fetch('/api/mobile-serve',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({action,revision})});
+        const result=await response.json();
+        if(request!==serveRequest)return;
+        resetPhoneServe(result.ok?(action==='add'?'Serve added.':'Serve removed.')
+          :serveErrors[result.error]||'Could not update Serve.');
+        reviewServe.focus();
+      }catch{
+        if(request===serveRequest)resetPhoneServe('Could not verify the Serve change.');
+      }
+    });
+  }
   const seg=document.getElementById('theme-pref');
   const note=document.getElementById('theme-note');
   const api=window.AgentStackColorTheme;

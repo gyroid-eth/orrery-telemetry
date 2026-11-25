@@ -960,12 +960,35 @@ def test_bundled_watcher_reads_agentstack_per_message_signal(tmp_path):
         "tmux",
         """#!/bin/bash
 printf '%s\n' "$*" >> "$FAKE_TMUX_LOG"
+buffer="$FAKE_TMUX_LOG.buffer"
+draft="$FAKE_TMUX_LOG.draft"
 case "$1" in
   list-sessions) cat "$FAKE_TMUX_SESSION_FILE"; printf '\n'; exit 0 ;;
   has-session) exit 0 ;;
   capture-pane) printf '%s\n' 'Claude Code' ;;
-  load-buffer) cat "$4" >> "$FAKE_TMUX_LOG"; printf '\n' >> "$FAKE_TMUX_LOG" ;;
-  paste-buffer|delete-buffer|send-keys) exit 0 ;;
+  display-message)
+    [[ "$4" == '%1' && "$5" == *'#{bracket_paste_flag}'* &&
+       "$*" == *' ; capture-pane -e -p -t %1' ]] || exit 1
+    text=''
+    if [[ -f "$draft" ]]; then text=$(cat "$draft"); fi
+    printf '%s\t300\t%%1\t400\t0\t0\t%s\t1\tclaude\n' "$FAKE_TMUX_SOCKET" "$((2 + ${#text}))"
+    printf '❯ %s\n' "$text"
+    ;;
+  load-buffer)
+    [[ "$4" == '-' ]] || exit 1
+    cat > "$buffer"
+    cat "$buffer" >> "$FAKE_TMUX_LOG"
+    printf '\n' >> "$FAKE_TMUX_LOG"
+    ;;
+  paste-buffer)
+    [[ "${!#}" == '%1' ]] || exit 1
+    mv "$buffer" "$draft"
+    ;;
+  send-keys)
+    [[ "$3" == '%1' && "$4" == C-m && -s "$draft" ]] || exit 1
+    rm "$draft"
+    ;;
+  delete-buffer) rm -f "$buffer" ;;
   *) exit 1 ;;
 esac
 """,
@@ -1044,6 +1067,10 @@ esac
         assert "list-sessions -F #{session_name}" in calls
         assert "capture-pane -t %1" in calls  # admitted pane ID from the fixture
         assert "message from ProOpus [high]: per-message verification" in calls
+        assert [line.split()[0] for line in calls.splitlines()
+                if line.startswith(('load-buffer ', 'paste-buffer ', 'send-keys '))] == [
+            'load-buffer', 'paste-buffer', 'send-keys',
+        ]
     finally:
         watcher.terminate()
         watcher.wait(timeout=10)

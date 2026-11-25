@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":47}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":48}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -411,6 +411,10 @@ receipt の時刻が現在の tmux `session_created` より古ければ `stale` 
 `history_binding: bound` のときだけ `transcript_path`（子専用 `HERMES_HOME/state.db` の絶対 path）を返します。根拠の `history_session_id`（native session ID）と `history_receipt_ts`（callback の元の ISO 時刻、UTC offset 付き）は bound/stale に付けます。形式は既存の `program: hermes` で判断します。reader は **DB path と session ID の両方**を照合し、`messages.session_id` を必ず絞ってください。同じ HOME の別 session は同じ DB を共有します。JSONL reader へ渡せません。
 
 正式な project/agent 登録、子固有の launch/input、固定された専用 HOME、`on_session_start` の本人 callback、DB 内の exact な CLI session を検証します。cwd・最新 session・更新時刻で探しません。証拠の欠落・不一致・起動/resume の準備中は `unbound`、明示 exact resume ではない新 terminal より callback が古い場合は `stale` です。bound 以外は path を返さず、`history_binding_reason` / `history_binding_reason_code` で理由を示します。正常時の理由は空文字 / `bound`。退役後も対応付けの証拠が残れば読めますが、削除・purge 後は unbound です。callback が更新されない provider 内の session 切替・圧縮では古い記録を指す可能性があり、子孫 session や緊急退避 JSONL を推測して追いません。fresh Hermes の TUI 履歴は前述の保護された `/api/history` 経路で読みます。
+
+#### Antigravity（API 48）
+
+legacy の管理された対話型起動は、公式 hook による会話 UUID と `transcript.jsonl` または `transcript_full.jsonl` の path を、現在の Mail 登録と tmux 起動に結びます。通常の binding field を使い、path は bound のときだけ返します。同じ起動の複数の UUID を受領した場合は `unbound` と `session_conflict` を返します。headless の結果ログはこの binding の対象外です。
 
 ### その他の agent 表示 field
 

@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 47
+API_GENERATION = 48
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -114,11 +114,12 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import agent_card, legacy_http_admission, claude_history
+    from dashboard import agent_card, legacy_http_admission, claude_history, agy_history
 except ModuleNotFoundError:  # direct script execution
     import agent_card
     import legacy_http_admission
     import claude_history
+    import agy_history
 
 
 def _same_origin_request(handler) -> bool:
@@ -288,6 +289,8 @@ def _render_dashboard_index(
     }
     if _dsh_enabled():
         config["dshEnabled"] = True
+    if not GLOBAL_MODE and _is_wsl():
+        config["mobileServe"] = True
     replacement = (
         "const AGENTSTACK_SERVER_DEFAULTS="
         + json.dumps(config, ensure_ascii=True, separators=(",", ":"))
@@ -1978,6 +1981,12 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None, session
     `reuse_stopped` lets the roster poll reuse the verdict of a row that is not
     running for a short while; the light route never does.
     """
+    program = row.get("program")
+    if program in agy_history.PROGRAMS:
+        if FRESH_MODE or GLOBAL_MODE:
+            return agy_history.unbound("protected_history_required")
+        return agy_history.binding(RUNTIME_DIR, row["name"],
+                                   _resume_registration(row["name"], agy_history.PROGRAMS), session_state)
     if reuse_stopped and row.get("running") is False:
         key = (row.get("name"), row.get("program"), row.get("category"), row.get("created"))
         cached = _STOPPED_BINDING_REUSE.get(key)
@@ -1986,7 +1995,6 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None, session
             cached = _history_binding_fields(row, now=now, claude_index=claude_index)
             _STOPPED_BINDING_REUSE.put(key, cached, mark)
         return dict(cached)
-    program = row.get("program")
     if program in {"codex", "codex-cli"}:
         return _codex_history_binding(row["name"], now=now)
     if program in {"claude", "claude-code"}:
@@ -5927,12 +5935,6 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
             f'exec env -u OPENAI_API_KEY codex resume {sid} '
             f'-C {shlex.quote(cwd)} {_codex_child_launch_flags()}'
         )
-    # Claude in Chrome defaults (possibly in the tmux server env) belong to
-    # Claude children; a Codex child must not hand them on to its own spawns.
-    inner = (
-        'unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE; '
-        + inner
-    )
     resume_environment = {
         "AGENTSTACK_HOME": install_home,
         "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR,
@@ -5955,6 +5957,16 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
     configured_python = os.environ.get("AGENTSTACK_PYTHON", "").strip()
     if configured_python:
         resume_environment["AGENTSTACK_PYTHON"] = configured_python
+    if launch_origin == "child":
+        # Apply the verified child settings after the login profile runs, as
+        # Claude does. The bootstrap uses the environment to locate its owner.
+        exports = "".join(
+            f"export {key}={shlex.quote(value)}; " for key, value in resume_environment.items()
+        )
+        inner = exports + inner
+    # Claude in Chrome defaults (possibly in the tmux server env) belong to
+    # Claude children; a Codex child must not hand them on to its own spawns.
+    inner = 'unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE; ' + inner
     tmux_environment = [
         argument
         for key, value in resume_environment.items()
@@ -10728,6 +10740,50 @@ def _screen_http():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _phone_serve(self):
+        def reply(code, payload):
+            self._send(code, json.dumps(payload).encode(), 'application/json; charset=utf-8')
+
+        if GLOBAL_MODE or not _is_wsl():
+            reply(404, {'ok': False, 'error': 'serve_unsupported'})
+            return
+        from ipaddress import ip_address
+        host = self.headers.get('Host', '')
+        local_hosts = {f'{name}:{self.server.server_port}' for name in ('localhost', '127.0.0.1', '[::1]')}
+        origin = self.headers.get('Origin')
+        posting = self.command == 'POST'
+        if (not ip_address(self.client_address[0]).is_loopback or host not in local_hosts
+                or not _same_origin_request(self)
+                or (posting or origin is not None) and origin != f'http://{host}'):
+            self.close_connection = True
+            reply(403, {'ok': False, 'error': 'serve_local_browser_required'})
+            return
+        if self.path != '/api/mobile-serve':
+            self.close_connection = True
+            reply(400, {'ok': False, 'error': 'serve_request_invalid'})
+            return
+        try:
+            from dashboard import mobile_serve
+        except ModuleNotFoundError:
+            import mobile_serve
+        if not posting:
+            reply(200, mobile_serve.preview())
+            return
+        lengths = self.headers.get_all('Content-Length', [])
+        if (self.headers.get_content_type() != 'application/json' or self.headers.get('Transfer-Encoding')
+                or len(lengths) != 1 or not re.fullmatch(r'[0-9]{1,3}', lengths[0])
+                or not 0 < int(lengths[0]) <= 256):
+            self.close_connection = True
+            reply(400, {'ok': False, 'error': 'serve_confirmation_invalid'})
+            return
+        try:
+            body = json.loads(self.rfile.read(int(lengths[0])))
+        except ValueError:
+            reply(400, {'ok': False, 'error': 'serve_confirmation_invalid'})
+            return
+        result = mobile_serve.confirm(body)
+        reply(200 if result['ok'] else 409, result)
+
     def _fresh_get(self, path):
         from agentstack_mail.storage_origin_contract import B1Error
         # Explicit allow-list: no unknown fresh read enters a legacy Mail,
@@ -10962,6 +11018,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == '/api/mobile-serve':
+            self._phone_serve()
+            return
         if path.startswith("/api/computer-use") and path in _screen_http().PATHS:
             _screen_http().respond(self, path, RUNTIME_DIR, HOOKS_DIR)
             return
@@ -11309,6 +11368,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_post(self):
         path = urlparse(self.path).path
+        if path == '/api/mobile-serve':
+            self._phone_serve()
+            return
         if path.startswith("/api/computer-use") and path in _screen_http().PATHS:
             _screen_http().respond(self, path, RUNTIME_DIR, HOOKS_DIR)
             return

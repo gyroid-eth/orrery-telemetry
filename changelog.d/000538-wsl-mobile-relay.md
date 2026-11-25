@@ -1,0 +1,3 @@
+### WSL2でスマホのReaderを使う
+
+CockpitのPhone accessでWSL2のリレーをsystemd user unitとして管理できます。WSL内にTailscaleがない場合はWindows側を使います。TelemetryのSettingsでHTTPS 9443のServeを追加・削除する前に対象を表示し、確認ボタンで確定します。

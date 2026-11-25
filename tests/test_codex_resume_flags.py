@@ -548,6 +548,12 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     default_config_before = default_config.read_bytes()
     zdotdir = tmp_path / "zdotdir"
     zdotdir.mkdir()
+    (zdotdir / ".zshenv").write_text(
+        "export AGENTSTACK_RUNTIME_DIR=/other-install/runtime\n"
+        "export AGENTSTACK_PROJECT_KEY=other-project\n"
+        "export AGENTSTACK_MCP_URL=http://127.0.0.1:9/mcp\n",
+        encoding="utf-8",
+    )
     runtime = tmp_path / "runtime"
     codex_home, _token_file, config_before = _seed_child_identity(runtime, project)
     _write_private(codex_home / "config.toml", 'stale_snapshot = true\n')
@@ -603,6 +609,9 @@ def test_deck_resume_exec_receives_the_fresh_launch_pair(policy_env, monkeypatch
     fake_codex = fake_bin / "codex"
     fake_codex.write_text(
         "#!/usr/bin/env bash\n"
+        f'[[ "$AGENTSTACK_RUNTIME_DIR" == {shlex.quote(str(runtime))} ]] || exit 1\n'
+        f'[[ "$AGENTSTACK_PROJECT_KEY" == {shlex.quote(str(project))} ]] || exit 1\n'
+        f'[[ "$AGENTSTACK_MCP_URL" == {shlex.quote(cleanup_mail)} ]] || exit 1\n'
         "printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"${AGENTSTACK_CODEX_LAUNCH_BINDING:-}\" "
         "\"${AGENTSTACK_CODEX_LAUNCH_ID:-}\" \"${AGENTSTACK_CODEX_LAUNCH_KIND:-}\" "
         "\"${CODEX_HOME:-}\" \"${CODEX_SHARED_CODEX_DIR:-}\" \"$*\" "
