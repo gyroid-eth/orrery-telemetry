@@ -49,7 +49,7 @@ def request(port, method, path, body=None, headers=HEADERS):
         connection.close()
 
 
-def fixture(log):
+def fixture(log, catalog=CATALOG):
     class Upstream(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -65,7 +65,7 @@ def fixture(log):
         def do_GET(self):
             log.append(self.path)
             if self.path == '/telemetry/spawn-catalog':
-                self.respond(CATALOG)
+                self.respond(catalog)
             elif self.path == '/api/spawn-status?name=FixtureCurie':
                 self.respond({'ok':True,'name':'FixtureCurie','state':'ready','detail':'internal'})
             else:
@@ -132,6 +132,33 @@ def test_read_only_relay_denies_spawn_before_upstream():
     with serving(relay.make_server(config,store=Store(),test_port=0)) as port:
         assert request(port,'GET','/view/spawn')[0] == 404
         assert request(port,'POST','/view/spawn',{})[0] == 405
+
+
+@pytest.mark.parametrize('available', [True, False])
+def test_wsl_mobile_screen_choice_uses_the_managed_relay(available):
+    reason = 'Windows Cua Driver did not answer.'
+    source = dict(CATALOG, computer_use_transport='orrery-screen', computer_use=available)
+    if not available:
+        source['computer_use_reason'] = reason
+    calls = []
+    with serving(fixture(calls)) as dashboard, serving(fixture(calls, source)) as desktop:
+        config = relay.Config(OWNER, ORIGIN, upstream_port=dashboard, cockpit_port=desktop,
+                              input_enabled=True, phone_policy_reviewed=True)
+        with serving(relay.make_server(config, store=Store(), input_client=Input(31), test_port=0)) as port:
+            status, catalog = request(port, 'GET', '/view/spawn')
+            assert status == 200
+            assert catalog['computer_use_transport'] == 'orrery-screen'
+            assert catalog['computer_use'] is available
+            assert catalog.get('computer_use_reason') == (None if available else reason)
+            value = payload(catalog)
+            if not available:
+                assert request(port, 'POST', '/view/spawn', value)[0] == 400
+                assert calls == ['/telemetry/spawn-catalog']
+                value['computer'] = False
+            assert request(port, 'POST', '/view/spawn', value)[0] == 200
+            assert calls[-1][1]['tools'] == {
+                'browser': {}, **({'screen': {'server': 'orrery-screen', 'access': 'operate'}} if available else {})
+            }
 
 
 def test_antigravity_models_are_listed_without_forwarding_an_invalid_standalone_launch():

@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":48}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":51}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -208,6 +208,11 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 [取得・実確認の手順](dsh-stage-a.md)も参照。
 
 ## GET `/api/spawn-names`
+
+API 51 adds `computer_use_transport: "orrery-screen"` to the WSL catalog.
+Offer Computer use when `computer_use` is true. When false, show `computer_use_reason`.
+When the user chooses it, send `tools.screen: {"server":"orrery-screen","access":"operate"}` in `POST /api/spawn`.
+The catalog checks the HTTP operator configuration and the Windows Cua Driver named pipe.
 
 API33 adds dynamic Local providers with `dynamic_models: true` / `model_source: server`. The picker explicitly reads each configured endpoint's `/v1/models`; static validation and spawn POST do not discover models. Each model retains its raw `id`, optional `display_name`, zero-based `url_index`, opaque `url_key`, `model_state` (`loaded`, `available`, `unloaded`), `context` and `context_source` (`server`, `override`, `default`). Missing/unknown status permits a valid ID; only explicit unloaded disables it. `Available` is not a loaded claim. Per-URL failure appears in `endpoints[].reason`; a failed discovery publishes no stale model rows. URLs and credential references are not in the public catalog. Dynamic effort is unreported and helper is Same as main. Actual command generation/exact resume makes one selected-URL lookup and refuses ID absence, explicit unloaded or lookup failure. It does not continuously lock the server model.
 

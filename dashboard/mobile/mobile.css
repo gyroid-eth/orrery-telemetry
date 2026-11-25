@@ -368,6 +368,7 @@ html[data-color-theme=light] .graph-status-flag.question{color:#076c80}
 .mobile #spawn-tools .om-toggle .mobile-icon{margin-top:-8px}
 #spawn-tools .om-toggle-track{position:absolute;inset:auto auto 4px;transform:scale(.45);transform-origin:center bottom}
 .mobile #spawn-tools .icon-button[aria-checked=true]{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 55%,var(--hair));background:var(--control-active)}
+.mobile #spawn-computer[aria-disabled=true]{opacity:.55;cursor:not-allowed}
 .mobile #spawn-tools .mobile-icon{width:17px;height:17px}
 .spawn-tool-help{
   display:none;position:absolute;z-index:3;right:0;bottom:calc(100% + 8px);width:min(250px,70vw);padding:8px 10px;

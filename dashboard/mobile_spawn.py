@@ -128,7 +128,7 @@ def _catalog_choices(value):
     return models, dirs
 
 
-def _options(model, route, directory, task, role, effort, computer, browser, configurable):
+def _options(model, route, directory, task, role, effort, computer, browser, configurable, managed_screen):
     payload = {'task':task, 'model':model['model'], 'provider':model['provider'],
                'dir':directory['path'], 'standalone':True, 'headless':True, 'async':True}
     legacy = {'claude':'claude-code', 'codex':'codex'}
@@ -145,12 +145,14 @@ def _options(model, route, directory, task, role, effort, computer, browser, con
     if role:
         payload['role'] = role
     native = route['key'] in {'dsh', 'hermes'}
-    mcp = ['cua-driver'] if computer else []
+    mcp = ['cua-driver'] if computer and not managed_screen else []
     if browser and native:
         mcp.append('chrome-devtools')
     if not browser or route['key'] == 'codex' and not computer:
         payload['base'] = 'mail-only'
     payload['tools'] = {}
+    if computer and managed_screen:
+        payload['tools']['screen'] = {'server':'orrery-screen', 'access':'operate'}
     if mcp:
         payload['tools']['mcp'] = mcp
     if browser and not native:
@@ -190,19 +192,30 @@ class MobileSpawn:
                 del self._receipts[token]
 
     def catalog(self, epoch, *, configurable):
-        models, directories = _catalog_choices(self._fetch_catalog())
+        upstream = self._fetch_catalog()
+        models, directories = _catalog_choices(upstream)
+        managed_screen = upstream.get('computer_use_transport') == 'orrery-screen'
+        computer_use = upstream.get('computer_use') is True
         token = secrets.token_hex(16)
         with self._lock:
             self._prune()
             if len(self._catalogs) >= CATALOG_LIMIT:
                 self._catalogs.popitem(last=False)
-            self._catalogs[token] = (self._clock() + CATALOG_TTL, epoch, configurable, models, directories)
+            self._catalogs[token] = (self._clock() + CATALOG_TTL, epoch, configurable, models, directories,
+                                     managed_screen, computer_use)
+        screen = {}
+        if managed_screen and configurable:
+            screen = {'computer_use_transport':'orrery-screen', 'computer_use':computer_use}
+            if not computer_use:
+                reason = upstream.get('computer_use_reason')
+                screen['computer_use_reason'] = reason if _text(reason, 160) else 'Computer use is unavailable.'
         return {
             'catalog':token,
             'configurable':configurable,
             'models':[{key:value for key, value in model.items()
                        if key in {'model','provider','provider_label','locality','default','harnesses','url_index'}} for model in models],
             'directories':directories,
+            **screen,
         }
 
     def launch(self, epoch, value):
@@ -232,13 +245,14 @@ class MobileSpawn:
             catalog = self._catalogs.get(catalog_id)
             if catalog is None or catalog[1] != epoch:
                 raise SpawnError('catalog_expired', 409)
-            _, _, configurable, models, directories = catalog
+            _, _, configurable, models, directories, managed_screen, computer_use = catalog
             if not 0 <= model_index < len(models) or not 0 <= dir_index < len(directories):
                 raise SpawnError('invalid_launch', 400)
             model, directory = models[model_index], directories[dir_index]
             route = next((item for item in model['harnesses'] if item['id'] == value['harness']), None)
             if (route is None or route.get('launch_blocked') or (effort is None and route['effort_required'])
                     or (effort is not None and effort not in route['efforts'])
+                    or (managed_screen and not computer_use and value['computer'])
                     or (not configurable and (role or value['computer'] or value['browser']))):
                 raise SpawnError('invalid_launch', 400)
             if len(self._receipts) >= RECEIPT_LIMIT:
@@ -250,7 +264,7 @@ class MobileSpawn:
         try:
             result = self._launch(_options(model, route, directory, task.strip(), role.strip(),
                                            effort or route['default_effort'],
-                                           value['computer'], value['browser'], configurable))
+                                           value['computer'], value['browser'], configurable, managed_screen))
             if result.get('ok') is False:
                 state, name = 'failed', None
             elif result.get('ok') is True and _matches_name(result.get('child_name')):

@@ -4,11 +4,58 @@ import http.client
 import json
 import threading
 from urllib.parse import urlencode
+from types import SimpleNamespace
 
 import pytest
 
 from dashboard import http_operator, server, screen_http
 from hooks import screen_state
+
+
+@pytest.mark.parametrize("platform, enabled", [("darwin", True), ("linux", False)])
+def test_non_wsl_catalog_keeps_existing_computer_use_field(monkeypatch, platform, enabled):
+    monkeypatch.setattr(server, "_is_wsl", lambda: False)
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform=platform))
+    assert server._spawn_computer_use_fields() == {"computer_use": enabled}
+
+
+@pytest.mark.parametrize("returncode, message", [
+    (0, None),
+    (2, "Windows Cua Driver executable was not found or is not executable."),
+    (3, "Windows Cua Driver did not answer. Check that its daemon is running."),
+    (4, "Install the Windows Cua Driver version supported by ORRERY."),
+])
+def test_wsl_catalog_checks_operator_then_windows_relay(monkeypatch, tmp_path, returncode, message):
+    home = tmp_path / "install"
+    calls = []
+    monkeypatch.setenv("AGENTSTACK_HOME", str(home))
+    monkeypatch.setenv("AGENTSTACK_CUA_DRIVER", "/fixture/cua-driver.exe")
+    monkeypatch.setattr(server, "_is_wsl", lambda: True)
+    monkeypatch.setattr(server, "FRESH_MODE", False)
+    monkeypatch.setattr(server, "GLOBAL_MODE", False)
+    monkeypatch.setattr(screen_http, "wsl_launch_interop", lambda: "/fixture/interop")
+    module = screen_http.state_module(server.HOOKS_DIR)
+    monkeypatch.setattr(module, "_python", lambda mail_env, deadline: "/fixture/mail-python")
+    monkeypatch.setattr(screen_http.subprocess, "run", lambda *args, **kwargs:
+                        (calls.append((args, kwargs)) or SimpleNamespace(returncode=returncode)))
+    screen_http._windows_driver_reason.cache_clear()
+    try:
+        assert server._spawn_computer_use_fields() == {
+            "computer_use": False, "computer_use_transport": "orrery-screen",
+            "computer_use_reason": "Configure the ORRERY HTTP operator for Computer use.",
+        }
+        assert not calls
+        http_operator.configure(home)
+        fields = server._spawn_computer_use_fields()
+        assert fields == {"computer_use": not message, "computer_use_transport": "orrery-screen",
+                          **({"computer_use_reason": message} if message else {})}
+        (argv, opts), = calls
+        assert argv[0][:2] == ["/fixture/mail-python", "-I"]
+        assert argv[0][2].endswith("/screen_driver_probe.py")
+        assert opts["env"]["WSL_INTEROP"] == "/fixture/interop"
+        assert opts["env"]["AGENTSTACK_CUA_DRIVER"] == "/fixture/cua-driver.exe"
+    finally:
+        screen_http._windows_driver_reason.cache_clear()
 
 
 @contextmanager

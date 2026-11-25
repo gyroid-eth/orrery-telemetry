@@ -3039,6 +3039,7 @@ OFF = legacy snapshot+comet mode">
           <option value="read">View</option>
           <option value="operate">Control</option>
         </select>
+        <div class="spm-hint" id="spm-computer-use-reason" hidden></div>
       </div>
       <details class="spm-row full spm-advanced" id="spm-advanced">
         <summary>
@@ -39235,7 +39236,10 @@ async function loadSpawnCatalog(seq){
     renderSpawnDirs(catalog.dirs);
     const computerUse=SPM('spm-computer-use');
     computerUse.disabled=catalog.computer_use!==true||catalog.capabilities?.tools===false;
-    SPM('spm-computer-use-row').style.display=computerUse.disabled?'none':'grid';
+    const screenReason=SPM('spm-computer-use-reason');
+    screenReason.textContent=computerUse.disabled?catalog.computer_use_reason||'':'';
+    screenReason.hidden=!screenReason.textContent;
+    SPM('spm-computer-use-row').style.display=computerUse.disabled&&screenReason.hidden?'none':'grid';
     setSpawnDraftStatus(spmDraftRestored);
     spmReady=true;
     updateSpawnButton();

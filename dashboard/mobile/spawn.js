@@ -11,6 +11,7 @@
   const settings = $('spawn-settings'), modelChip = $('spawn-model-chip');
   const modelName = $('spawn-model-name'), effortMark = $('spawn-model-effort');
   const computer = $('spawn-computer'), browser = $('spawn-browser');
+  const computerHelp = $('spawn-computer-help'), defaultComputerHelp = computerHelp.textContent;
   const mobileControls = window.OrrerySpawnControls;
   const selects = new Map([
     [harness, mobileControls?.mountDropdown(harness, {inline:true})],
@@ -224,10 +225,22 @@
     if (!next) return;
     const provider = selectedModel().provider;
     const key = provider + '/' + next.key;
+    const managedScreen = catalog.computer_use_transport === 'orrery-screen';
+    const screenDisabled = managedScreen && catalog.computer_use !== true;
+    if (screenDisabled) {
+      computer.setAttribute('aria-disabled', 'true');
+      computer.setAttribute('aria-checked', 'false');
+    } else {
+      computer.removeAttribute('aria-disabled');
+    }
+    computerHelp.textContent = screenDisabled ? catalog.computer_use_reason || 'Computer use is unavailable.'
+      : managedScreen ? 'Computer use lets the agent view the Windows screen and use its mouse and keyboard.'
+      : defaultComputerHelp;
     if (route !== key) {
       dismissToolHelp();
       const on = catalog.configurable && next.key !== 'dsh';
-      for (const control of [computer, browser]) control.setAttribute('aria-checked', String(on));
+      computer.setAttribute('aria-checked', String(on && !managedScreen));
+      browser.setAttribute('aria-checked', String(on));
       for (const motion of toggleMotion) motion?.sync(false);
     }
     route = key;
@@ -372,7 +385,7 @@
     if (reviewButton.disabled) return;
     const route = chosenRoute();
     const selectedDirectory = catalog.directories[Number(directory.value)];
-    const checked = control => control.getAttribute('aria-checked') === 'true';
+    const checked = control => control.getAttribute('aria-disabled') !== 'true' && control.getAttribute('aria-checked') === 'true';
     selection = {
       catalog:catalog.catalog, model:modelIndex, harness:harness.value, directory:Number(directory.value),
       task:task.value.trim(), role:catalog.configurable ? role.value.trim() : '',
@@ -526,7 +539,9 @@
       if (event.pointerType === 'mouse') delete tool.dataset.hint;
     });
     control.onclick = event => {
-      control.setAttribute('aria-checked', String(control.getAttribute('aria-checked') !== 'true'));
+      if (control.getAttribute('aria-disabled') !== 'true') {
+        control.setAttribute('aria-checked', String(control.getAttribute('aria-checked') !== 'true'));
+      }
       dismissToolHelp();
       if (event.pointerType === 'touch' || matchMedia('(hover: none)').matches) tool.dataset.hint = 'shown';
     };

@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 48
+API_GENERATION = 51
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -8775,6 +8775,15 @@ def _spawn_catalog_providers():
 
 
 
+def _spawn_computer_use_fields() -> dict:
+    if not _is_wsl():
+        return {"computer_use": sys.platform == "darwin"}
+    reason = ("Computer use is unavailable in this launch mode." if FRESH_MODE or GLOBAL_MODE else
+              _screen_http().wsl_computer_use_reason(_env_path("AGENTSTACK_HOME", "~/.agentstack"), HOOKS_DIR))
+    return {"computer_use": not reason, "computer_use_transport": "orrery-screen",
+            **({"computer_use_reason": reason} if reason else {})}
+
+
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     if sys.platform == "win32":
@@ -8808,7 +8817,7 @@ def spawn_names_payload() -> dict:
     local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
         os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
     return {
-        "computer_use": sys.platform == "darwin",
+        **_spawn_computer_use_fields(),
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
@@ -10119,6 +10128,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     env = os.environ.copy()
     # Provider values first: the identity/context keys below always win.
     env.update(_spawn_env_overrides(payload, spec))
+    if {"screen:read:orrery-screen", "screen:operate:orrery-screen"}.intersection(args) and _is_wsl():
+        interop = _screen_http().wsl_launch_interop()
+        if interop:
+            env["WSL_INTEROP"] = interop
     # A dashboard request states Claude in Chrome explicitly (spec.provider_args);
     # the CLI env defaults would otherwise turn an unchecked box back on.
     env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME", None)
