@@ -248,8 +248,12 @@ def test_sender_revalidates_the_child_parent_and_mail_enabled(tmp_path, monkeypa
         assert not calls
 
 
-@pytest.mark.asyncio
-async def test_one_notification_reaches_only_the_parent_on_isolated_mail(tmp_path, monkeypatch):
+def test_one_notification_reaches_only_the_parent_on_isolated_mail(tmp_path, monkeypatch):
+    import asyncio
+    asyncio.run(_isolated_mail_scenario(tmp_path, monkeypatch))
+
+
+async def _isolated_mail_scenario(tmp_path, monkeypatch):
     import asyncio
     from agentstack_mail import app, config, db
     from fastmcp import Client
