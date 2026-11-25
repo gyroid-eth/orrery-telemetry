@@ -1,6 +1,7 @@
 """Standard launcher handoff and cleanup evidence; synthetic identities only."""
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 import sys
@@ -96,25 +97,45 @@ def test_regeneration_replaces_previous_browser_selection(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize('platform', ['darwin', 'linux'])
-def test_personal_skill_roots_follow_claude_resolution(tmp_path, monkeypatch, platform):
+def test_personal_skill_home_follows_claude_resolution(tmp_path, monkeypatch, platform):
     monkeypatch.setattr(sys, 'platform', platform)
     home = tmp_path / 'home'
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.delenv('CLAUDE_CONFIG_DIR', raising=False)
     # Without a personal skills directory, nothing is added.
-    assert child.personal_skill_roots() == []
+    assert child.personal_skill_home('dsh') == (None, None)
     (home / '.claude/skills/log').mkdir(parents=True)
-    assert child.personal_skill_roots() == [str(home / '.claude/skills')]
+    assert child.personal_skill_home('dsh') == (str(home / '.claude'), None)
+    assert child.personal_skill_home('hermes') == (None, None)
     # An explicit Claude profile replaces the default, as for the Claude CLI.
     configured = tmp_path / 'claude-profile'
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(configured))
-    assert child.personal_skill_roots() == []
+    assert child.personal_skill_home('dsh') == (None, None)
     (configured / 'skills').mkdir(parents=True)
-    assert child.personal_skill_roots() == [str(configured / 'skills')]
+    assert child.personal_skill_home('dsh') == (str(configured), None)
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', '')
-    assert child.personal_skill_roots() == [str(home / '.claude/skills')]
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', 'relative-profile')
-    assert child.personal_skill_roots() == []
+    assert child.personal_skill_home('dsh') == (str(home / '.claude'), None)
+    # A directory that cannot be resolved leaves the product skills only.
+    for unresolved in ('relative-profile', '~no-such-user-for-orrery/claude'):
+        monkeypatch.setenv('CLAUDE_CONFIG_DIR', unresolved)
+        assert child.personal_skill_home('dsh') == (None, 'claude_config_dir_unresolved')
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason='file modes do not restrict root')
+@pytest.mark.parametrize('entry', ['log/SKILL.md', 'log', 'notes.md'])
+def test_unreadable_personal_skill_keeps_the_product_skills(tmp_path, monkeypatch, entry):
+    # One unreadable entry would make dsh drop every skill, the product ones too.
+    configured = tmp_path / 'claude-profile'
+    (configured / 'skills/log').mkdir(parents=True)
+    (configured / 'skills/log/SKILL.md').write_text('---\nname: log\ndescription: personal\n---\n')
+    (configured / 'skills/notes.md').write_text('---\nname: notes\ndescription: personal\n---\n')
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(configured))
+    target = configured / 'skills' / entry
+    target.chmod(0)
+    try:
+        assert child.personal_skill_home('dsh') == (None, 'unreadable_skill: ' + entry)
+    finally:
+        target.chmod(0o755)
 
 
 @pytest.mark.parametrize('program', ['dsh', 'hermes'])
@@ -132,13 +153,14 @@ def test_generation_reads_personal_skills_at_each_launch(tmp_path, monkeypatch, 
     document = dict(state_dir=str(tmp_path), cwd=str(tmp_path), program=program,
                     mcp_config=str(mail), tools={'base': 'default', 'tools': {}})
     child.generate_plan(document, {'python': sys.executable})
-    assert child.read(tmp_path / 'input.json')['skill_roots'] == [str(skills)]
+    expected = str(skills.parent) if program == 'dsh' else None
+    assert child.read(tmp_path / 'input.json')['personal_skills_home'] == expected
     # A resume regenerates from saved input and follows the current directory.
     (skills / 'log').rmdir()
     skills.rmdir()
     document = child.read(tmp_path / 'input.json')
     child.generate_plan(document, {'python': sys.executable})
-    assert child.read(tmp_path / 'input.json')['skill_roots'] == []
+    assert child.read(tmp_path / 'input.json')['personal_skills_home'] is None
 
 
 @pytest.mark.parametrize('program', ['dsh','hermes'])

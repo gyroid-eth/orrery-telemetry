@@ -214,16 +214,53 @@ def fresh_instructions(state_dir, root):
     return target
 
 
-def personal_skill_roots():
-    """The personal skills directory a Claude child reads, when it exists.
+def _unreadable_skill_entry(skills):
+    """The first entry dsh could not read, relative to the skills root, or None.
 
-    Claude resolves $CLAUDE_CONFIG_DIR/skills, or ~/.claude/skills when that
+    dsh's skill-filesystem fails a whole listing on one unreadable entry, which
+    would hide the product skills as well, so such a root is not offered.
+    """
+    try:
+        entries = sorted(os.scandir(skills), key=lambda entry: entry.name)
+    except OSError:
+        return '.'
+    for entry in entries:
+        try:
+            if entry.is_dir():
+                if not os.access(entry.path, os.R_OK | os.X_OK):
+                    return entry.name
+                skill = Path(entry.path) / 'SKILL.md'
+                if (skill.exists() or skill.is_symlink()) and not os.access(skill, os.R_OK):
+                    return entry.name + '/SKILL.md'
+            elif entry.name.endswith('.md') and not os.access(entry.path, os.R_OK):
+                return entry.name
+        except OSError:
+            return entry.name
+    return None
+
+
+def personal_skill_home(program):
+    """(Claude config directory, reason) for the personal skills a dsh child reads.
+
+    A Claude child reads $CLAUDE_CONFIG_DIR/skills, or ~/.claude/skills when that
     variable is unset. The installer links product skills there only under
     names the user does not already own, so a same-named personal skill wins.
+    The directory is None whenever the personal skills cannot be used; the
+    child then starts with the product skills only, as before.
     """
+    if program != 'dsh':
+        return None, None
     configured = os.environ.get('CLAUDE_CONFIG_DIR', '').strip()
-    skills = (Path(configured).expanduser() if configured else Path.home() / '.claude') / 'skills'
-    return [str(skills)] if skills.is_absolute() and skills.is_dir() else []
+    try:
+        home = Path(os.path.expanduser(configured)) if configured else Path.home() / '.claude'
+    except (KeyError, RuntimeError):
+        return None, 'claude_config_dir_unresolved'
+    if not home.is_absolute():
+        return None, 'claude_config_dir_unresolved'
+    if not (home / 'skills').is_dir():
+        return None, None
+    problem = _unreadable_skill_entry(home / 'skills')
+    return (None, 'unreadable_skill: ' + problem) if problem else (str(home), None)
 
 
 def generate_plan(document, runner):
@@ -232,9 +269,10 @@ def generate_plan(document, runner):
     # Re-evaluate against authenticated Mail, never the previous merged output.
     # Keep the source in saved input for dynamic prelaunch regeneration as well.
     document.setdefault('mcp_base_config', document['mcp_config'])
-    # Re-read at every launch and resume, like the Claude CLI does. Only the
-    # dsh generator uses it; Hermes keeps its product skill links unchanged.
-    document['skill_roots'] = personal_skill_roots()
+    # Re-read at every launch and resume, like the Claude CLI does. Only dsh
+    # children get it; Hermes keeps its product skill links unchanged.
+    home, reason = personal_skill_home(document.get('program'))
+    document['personal_skills_home'], document['personal_skills_reason'] = home, reason
     managed_screen = None
     if 'project_key' in document:
         generation = document.setdefault('screen_generation', uuid.uuid4().hex)

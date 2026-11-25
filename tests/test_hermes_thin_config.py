@@ -427,14 +427,14 @@ class ThinConfig(unittest.TestCase):
             self.generate()
         self.assertEqual((path / 'SKILL.md').read_text(), 'user skill')
 
-    def test_personal_skill_roots_leave_hermes_links_and_config_unchanged(self):
+    def test_personal_skills_leave_hermes_links_and_config_unchanged(self):
         # Personal skills reach dsh only; Hermes keeps the product links.
-        personal = self.base / 'claude-config/skills'
-        (personal / 'delegate').mkdir(parents=True)
-        (personal / 'delegate/SKILL.md').write_text('---\nname: delegate\ndescription: personal\n---\n')
+        personal = self.base / 'claude-config'
+        (personal / 'skills/delegate').mkdir(parents=True)
+        (personal / 'skills/delegate/SKILL.md').write_text('---\nname: delegate\ndescription: personal\n---\n')
         self.generate()
         before = (self.profile / 'config.yaml').read_bytes()
-        self.generate(skill_roots=[str(personal)])
+        self.generate(personal_skills_home=str(personal), skill_roots=[str(personal / 'skills')])
         self.assertEqual((self.profile / 'skills/delegate').resolve(), (ROOT / 'skills/delegate').resolve())
         self.assertEqual((self.profile / 'config.yaml').read_bytes(), before)
 

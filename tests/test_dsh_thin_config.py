@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -88,25 +89,75 @@ class ThinTests(unittest.TestCase):
         self.assertEqual(linked.resolve(), source.resolve())
         self.assertEqual((linked / 'SKILL.md').read_bytes(), content)
 
-    def test_personal_skills_are_a_custom_root_ahead_of_product_links(self):
-        product = self.product / 'skills/log'
-        product.mkdir(parents=True)
-        (product / 'SKILL.md').write_text('---\nname: log\ndescription: product\n---\n')
-        personal = self.root / 'claude-config/skills'
-        (personal / 'log').mkdir(parents=True)
-        (personal / 'log/SKILL.md').write_text('---\nname: log\ndescription: personal\n---\n')
+    def personal_fixture(self):
+        for name, description in (('log', 'product'), ('delegate', 'product'), ('extra', 'product only')):
+            (self.product / 'skills' / name).mkdir(parents=True)
+            (self.product / 'skills' / name / 'SKILL.md').write_text(
+                f'---\nname: {name}\ndescription: {description}\n---\n')
+        personal = self.root / 'claude-config'
+        (personal / 'skills/delegate').mkdir(parents=True)
+        (personal / 'skills/delegate/SKILL.md').write_text('---\nname: delegate\ndescription: personal\n---\n')
+        # A directory under another name that declares a product skill's name.
+        (personal / 'skills/daily-log').mkdir()
+        (personal / 'skills/daily-log/SKILL.md').write_text(
+            '---\nname: log # the vault log\ndescription: personal\n---\n')
+        return personal
+
+    def test_personal_skills_come_from_agents_home_and_product_names_step_aside(self):
+        personal = self.personal_fixture()
         for platform in ('darwin', 'linux'):
             with self.subTest(platform=platform), patch.object(sys, 'platform', platform):
-                plan = thin.generate({**self.doc, 'skill_roots': [str(personal)]})
-                # Native skill-filesystem ranks custom roots (300) ahead of
-                # <DSH_HOME>/skills (400), where the product copy stays linked.
-                self.assertIn({'id': 'skill-filesystem', 'config': {'customSkillDirs': [str(personal)]}},
-                              self.rows(plan))
-                self.assertEqual((Path(plan['env']['DSH_HOME']) / 'skills/log').resolve(), product.resolve())
-                unchanged = thin.generate({**self.doc, 'skill_roots': []})
-                self.assertFalse(any(row.get('id') == 'skill-filesystem' for row in self.rows(unchanged)))
+                plan = thin.generate({**self.doc, 'personal_skills_home': None})
+                home = Path(plan['env']['DSH_HOME'])
+                self.assertNotIn('DSH_AGENTS_HOME', plan['env'])
+                self.assertEqual(sorted(path.name for path in (home / 'skills').iterdir()),
+                                 ['delegate', 'extra', 'log'])
+                self.assertFalse((self.state / 'personal-skills.json').exists())
+                # dsh-tui's preset finds $DSH_AGENTS_HOME/skills after DSH_HOME/skills,
+                # so the product links under personal names are removed.
+                own = home / 'skills/elsewhere'
+                own.symlink_to(self.root)
+                plan = thin.generate({**self.doc, 'personal_skills_home': str(personal)})
+                self.assertEqual(plan['env']['DSH_AGENTS_HOME'], str(personal))
+                self.assertEqual(sorted(path.name for path in (home / 'skills').iterdir()), ['elsewhere', 'extra'])
+                self.assertEqual(thin.read(self.state / 'personal-skills.json'), {
+                    'agents_home': str(personal), 'reason': None, 'shadowed_product_skills': ['delegate', 'log']})
+                self.assertFalse(any(row.get('id') == 'skill-filesystem' for row in self.rows(plan)))
+                # Without the personal skills the product links come back.
+                plan = thin.generate({**self.doc, 'personal_skills_home': None,
+                                      'personal_skills_reason': 'unreadable_skill: log'})
+                self.assertNotIn('DSH_AGENTS_HOME', plan['env'])
+                self.assertEqual(sorted(path.name for path in (home / 'skills').iterdir()),
+                                 ['delegate', 'elsewhere', 'extra', 'log'])
+                self.assertEqual(thin.read(self.state / 'personal-skills.json')['reason'], 'unreadable_skill: log')
+                own.unlink()
                 with self.assertRaisesRegex(ValueError, '^missing_file$'):
-                    thin.generate({**self.doc, 'skill_roots': [str(self.root / 'absent')]})
+                    thin.generate({**self.doc, 'personal_skills_home': str(self.root / 'absent')})
+
+    def test_preset_skill_provider_returns_the_personal_skills(self):
+        # The real dsh-tui preset provider, not the host patch rows it ignores.
+        runtime = os.environ.get('ORRERY_DSH_TEST_RUNTIME')
+        node = os.environ.get('ORRERY_DSH_TEST_NODE') or shutil.which('node')
+        if not runtime or not node:
+            self.skipTest('Explicit installed dsh runtime and node required')
+        provider = Path(runtime) / 'node_modules/@deepseek-ai/dsh-skill-filesystem/lib/index.js'
+        personal = self.personal_fixture()
+
+        def candidates(plan):
+            env = {'PATH': os.environ.get('PATH', ''), 'HOME': str(self.root), **plan['env']}
+            result = subprocess.run([node, str(ROOT / 'tests/dsh_skill_candidates.mjs'), str(provider), plan['cwd']],
+                                    env=env, capture_output=True, text=True, timeout=60, check=True)
+            return [tuple(row) for row in json.loads(result.stdout)]
+
+        plan = thin.generate({**self.doc, 'personal_skills_home': str(personal)})
+        real = lambda path: os.path.realpath(path)
+        self.assertEqual(candidates(plan), [
+            ('delegate', 'user-agents', real(personal / 'skills/delegate/SKILL.md')),
+            ('extra', 'user-dsh', real(self.product / 'skills/extra/SKILL.md')),
+            ('log', 'user-agents', real(personal / 'skills/daily-log/SKILL.md'))])
+        plan = thin.generate({**self.doc, 'personal_skills_home': None})
+        self.assertEqual([row[:2] for row in candidates(plan)],
+                         [('delegate', 'user-dsh'), ('extra', 'user-dsh'), ('log', 'user-dsh')])
 
     def test_native_plan_omits_trial_policy_preserves_proxy_and_instructions(self):
         with patch('subprocess.run', side_effect=AssertionError('subprocess forbidden')):

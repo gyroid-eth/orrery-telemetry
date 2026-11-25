@@ -206,6 +206,40 @@ def link(source, target):
     target.symlink_to(source, target_is_directory=source.is_dir())
 
 
+def skill_name(path):
+    """The frontmatter name dsh lists a skill under, else None."""
+    try:
+        text = Path(path).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != '---' or '---' not in (line.strip() for line in lines[1:]):
+        return None
+    header = '\n'.join(lines[1:[line.strip() for line in lines].index('---', 1)])
+    try:
+        import yaml
+        data = yaml.safe_load(header)
+        name = data.get('name') if isinstance(data, dict) else None
+    except ImportError:
+        match = re.search(r'^name:\s*(.*?)\s*(?:\s#.*)?$', header, re.MULTILINE)
+        name = match.group(1).strip('\'"') if match else None
+    except Exception:  # A header dsh cannot parse lists no skill.
+        return None
+    return name if isinstance(name, str) and name else None
+
+
+def skill_names(root):
+    """Every name a skill root offers: bundle and flat-file names and their frontmatter names."""
+    names = set()
+    for entry in Path(root).iterdir():
+        if entry.is_dir() and (entry / 'SKILL.md').is_file():
+            names.update({entry.name, skill_name(entry / 'SKILL.md')})
+        elif entry.is_file() and entry.suffix == '.md':
+            names.update({entry.stem, skill_name(entry)})
+    names.discard(None)
+    return names
+
+
 def generate(document):
     facts = validate_input(document)
     manifest = read(document['manifest_file'])
@@ -250,12 +284,34 @@ def generate(document):
         raise ValueError('invalid_skill_roots')
     for skill in skill_roots:
         absolute(skill, directory=True)
+    # The personal skills a Claude child reads (harness_child.personal_skill_home).
+    # dsh-tui's preset owns skill discovery and ignores host patch rows, so they
+    # are offered as $DSH_AGENTS_HOME/skills, searched after DSH_HOME/skills.
+    personal = document.get('personal_skills_home')
+    if personal is not None:
+        personal = absolute(personal, directory=True)
+        absolute(str(personal / 'skills'), directory=True)
+    personal_names = skill_names(personal / 'skills') if personal else set()
+    shadowed = []
     skills = facts['root'] / 'skills'
     if skills.is_dir():
         # Native scanner walks one level <name>/SKILL.md: link each skill.
         for skill in skills.iterdir():
             if skill.is_dir() and (skill / 'SKILL.md').is_file():
-                link(skill, home / 'skills' / skill.name)
+                target = home / 'skills' / skill.name
+                if {skill.name, skill_name(skill / 'SKILL.md')} & personal_names:
+                    # As the installer does for Claude, leave the name to the
+                    # personal skill; drop only the link an earlier launch made.
+                    if target.is_symlink() and target.resolve() == skill.resolve():
+                        target.unlink()
+                    shadowed.append(skill.name)
+                    continue
+                link(skill, target)
+    if personal or document.get('personal_skills_reason'):
+        save(state / 'personal-skills.json', {'agents_home': str(personal) if personal else None,
+            'reason': document.get('personal_skills_reason'), 'shadowed_product_skills': sorted(shadowed)})
+    else:
+        (state / 'personal-skills.json').unlink(missing_ok=True)
     backend = facts['backend']
     ref = 'ORRERY_DSH_PROVIDER_KEY'
     provider = {'apiKeyEnv': ref, 'baseURL': backend['base_url']}
@@ -347,6 +403,7 @@ def generate(document):
         protected.extend([str(settings_file), str(definitions)])
     return {'argv': argv, 'cwd': str(cwd), 'config_dir': str(config_dir),
             'env': {'DSH_HOME': str(home), 'DSH_TUI_DATA_DIR': str(tui_data), 'DSH_TUI_LANG': language,
+                    **({'DSH_AGENTS_HOME': str(personal)} if personal else {}),
                     **facts['credential_context'],
                     'AGENTSTACK_LLM_KEY_FILES': json.dumps(protected),
                     'AGENTSTACK_LLM_KEY_DEFINITIONS': str(definitions)},
