@@ -221,11 +221,14 @@ def test_gemini_dry_run_does_not_create_handoffs_or_launch(monkeypatch, gemini_e
 def test_gemini_mac_spawn_passes_managed_screen_to_the_adapter(monkeypatch, gemini_env):
     monkeypatch.setattr(server.sys, "platform", "darwin")
     monkeypatch.setattr(server, "_child_tools_module", lambda: child_tools)
+    monkeypatch.setattr(server, "PORT", 53162)
+    monkeypatch.setenv("AGENTSTACK_PORT", "+9999")
     result = server.do_spawn(_gemini_payload(gemini_env, dry_run=True,
                                             tools={"screen": "read"}))
     assert result["ok"], result
     argv = result["argv"]
     assert argv[argv.index("--tools") + 1] == "screen:read:orrery-screen"
+    assert result["launcher_env"]["AGENTSTACK_PORT"] == "53162"
     assert gemini_env.launches.launched == []
 
 
@@ -326,6 +329,43 @@ def test_direct_cli_launchers_keep_historical_high_effort_fallback():
         ROOT / "bin" / "agent-start-gemini").read_text(encoding="utf-8")
     for path in (ROOT / "hooks" / "spawn_gemini_child.sh", ADAPTER):
         assert 'EFFORT="${AGENTSTACK_GEMINI_EFFORT:-high}"' in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS interactive Antigravity launcher")
+def test_direct_gemini_delegation_passes_tools_to_the_mac_adapter(tmp_path):
+    repo = _make_repo(tmp_path)
+    home = tmp_path / "install"
+    fake_bin = tmp_path / "bin"
+    _executable(fake_bin / "agy", "#!/bin/sh\n")
+    _executable(fake_bin / "tmux", "#!/bin/sh\n")
+    hooks = home / "hooks"
+    hooks.mkdir(parents=True)
+    shutil.copy2(ROOT / "hooks" / "child_tools.py", hooks / "child_tools.py")
+    for helper in ("agentstack-gemini-child-mail", "agentstack-gemini-stream", "agentstack-gemini-mcp"):
+        _executable(home / "bin" / helper, "#!/bin/sh\n")
+    _executable(home / "bin/agentstack-preregister-child", "#!/bin/sh\nprintf '%s\\n' FixtureAgent\n")
+    adapter = hooks / "spawn_gemini_preregistered.sh"
+    _executable(adapter, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FIXTURE_ADAPTER_ARGS\"\n")
+    out = tmp_path / "adapter-args"
+    env = {
+        **{key: value for key, value in os.environ.items() if not key.startswith("AGENTSTACK_")},
+        "HOME": str(tmp_path),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PARENT_AGENT": "FixtureParent",
+        "AGENTSTACK_HOME": str(home),
+        "AGENTSTACK_HOOKS_DIR": str(hooks),
+        "AGENTSTACK_RUNTIME_DIR": str(tmp_path / "runtime"),
+        "AGENTSTACK_PROJECT_KEY": "/fixture-project",
+        "AGENTSTACK_PYTHON": sys.executable,
+        "FIXTURE_ADAPTER_ARGS": str(out),
+    }
+    result = _REAL_RUN(["/bin/bash", str(ROOT / "hooks/spawn_gemini_child.sh"),
+                        "--resources", "src/**", "--tools", "screen:read", "Fixture task", str(repo)],
+                       env=env, text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    argv = out.read_text().splitlines()
+    assert argv[argv.index("--tools") + 1] == "screen:read"
+    assert argv[-2:] == ["", str(repo.resolve())]
 
 
 def test_gemini_spawn_requires_declared_resources(tmp_path):

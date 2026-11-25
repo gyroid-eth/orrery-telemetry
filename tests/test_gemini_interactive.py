@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from dashboard import server
-from hooks import child_resume, gemini_interactive as agy
+from hooks import child_resume, gemini_interactive as agy, screen_state
 
 
 NAME = "FixtureAgent"
@@ -273,6 +273,87 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
         ".agents", ".agents/hooks.json"]
 
 
+@pytest.mark.parametrize("standalone", [True, False])
+@pytest.mark.parametrize(("lowered", "expected"), [("view", screen_state.VIEW_TOOLS), ("off", ())])
+def test_resume_rotates_the_screen_binding_and_keeps_a_lower_operator_mode(
+        tmp_path, monkeypatch, standalone, lowered, expected):
+    cwd = (tmp_path / "workspace").resolve()
+    cwd.mkdir()
+    runtime = tmp_path / "runtime"
+    source = tmp_path / "owner.token"
+    source.write_text("fixture-credential")
+    source.chmod(0o600)
+    child_resume._atomic_json(Path(str(source) + ".binding.json"), REGISTRATION)
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(agy.child_tools, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(agy.child_tools, "_screen_state", lambda: vars(screen_state))
+    monkeypatch.setattr(screen_state, "_python", lambda _: sys.executable)
+    monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", PROJECT)
+    monkeypatch.setenv("AGENTSTACK_PORT", "+53162")
+    monkeypatch.setenv("TMUX_PANE", "%4")
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    agy.prepare(runtime, NAME, PROJECT, "" if standalone else "FixtureParent",
+                source=source, cwd=cwd, binary=sys.executable, model="gemini-fixture",
+                effort="high", standalone=standalone, tools=["screen:operate"])
+    monkeypatch.setattr(agy.subprocess, "check_output",
+                        lambda argv, **_: IDENTITY if argv[0] == "tmux" else "history-fixture")
+    launches = []
+
+    def launch(argv, **_):
+        if argv[0] == "/bin/bash":
+            return SimpleNamespace(returncode=0)
+        config_dir = Path(argv[argv.index("--add-dir") + 1]) if standalone else cwd
+        config = json.loads((config_dir / ".agents/mcp_config.json").read_text())
+        bind_path = Path(config["mcpServers"]["orrery-screen"]["env"]["AGENTSTACK_SCREEN_BINDING_FILE"])
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        rules = [rule for rule in settings["permissions"]["allow"] if rule.startswith("mcp(orrery-screen/")]
+        launches.append((bind_path, json.loads(bind_path.read_text())["origin"], rules))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", launch)
+    task = tmp_path / "handoff"
+    child_resume._atomic_json(task, {"message": {"content": "Fixture task"}})
+    assert agy.run(runtime, NAME, task_file=task) == 0
+    store = screen_state.Store(runtime)
+    [initial] = store.list()
+    target = {key: initial[key] for key in screen_state.TARGET}
+    assert initial["computer_use"] == "control"
+    assert launches[0][1:] == ("http://127.0.0.1:53162",
+                               [f"mcp(orrery-screen/{tool})" for tool in screen_state.TOOLS])
+
+    store.change(target, lowered)
+    row = {"name": NAME, "program": "antigravity", "running": True}
+    session = {"session_id": "$8", "created": 1000, "tmux_pid": 123}
+    live = server._card_screen_launches()[NAME]
+    card = server._agent_card_fields(row, session, {}, REGISTRATION, (), screen_launch=live)
+    assert (card["computer_use"], card["computer_use_source"]) == (lowered, "relay")
+    stale = server._agent_card_fields(row, {**session, "created": 2000}, {}, REGISTRATION, (), screen_launch=live)
+    assert (stale["computer_use"], stale["computer_use_source"]) == ("control", "launch")
+
+    child_resume.mark_retired(runtime, NAME, retention_days=30)
+    child_resume.begin_resume(runtime, NAME, agent_id=52, project_key=PROJECT, program="antigravity")
+    monkeypatch.setenv("AGENTSTACK_PORT", "53163")
+    assert agy.run(runtime, NAME, conversation=SID) == 0
+    [resumed] = store.list()
+    assert resumed["computer_use"] == lowered
+    assert resumed["generation"] != initial["generation"]
+    assert not launches[0][0].exists()
+    assert launches[1][1:] == ("http://127.0.0.1:53163", [f"mcp(orrery-screen/{tool})" for tool in expected])
+
+
+@pytest.mark.parametrize(("resume_from", "expected"), [("", "view"), ("e" * 32, "off")])
+def test_resume_accepts_legacy_relay_record_and_fails_closed_on_generation_mismatch(
+        tmp_path, monkeypatch, resume_from, expected):
+    monkeypatch.setattr(screen_state, "_python", lambda _: sys.executable)
+    store = screen_state.Store(tmp_path)
+    store.launch(PROJECT, screen_state.launch_runtime(tmp_path), NAME, "a" * 32, "view")
+    _, mode = screen_state.launch_definition(
+        tmp_path, PROJECT, NAME, "b" * 32, "control",
+        origin="http://127.0.0.1:53163", resume_from=resume_from)
+    assert mode == store.list()[0]["computer_use"] == expected
+
+
 @pytest.fixture
 def standalone_preflight(tmp_path, monkeypatch):
     cwd = tmp_path / "selected"
@@ -288,9 +369,9 @@ def standalone_preflight(tmp_path, monkeypatch):
     config = tmp_path / ".gemini/config/mcp_config.json"
     config.parent.mkdir(parents=True)
 
-    def prepare():
+    def prepare(*, tools=()):
         agy.prepare(runtime, NAME, PROJECT, "", source=source, cwd=cwd, binary=sys.executable,
-                    model="gemini-fixture", effort="high", standalone=True)
+                    model="gemini-fixture", effort="high", standalone=True, tools=tools)
 
     return runtime, config, prepare
 
@@ -301,6 +382,25 @@ def test_standalone_prepare_rejects_incompatible_mcp_before_creating_state(stand
     with pytest.raises(ValueError, match="Disable the global Antigravity MCP server 'cua-driver'"):
         prepare()
     assert not runtime.exists()
+
+
+@pytest.mark.parametrize(("server_name", "command", "message"), [
+    ("desktop", "/fixture/cua-driver", "workspace Antigravity MCP server 'desktop'"),
+    ("browser", "/fixture/chrome-devtools-mcp", "workspace Antigravity browser MCP"),
+])
+def test_standalone_off_checks_workspace_mcp(standalone_preflight, server_name, command, message):
+    runtime, _, prepare = standalone_preflight
+    config = runtime.parent / "selected/.agents/mcp_config.json"
+    config.parent.mkdir()
+    enabled = {"command": command}
+    if server_name == "browser":
+        enabled = {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"]}
+    config.write_text(json.dumps({"mcpServers": {server_name: enabled}}))
+    with pytest.raises(ValueError, match=message):
+        prepare(tools=["browser-mode:off"])
+    assert not runtime.exists()
+    config.write_text(json.dumps({"mcpServers": {server_name: {**enabled, "disabled": True}}}))
+    prepare(tools=["browser-mode:off"])
 
 
 def test_standalone_resume_reports_new_incompatible_mcp_before_start(standalone_preflight, monkeypatch):
@@ -327,6 +427,8 @@ def test_standalone_resume_reports_new_incompatible_mcp_before_start(standalone_
 def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch):
     runtime, cwd, state = managed
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "PORT", 53163)
+    monkeypatch.setenv("AGENTSTACK_PORT", "+9999")
     child_resume.mark_retired(runtime, NAME, retention_days=30)
     monkeypatch.setattr(server, "_gemini_resume_material",
                         lambda name: (REGISTRATION, state, Path("/fixture/helper.py"), cwd, SID))
@@ -345,6 +447,7 @@ def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch):
         assert argv[-3:-1] == ["/bin/bash", "-c"]
         assert "AGENTSTACK_GEMINI_INTERACTIVE=1" in argv
         assert f"AGENTSTACK_RUNTIME_DIR={runtime}" in argv
+        assert "AGENTSTACK_PORT=53163" in argv
         assert argv[-1].split("; ", 1)[0].endswith(" || exit $?")
         assert " wait-for agentstack-resume-" in argv[-1]
         assert f"--conversation {SID}" in argv[-1]

@@ -36,6 +36,11 @@ def test_reader_shows_known_and_unknown_permission_states_without_harness_specif
     wait("document.querySelector('.reader-permission[data-state=view]') !== null")
     assert js("Array.from(document.querySelectorAll('.reader-permission')).map(mark=>mark.title)") == [
         'Computer use: View','Browser use: Off']
+    agent.update(computer_use_source='relay', browser_use_source='launch')
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("document.querySelector('.reader-permission[data-state=view]')?.title.includes('Current screen relay')")
+    assert js("Array.from(document.querySelectorAll('.reader-permission')).map(mark=>mark.title)") == [
+        'Computer use: View. Current screen relay', 'Browser use: Off. ORRERY launch selection']
 
 
 def two_pane_targets():

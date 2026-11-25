@@ -275,6 +275,10 @@ For a managed interactive launch on macOS, `--settings` grants individual
 View grants the read-only tools. Control grants the read-only and interaction
 tools. Existing Ask and Deny rules still take precedence. Global settings are
 unchanged.
+Resume uses the lower of the original selection and the previous relay mode
+for both the new relay and the CLI grants. Standalone launches check the
+selected workspace for enabled screen and browser MCPs that conflict with
+ORRERY's settings and explain the conflict before launch.
 
 ## Credential boundary
 

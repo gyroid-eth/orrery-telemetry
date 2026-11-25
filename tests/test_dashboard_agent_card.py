@@ -128,6 +128,13 @@ def test_card_permissions_distinguish_selection_and_configuration(without_cua_ov
     assert agent_card.tool_permissions(chosen, {"cua-driver": cua}) == ("view", True)
 
 
+@pytest.mark.parametrize(("mode", "enabled"), [("off", False), ("temporary", True), ("personal", True)])
+def test_explicit_browser_mode_takes_precedence_over_inference(mode, enabled):
+    spec = {"base": "default", "tools": {"browser_mode": mode}}
+    assert agent_card.tool_permissions(spec, {}) == (None, enabled)
+    assert agent_card.tool_permissions(spec, {}, chrome=True) == (None, enabled)
+
+
 @pytest.mark.parametrize('key', ['enabled_tools', 'disabled_tools', 'tools', 'omit_tools_from'])
 def test_card_wrapped_cua_with_filter_stays_unknown(without_cua_overrides, key):
     server = dict(_WRAPPED_CUA, **{key: []})

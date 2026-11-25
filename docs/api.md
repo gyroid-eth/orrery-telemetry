@@ -379,7 +379,7 @@ legacy の各エージェント行に以下の表示用フィールドを追加�
 
 API 52 の旧運用の `GET /api/agents` は、起動記録のない稼働中の Claude Code／Codex CLI の状態を `permission_source: "process"` とともに返します。対象の引数と子孫プロセスからローカルの Cua Driver と Codex の Chrome DevTools を確認し、Claude では明示の `--chrome`／`--no-chrome` を読みます。プロセスや引数、画面 relay のモード、Claude の Chrome フラグを確認できない場合、`computer_use` または `browser_use` が `null` になり、短い英語の `computer_use_reason`／`browser_use_reason` が付きます。スマホの Reader にも現在値と理由が届きます。観測の対象は指定のローカルの道具と起動フラグです。接続状態、OS の許可、他の MCP サーバーは観測の対象外です。
 
-API 53 の Antigravity は、保存した起動時の画面とブラウザの選択を `permission_source: "launch"` とともに返します。値を確定できない場合は `null` と理由を返します。この値は起動時の選択を示します。
+API 53 の Antigravity は `permission_source: "launch"` とともに権限を返します。稼働中で現在の起動世代と照合できたときの画面権限は relay の実効値で、`computer_use_source: "relay"` が付きます。保存した選択を使う場合は `computer_use_source: "launch"`、ブラウザの選択には `browser_use_source: "launch"` が付きます。値を確定できない場合は `null` と理由を返します。
 
 ### 所属projectの読み取りメタデータ（legacy、API 37）
 

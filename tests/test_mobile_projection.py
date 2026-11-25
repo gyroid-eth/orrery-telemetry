@@ -38,13 +38,18 @@ def test_mobile_exposes_only_fixed_antigravity_launch_reasons():
     from dashboard.agent_card import AGY_BROWSER_UNRECORDED
     from dashboard.mobile_projection import project_agent
 
-    row = dict(name='Alpha', running=True, computer_use='view', browser_use=None,
+    row = dict(name='Alpha', running=True, computer_use='view', computer_use_source='relay', browser_use=None,
                browser_use_reason=AGY_BROWSER_UNRECORDED, permission_source='launch')
     projected = project_agent(row)
     assert projected['computer_use'] == 'view'
+    assert projected['computer_use_source'] == 'relay'
     assert projected['browser_use_reason'] == AGY_BROWSER_UNRECORDED
     assert 'browser_use_reason' not in project_agent(dict(row, browser_use_reason='private argv'))
     assert 'browser_use_reason' not in project_agent(dict(row, running=False))
+    assert 'computer_use_source' not in project_agent(dict(row, computer_use_source='fixture string'))
+    assert 'computer_use_source' not in project_agent(dict(row, running=False))
+    assert project_agent(dict(row, browser_use=False, browser_use_source='launch'))['browser_use_source'] == 'launch'
+    assert 'browser_use_source' not in project_agent(dict(row, browser_use_source='launch'))
 
 def test_working_duration_is_only_the_current_upstream_display():
     from dashboard.mobile_projection import project_agent

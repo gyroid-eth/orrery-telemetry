@@ -124,27 +124,31 @@ def tool_permissions(spec, servers, *, chrome=False, isolated=False):
     cua = servers.get("cua-driver")
     if screen.get("server") != "cua-driver" and _cua_control(cua):
         computer = "control"
-    browser = (chrome or "browser" in tools
-               or _browser_enabled(servers.get("chrome-devtools")))
+    mode = tools.get("browser_mode")
+    browser = None
+    if mode in ("off", "temporary", "personal"):
+        browser = mode != "off"
+    elif chrome or "browser" in tools or _browser_enabled(servers.get("chrome-devtools")):
+        browser = True
     if isolated and not tools.get("mcp"):
         if computer is None and (cua is None or isinstance(cua, dict) and cua.get("enabled") is False):
             computer = "off"
-        if not browser and screen.get("server") in (None, "cua-driver", "chrome-devtools"):
-            return computer, False
-    return computer, True if browser else None
+        if browser is None and screen.get("server") in (None, "cua-driver", "chrome-devtools"):
+            browser = False
+    return computer, browser
 
 
-def antigravity_tool_permissions(spec):
+def antigravity_tool_permissions(spec, computer=None, *, screen_live=False):
     if spec is None:
         return dict(permission_source="launch", computer_use=None, browser_use=None,
                     computer_use_reason=AGY_LAUNCH_UNRECORDED, browser_use_reason=AGY_LAUNCH_UNRECORDED)
     tools = spec["tools"]
-    screen = tools.get("screen", {})
-    computer = {"read": "view", "operate": "control"}.get(screen.get("access"), "off")
     mode = tools.get("browser_mode")
     return dict(permission_source="launch", computer_use=computer,
+                computer_use_source="relay" if screen_live else "launch",
                 browser_use=None if mode is None else mode != "off",
-                **({"browser_use_reason": AGY_BROWSER_UNRECORDED} if mode is None else {}))
+                **({"browser_use_reason": AGY_BROWSER_UNRECORDED} if mode is None
+                   else {"browser_use_source": "launch"}))
 
 
 def _cua_control(server):

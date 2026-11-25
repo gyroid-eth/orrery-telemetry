@@ -2137,7 +2137,7 @@ def _card_process_permissions(session, process_tree, program, kind):
     return agent_process.observe(pid, process_tree, kind, read=read)
 
 
-def _card_antigravity_permissions(plan):
+def _card_antigravity_permissions(plan, screen_launch, project, identity):
     supplied = plan.get("tools")
     spec = None
     if isinstance(supplied, list) and all(isinstance(arg, str) for arg in supplied):
@@ -2147,7 +2147,16 @@ def _card_antigravity_permissions(plan):
             tools.check_provider(spec, "gemini")
         except tools.ToolsError:
             spec = None
-    return agent_card.antigravity_tool_permissions(spec)
+    if spec is None:
+        return agent_card.antigravity_tool_permissions(None)
+    if (screen_launch and plan.get("screen_tmux") == identity
+            and screen_launch["project"] == project
+            and screen_launch["generation"] == plan.get("screen_generation")):
+        return agent_card.antigravity_tool_permissions(spec, screen_launch["computer_use"], screen_live=True)
+    mode = plan.get("screen_launch_mode")
+    if mode not in ("off", "view", "control"):
+        mode = tools.screen_mode(spec) or "off"
+    return agent_card.antigravity_tool_permissions(spec, mode)
 
 
 def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None, process_tree=None):
@@ -2167,7 +2176,8 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                     "act_state": status.get("activity"),
                     "parent_state": "top" if plan.get("standalone") is True else "child",
                     "parent_agent": state.get("parent_agent"),
-                    "harness_kind": "antigravity", **_card_antigravity_permissions(plan),
+                    "harness_kind": "antigravity", **_card_antigravity_permissions(
+                        plan, screen_launch if row.get("running") else None, registration["project_key"], identity),
                     "ctx_window_tokens": None}
     kind = agent_card.HARNESS_KIND.get(program)
     cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
@@ -2261,13 +2271,14 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                         parent_state = "top"
                     elif state_parent == launch["parent_agent"] and state_parent:
                         parent, parent_state = state_parent, "child"
-                plan = launch.get("mcp_selection")
-                if isinstance(plan, dict):
+                selection = launch.get("tools")
+                if isinstance(selection, dict):
                     try:
-                        selection = launch["tools"]
                         spec = _child_tools_module().normalize(selection.get("base"), selection.get("tools"))
                     except (AttributeError, KeyError, ValueError, RuntimeError):
                         pass
+                plan = launch.get("mcp_selection")
+                if isinstance(plan, dict):
                     servers = plan.get("servers", {})
                     isolated = plan.get("inherit") is False and bool(spec and spec["base"] == "mail-only")
         computer, browser = agent_card.tool_permissions(
@@ -2480,7 +2491,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 con.close()
 
     screen_launches = (_card_screen_launches() if any(
-        row["running"] and row.get("program") in ("", "claude", "claude-code") for row in rows) else {})
+        row["running"] and row.get("program") in ("", "claude", "claude-code", "antigravity") for row in rows) else {})
     annotations = _annotations()
     observed_now = time.time()
     claude_history_index = None
@@ -5594,7 +5605,7 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False):
             "AGENTSTACK_HOME": str(Path(HOOKS_DIR).parent), "AGENTSTACK_HOOKS_DIR": HOOKS_DIR,
             "AGENTSTACK_WORKTREE_ROOT": _worktree_root(),
             "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": project,
-            "AGENTSTACK_PORT": _env_text("AGENTSTACK_PORT", str(PORT)),
+            "AGENTSTACK_PORT": str(PORT),
             "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
             "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
             "AGENT_NAME": session, "PARENT_AGENT": state.get("parent_agent", ""),
@@ -9575,15 +9586,19 @@ def _child_tools_module():
         os.path.join(HOOKS_DIR, "child_tools.py"),
         os.path.join(os.path.dirname(HERE), "hooks", "child_tools.py"),
     ):
-        if not os.path.isfile(path):
-            continue
-        spec = importlib.util.spec_from_file_location("agentstack_child_tools", path)
-        if spec is None or spec.loader is None:
-            continue
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        if os.path.isfile(path):
+            return _load_child_tools(path)
     raise RuntimeError("child_tools.py is unavailable")
+
+
+@functools.lru_cache(maxsize=4)
+def _load_child_tools(path):
+    spec = importlib.util.spec_from_file_location("agentstack_child_tools", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("child_tools.py is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _spawn_tools_args(payload: dict, provider: str, chrome: bool,
@@ -9879,6 +9894,8 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
 
 def _spawn_env_overrides(payload: dict, spec: SpawnLaunchSpec) -> dict[str, str]:
     env = dict(spec.launcher_env)
+    if spec.program == "antigravity":
+        env["AGENTSTACK_PORT"] = str(PORT)
     if "headless" in payload:
         env["AGENTSTACK_AUTO_OPEN_CHILD"] = "0" if payload["headless"] else "1"
     return env

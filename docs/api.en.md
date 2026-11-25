@@ -380,7 +380,7 @@ The next roster refresh reports permission changes for `orrery-screen`. Other pe
 
 In API 52, a running legacy Claude Code or Codex CLI agent without a launch record can report its current observation in `GET /api/agents` with `permission_source: "process"`. The reader checks the agent's arguments and descendant processes for local Cua Driver and Codex Chrome DevTools, and reads an explicit Claude `--chrome` or `--no-chrome` flag. A `null` in `computer_use` or `browser_use` carries a short English `computer_use_reason` or `browser_use_reason` when the process, its arguments, the screen relay's mode, or the Claude Chrome flag cannot be verified. The mobile Reader receives the current values and those reasons. This describes recognized local tools and launch flags. Connection status, OS access grants, and other MCP servers are outside the observation.
 
-In API 53, Antigravity reports its saved computer and browser launch selections with `permission_source: "launch"`. Unknown values are `null` and carry a reason. These values describe the permissions selected at launch.
+In API 53, Antigravity reports permissions with `permission_source: "launch"`. For a running session with a verified launch generation, computer use reports the current relay mode with `computer_use_source: "relay"`. A saved ORRERY selection carries `computer_use_source: "launch"` or `browser_use_source: "launch"` for the corresponding tool. Unknown values are `null` and carry a reason.
 
 ### Project-scope read metadata (legacy, API 37)
 

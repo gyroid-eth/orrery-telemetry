@@ -450,13 +450,8 @@ if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev
   exit 1
 fi
 mkdir -p "$WORKTREE_DIR/.agents"
+if [[ "$INTERACTIVE" == 0 ]]; then
 MCP_CONFIG="$WORKTREE_DIR/.agents/mcp_config.json"
-if [[ "$(uname -s)" == Darwin ]]; then
-  "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" agy-config \
-    --out "$MCP_CONFIG" --runner "$MCP_WRAPPER" --child "$CHILD_NAME" \
-    --project-key "$PROJECT_KEY" --runtime-dir "$RUNTIME_DIR" --mail-env "$MAIL_ENV" \
-    ${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"}
-else
 AGS_GEMINI_MCP_PATH="$MCP_CONFIG" \
 AGS_GEMINI_MCP_COMMAND="$MCP_WRAPPER" \
 "$PYTHON_BIN" - <<'PY'

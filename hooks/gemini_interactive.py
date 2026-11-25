@@ -165,15 +165,10 @@ def _tool_selection(plan):
 
 
 def validate_standalone_config(plan):
-    child_tools.agy_validate_selection(_tool_selection(plan))
+    child_tools.agy_validate_selection(_tool_selection(plan), cwd=plan["cwd"])
 
 
-def _configure_standalone(directory, runtime, name, project, plan):
-    mcp = child_tools.agy_config(
-        str(_home() / "bin" / "agentstack-gemini-mcp"), _tool_selection(plan), runtime=str(runtime),
-        project=project, child=name,
-        mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
-    )
+def _configure_standalone(directory, plan, mcp):
     directory.mkdir(mode=0o700)
     try:
         child_resume._atomic_json(directory / ".agents" / "mcp_config.json", mcp)
@@ -184,7 +179,22 @@ def _configure_standalone(directory, runtime, name, project, plan):
         raise
 
 
-def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None):
+def _delegated_mcp_path(cwd, mail_command, *, resume):
+    path = _guard_config(cwd).with_name("mcp_config.json")
+    if path.exists() or path.is_symlink():
+        if not resume:
+            raise ValueError("The worktree already has .agents/mcp_config.json")
+        config = child_resume._load_state(path)
+        servers = config.get("mcpServers")
+        managed = {"orrery-mail", "chrome-devtools", child_tools.SCREEN_SERVER}
+        if (set(config) != {"mcpServers"} or not isinstance(servers, dict)
+                or not servers.keys() <= managed
+                or servers.get("orrery-mail") != {"command": mail_command, "args": []}):
+            raise ValueError("Antigravity worktree MCP configuration is no longer managed")
+    return path
+
+
+def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None):
     if (prompt is None) == (conversation is None):
         raise ValueError("Provide the first task or an existing conversation")
     settings = {"trustedWorkspaces": [str(cwd)], "enableTerminalSandbox": True,
@@ -197,7 +207,8 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None):
     except FileNotFoundError:
         configured = {}
     permissions = configured.get("permissions") or {}
-    screen_mode = child_tools.screen_mode(_tool_selection(plan))
+    if screen_mode is None:
+        screen_mode = child_tools.screen_mode(_tool_selection(plan))
     screen_permissions = []
     if screen_mode in ("view", "control"):
         screen_policy = child_tools._screen_state()
@@ -264,17 +275,32 @@ def run(runtime, name, task_file=None, conversation=None):
     status_path.unlink(missing_ok=True)
     config_dir = None
     try:
-        if plan.get("standalone"):
+        standalone = plan.get("standalone") is True
+        mail_command = str(_home() / "bin" / "agentstack-gemini-mcp")
+        mcp_path = None if standalone else _delegated_mcp_path(cwd, mail_command, resume=bool(conversation))
+        generation = uuid.uuid4().hex
+        mcp, screen_mode = child_tools.agy_launch_config(
+            mail_command, _tool_selection(plan), runtime=str(runtime), project=project, child=name,
+            mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
+            generation=generation, cwd=cwd if standalone else None,
+            resume_from=(plan.get("screen_generation") or "") if conversation else None,
+        )
+        if standalone:
             directory = path.with_suffix(".agy-config")
-            _configure_standalone(directory, runtime, name, project, plan)
+            _configure_standalone(directory, plan, mcp)
             config_dir = directory
-        if conversation:
-            child_resume.prepare_active_state(runtime, name, project_key=project, program=PROGRAM)
+        else:
+            child_resume._atomic_json(mcp_path, mcp)
+        if screen_mode is not None or conversation:
+            plan = {**plan, "screen_generation": generation if screen_mode is not None else None,
+                    "screen_launch_mode": screen_mode or "off", "screen_tmux": identity}
+            child_resume.prepare_active_state(runtime, name, project_key=project, program=PROGRAM,
+                                              gemini_launch=plan)
         env["AGENTSTACK_AGY_HISTORY_LAUNCH"] = subprocess.check_output(
             [sys.executable, str(history_helper()), "prepare", str(state["agent_id"]), identity],
             env=env, text=True, timeout=5).strip()
         return subprocess.run(command(plan, cwd, prompt=prompt, conversation=conversation,
-                                      config_dir=config_dir),
+                                      config_dir=config_dir, screen_mode=screen_mode),
                               env=env).returncode
     finally:
         if config_dir is not None:

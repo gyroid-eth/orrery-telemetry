@@ -106,6 +106,10 @@ def project_agent(row):
             result['computer_use'] = row['computer_use']
         if type(row.get('browser_use')) is bool:
             result['browser_use'] = row['browser_use']
+        if 'computer_use' in result and row.get('computer_use_source') in ('launch', 'relay'):
+            result['computer_use_source'] = row['computer_use_source']
+        if 'browser_use' in result and row.get('browser_use_source') == 'launch':
+            result['browser_use_source'] = 'launch'
         permission_source = row.get('permission_source')
         reason_allowlist = PERMISSION_UNKNOWN_REASONS.get(permission_source) if isinstance(permission_source, str) else None
         if reason_allowlist:
