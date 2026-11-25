@@ -211,6 +211,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 
 API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
 
+On macOS, the API 53 catalog lists `off`, `view`, and `control` in `computer_modes`. View uses `tools.screen.access: "read"` and Control uses `tools.screen.access: "operate"`. For Off, omit the screen selection from the explicit `tools` object. Mobile `/view/spawn` sends one of the modes as `computer` and still accepts the boolean from older clients.
+
 API 49 also adds `native_browser_dirs`, a list of launch folders from `dirs` whose Chrome DevTools definition can be copied into a dsh or Hermes child. The phone shows Browser for these harnesses when the selected folder appears in the list. The launcher checks the settings again at launch.
 
 API33 adds dynamic Local providers with `dynamic_models: true` / `model_source: server`. The picker explicitly reads each configured endpoint's `/v1/models`; static validation and spawn POST do not discover models. Each model retains its raw `id`, optional `display_name`, zero-based `url_index`, opaque `url_key`, `model_state` (`loaded`, `available`, `unloaded`), `context` and `context_source` (`server`, `override`, `default`). Missing/unknown status permits a valid ID; only explicit unloaded disables it. `Available` is not a loaded claim. Per-URL failure appears in `endpoints[].reason`; a failed discovery publishes no stale model rows. URLs and credential references are not in the public catalog. Dynamic effort is unreported and helper is Same as main. Actual command generation/exact resume makes one selected-URL lookup and refuses ID absence, explicit unloaded or lookup failure. It does not continuously lock the server model.
@@ -377,6 +379,8 @@ Legacy agent rows include these display fields in both the full roster and `scop
 The next roster refresh reports permission changes for `orrery-screen`. Other permissions describe launch configuration. Connection status and OS grants are outside this check.
 
 In API 52, a running legacy Claude Code or Codex CLI agent without a launch record can report its current observation in `GET /api/agents` with `permission_source: "process"`. The reader checks the agent's arguments and descendant processes for local Cua Driver and Codex Chrome DevTools, and reads an explicit Claude `--chrome` or `--no-chrome` flag. A `null` in `computer_use` or `browser_use` carries a short English `computer_use_reason` or `browser_use_reason` when the process, its arguments, the screen relay's mode, or the Claude Chrome flag cannot be verified. The mobile Reader receives the current values and those reasons. This describes recognized local tools and launch flags. Connection status, OS access grants, and other MCP servers are outside the observation.
+
+In API 53, Antigravity reports its saved computer and browser launch selections with `permission_source: "launch"`. Unknown values are `null` and carry a reason. These values describe the permissions selected at launch.
 
 ### Project-scope read metadata (legacy, API 37)
 

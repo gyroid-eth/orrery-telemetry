@@ -12,8 +12,10 @@ from typing import Callable
 
 if __package__:
     from .agent_process import UNKNOWN_REASONS
+    from .agent_card import AGY_BROWSER_UNRECORDED, AGY_LAUNCH_UNRECORDED
 else:
     from agent_process import UNKNOWN_REASONS
+    from agent_card import AGY_BROWSER_UNRECORDED, AGY_LAUNCH_UNRECORDED
 
 WINDOWS = {'all': None, 'day': 86400, '15m': 900,
            **{'m'+str(n): n*60 for n in range(15, 43201, 15)}}
@@ -24,6 +26,12 @@ STATES = {'run', 'idle', 'finished', 'gone', 'retired', 'unknown'}
 ACTS = {'work', 'wait', 'ask', 'question'}
 PHASE_ELAPSED = re.compile(
     r'(?:[0-9]{1,4}h(?: [0-9]{1,3}m)?(?: [0-9]{1,2}s)?|[0-9]{1,3}m(?: [0-9]{1,2}s)?|[0-9]{1,2}s)')
+
+
+PERMISSION_UNKNOWN_REASONS = {
+    'process': UNKNOWN_REASONS,
+    'launch': frozenset({AGY_BROWSER_UNRECORDED, AGY_LAUNCH_UNRECORDED}),
+}
 
 
 def png_image(data):
@@ -98,11 +106,13 @@ def project_agent(row):
             result['computer_use'] = row['computer_use']
         if type(row.get('browser_use')) is bool:
             result['browser_use'] = row['browser_use']
-        if row.get('permission_source') == 'process':
+        permission_source = row.get('permission_source')
+        reason_allowlist = PERMISSION_UNKNOWN_REASONS.get(permission_source) if isinstance(permission_source, str) else None
+        if reason_allowlist:
             for key in ('computer_use', 'browser_use'):
                 reason_key = key + '_reason'
                 reason = row.get(reason_key)
-                if key not in result and isinstance(reason, str) and reason in UNKNOWN_REASONS:
+                if key not in result and isinstance(reason, str) and reason in reason_allowlist:
                     result[reason_key] = reason
     duration = row.get('work_disp')
     if (act == 'work' and isinstance(duration, str)

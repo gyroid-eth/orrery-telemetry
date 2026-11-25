@@ -66,6 +66,29 @@ def test_one_workspace_is_trusted_without_changing_global_settings(managed, monk
         agy.validate_plan(plan)
 
 
+@pytest.mark.parametrize(("selection", "screen_mode"), [([], "off"), (["screen:read"], "view"), (["screen:operate"], "control")])
+def test_session_settings_allow_only_the_selected_screen_tools(managed, monkeypatch, tmp_path, selection, screen_mode):
+    from hooks import screen_state
+
+    monkeypatch.setattr(agy.child_tools.sys, "platform", "darwin")
+    _, cwd, state = managed
+    settings = tmp_path / ".gemini/antigravity-cli/settings.json"
+    settings.parent.mkdir(parents=True)
+    original = {"permissions": {"allow": ["read_file(.)"], "deny": ["mcp(orrery-screen/launch_app)"],
+                                "ask": ["mcp(orrery-screen/hotkey)"]}}
+    settings.write_text(json.dumps(original))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    plan = {**state["gemini_launch"], "tools": selection}
+    args = agy.command(plan, cwd, prompt="First task")
+    permissions = json.loads(args[args.index("--settings") + 1])["permissions"]
+    scoped = [value for value in permissions["allow"] if value.startswith("mcp(orrery-screen/")]
+    expected = {"off": (), "view": screen_state.VIEW_TOOLS, "control": screen_state.TOOLS}[screen_mode]
+    assert scoped == [f"mcp(orrery-screen/{tool})" for tool in expected]
+    assert "read_file(.)" in permissions["allow"]
+    assert all(permissions[key] == original["permissions"][key] for key in ("deny", "ask"))
+    assert json.loads(settings.read_text()) == original
+
+
 def test_edit_uses_shared_reservation_and_shell_stays_in_the_worktree(managed, monkeypatch):
     runtime, cwd, _ = managed
     calls = []
@@ -158,6 +181,24 @@ def test_roster_status_is_bound_to_this_tmux_generation(managed, monkeypatch, ca
     session["created"] += 1
     observed = server._agent_card_fields(row, session, {}, REGISTRATION, ())
     assert (observed["model_id"], observed["effort"], observed["act_state"]) == ("gemini-fixture", "high", None)
+
+
+@pytest.mark.parametrize(("selection", "computer", "browser"), [
+    (["browser-mode:off"], "off", False),
+    (["screen:read", "browser-mode:temporary"], "view", True),
+    (["screen:operate", "browser-mode:personal"], "control", True),
+    (["screen:operate"], "control", None),
+    (None, None, None),
+])
+def test_antigravity_card_uses_saved_tool_selection(selection, computer, browser, monkeypatch):
+    monkeypatch.setattr(agy.child_tools.sys, "platform", "darwin")
+    plan = {} if selection is None else {"tools": selection}
+    monkeypatch.setattr(server, "_card_child_state", lambda *_: {"gemini_launch": plan})
+    row = {"name": NAME, "program": "antigravity", "running": True}
+    fields = server._agent_card_fields(row, {}, {}, REGISTRATION, ())
+    assert (fields["computer_use"], fields["browser_use"]) == (computer, browser)
+    assert ("computer_use_reason" in fields) == (computer is None)
+    assert ("browser_use_reason" in fields) == (browser is None)
 
 
 def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_folder(tmp_path, monkeypatch):

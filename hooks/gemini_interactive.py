@@ -135,9 +135,10 @@ def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effor
         raise ValueError("The worktree already has .agents/hooks.json")
     info = cwd.stat()
     plan = {"cwd": str(cwd), "workspace_file_id": [info.st_dev, info.st_ino],
-            "binary": os.path.abspath(binary), "python": sys.executable, "model": model, "effort": effort}
+            "binary": os.path.abspath(binary), "python": sys.executable,
+            "model": model, "effort": effort, "tools": list(tools)}
     if standalone:
-        plan.update(standalone=True, tools=list(tools))
+        plan["standalone"] = True
         validate_standalone_config(plan)
     else:
         hooks = _configured_hooks(plan["python"])
@@ -159,17 +160,17 @@ def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effor
         raise
 
 
-def _standalone_selection(plan):
-    return child_tools.normalize(tools=child_tools.parse_cli(plan["tools"]))
+def _tool_selection(plan):
+    return child_tools.normalize(tools=child_tools.parse_cli(plan.get("tools", [])))
 
 
 def validate_standalone_config(plan):
-    child_tools.agy_validate_selection(_standalone_selection(plan))
+    child_tools.agy_validate_selection(_tool_selection(plan))
 
 
 def _configure_standalone(directory, runtime, name, project, plan):
     mcp = child_tools.agy_config(
-        str(_home() / "bin" / "agentstack-gemini-mcp"), _standalone_selection(plan), runtime=str(runtime),
+        str(_home() / "bin" / "agentstack-gemini-mcp"), _tool_selection(plan), runtime=str(runtime),
         project=project, child=name,
         mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
     )
@@ -196,8 +197,15 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None):
     except FileNotFoundError:
         configured = {}
     permissions = configured.get("permissions") or {}
+    screen_mode = child_tools.screen_mode(_tool_selection(plan))
+    screen_permissions = []
+    if screen_mode in ("view", "control"):
+        screen_policy = child_tools._screen_state()
+        screen_tools = screen_policy["VIEW_TOOLS"] if screen_mode == "view" else screen_policy["TOOLS"]
+        screen_permissions = [f"mcp({child_tools.SCREEN_SERVER}/{tool})" for tool in screen_tools]
     settings["permissions"] = {**permissions, "allow": list(dict.fromkeys(
-        [*permissions.get("allow", ()), *(f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS)]
+        [*permissions.get("allow", ()), *(f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS),
+         *screen_permissions]
     ))}
     extra = []
     if config_dir is not None:

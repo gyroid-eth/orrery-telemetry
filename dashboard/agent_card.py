@@ -17,7 +17,10 @@ HARNESS_KIND = {
     "claude": "claude", "claude-code": "claude",
     "codex": "codex", "codex-cli": "codex",
     "dsh": "dsh", "hermes": "hermes",
+    "antigravity": "antigravity",
 }
+AGY_LAUNCH_UNRECORDED = "Antigravity launch settings were not recorded"
+AGY_BROWSER_UNRECORDED = "Antigravity browser mode was not recorded"
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")
 _PARENT = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,127}")
 _CLAUDE_TAIL_CHUNK = 16 * 1024
@@ -129,6 +132,19 @@ def tool_permissions(spec, servers, *, chrome=False, isolated=False):
         if not browser and screen.get("server") in (None, "cua-driver", "chrome-devtools"):
             return computer, False
     return computer, True if browser else None
+
+
+def antigravity_tool_permissions(spec):
+    if spec is None:
+        return dict(permission_source="launch", computer_use=None, browser_use=None,
+                    computer_use_reason=AGY_LAUNCH_UNRECORDED, browser_use_reason=AGY_LAUNCH_UNRECORDED)
+    tools = spec["tools"]
+    screen = tools.get("screen", {})
+    computer = {"read": "view", "operate": "control"}.get(screen.get("access"), "off")
+    mode = tools.get("browser_mode")
+    return dict(permission_source="launch", computer_use=computer,
+                browser_use=None if mode is None else mode != "off",
+                **({"browser_use_reason": AGY_BROWSER_UNRECORDED} if mode is None else {}))
 
 
 def _cua_control(server):

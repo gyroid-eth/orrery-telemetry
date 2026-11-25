@@ -369,9 +369,11 @@ html[data-color-theme=light] .graph-status-flag.question{color:#076c80}
 #spawn-tools .om-toggle-track{position:absolute;inset:auto auto 4px;transform:scale(.45);transform-origin:center bottom}
 .mobile #spawn-tools .icon-button[aria-checked=true]{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 55%,var(--hair));background:var(--control-active)}
 .mobile #spawn-tools .mobile-icon{width:17px;height:17px}
-.mobile #spawn-tools [data-browser-mode] .om-toggle-track{display:none}
-.mobile #spawn-tools [data-browser-mode] .mobile-icon{margin-top:0}
+.mobile #spawn-tools :is([data-browser-mode],[data-computer-mode]) .om-toggle-track{display:none}
+.mobile #spawn-tools :is([data-browser-mode],[data-computer-mode]) .mobile-icon{margin-top:0}
 .mobile #spawn-tools [data-browser-mode=personal]{color:var(--amber);background:var(--control-active)}
+.mobile #spawn-tools :is([data-computer-mode=view],[data-computer-mode=control]){color:var(--amber);background:var(--control-active)}
+.mobile #spawn-tools [data-computer-mode=view] .mobile-icon{opacity:.68}
 .mobile #spawn-tools [data-browser-mode=temporary]::after{content:"";position:absolute;right:7px;bottom:7px;
   width:5px;height:5px;border-radius:50%;background:var(--amber)}
 .mobile .spawn-browser-menu{position:fixed;inset:auto;margin:0;padding:4px;min-width:156px;

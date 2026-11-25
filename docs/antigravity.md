@@ -256,6 +256,11 @@ ORRERY does not add `read_file(*)`, does not enable
 `--dangerously-skip-permissions`, and does not otherwise broaden user-owned
 Antigravity permissions.
 
+macOS の管理された対話セッションでは、起動時に選んだ画面の段に応じて
+`--settings` で `orrery-screen` の個々の道具をそのセッションだけ許可します。
+View は読み取り系、Control は読み取りと操作系を許可します。
+利用者の既存の Ask と Deny が優先され、グローバル設定は書き換えません。
+
 ## Credential boundary
 
 The session-bound wrapper resolves the current agent's mode-0600 runtime token

@@ -77,14 +77,17 @@ function readerProfile(name,recordedModel=''){
  return profile;
 }
 const PERMISSION_MODES={off:'Off',view:'View',control:'Control'};
+const PERMISSION_UNVERIFIED='Current permission could not be verified.';
 function paintPermissions(box){
  const rows=(snapshot?.agents||[]).filter(a=>a.name===box.dataset.agent),a=rows.length===1?rows[0]:{};
  const marks=[];
  if(a.running===true){
   const computer=Object.hasOwn(PERMISSION_MODES,a.computer_use)?a.computer_use:null;
   const browser=typeof a.browser_use==='boolean'?a.browser_use?'on':'off':null;
-  if(computer||a.computer_use_reason)marks.push(['computer',computer||'unknown',PERMISSION_MODES[computer]||'Unknown',a.computer_use_reason]);
-  if(browser||a.browser_use_reason)marks.push(['browser',browser||'unknown',browser==='on'?'On':browser==='off'?'Off':'Unknown',a.browser_use_reason]);
+  marks.push(['computer',computer||'unknown',PERMISSION_MODES[computer]||'Unknown',
+    computer?null:a.computer_use_reason||PERMISSION_UNVERIFIED]);
+  marks.push(['browser',browser||'unknown',browser==='on'?'On':browser==='off'?'Off':'Unknown',
+    browser?null:a.browser_use_reason||PERMISSION_UNVERIFIED]);
  }
  const signature=JSON.stringify(marks);if(box.dataset.signature===signature)return;box.dataset.signature=signature;
  const labelFor=kind=>kind==='computer'?'Computer use':'Browser use';

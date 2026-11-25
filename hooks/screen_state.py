@@ -15,8 +15,9 @@ import tempfile
 from urllib.parse import urlsplit
 
 SERVER = "orrery-screen"
+VIEW_TOOLS = ("check_permissions", "list_apps", "list_windows", "get_window_state")
 TOOLS = (
-    "check_permissions", "list_apps", "list_windows", "get_window_state",
+    *VIEW_TOOLS,
     "launch_app", "click", "type_text", "press_key", "hotkey", "scroll", "set_value", "invoke_menu",
 )
 MODES = ("off", "view", "control")

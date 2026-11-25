@@ -2137,6 +2137,19 @@ def _card_process_permissions(session, process_tree, program, kind):
     return agent_process.observe(pid, process_tree, kind, read=read)
 
 
+def _card_antigravity_permissions(plan):
+    supplied = plan.get("tools")
+    spec = None
+    if isinstance(supplied, list) and all(isinstance(arg, str) for arg in supplied):
+        tools = _child_tools_module()
+        try:
+            spec = tools.normalize(tools=tools.parse_cli(supplied), platform="darwin")
+            tools.check_provider(spec, "gemini")
+        except tools.ToolsError:
+            spec = None
+    return agent_card.antigravity_tool_permissions(spec)
+
+
 def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None, process_tree=None):
     name, program = row["name"], row.get("program")
     if program == "antigravity" and registration and _valid(name):
@@ -2154,7 +2167,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                     "act_state": status.get("activity"),
                     "parent_state": "top" if plan.get("standalone") is True else "child",
                     "parent_agent": state.get("parent_agent"),
-                    "harness_kind": "antigravity", "computer_use": None, "browser_use": None,
+                    "harness_kind": "antigravity", **_card_antigravity_permissions(plan),
                     "ctx_window_tokens": None}
     kind = agent_card.HARNESS_KIND.get(program)
     cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
@@ -2277,7 +2290,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
             # An older conversation-only launch has no evidence for its tools.
             computer = browser = None
 
-    observed = {}
+    observed = agent_card.antigravity_tool_permissions(None) if kind == "antigravity" else {}
     if (permission_reason == _PERMISSION_SETTINGS_MISSING and computer is None and browser is None
             and row.get("running") is True and session.get("mail_disabled") != "1"):
         observed = _card_process_permissions(session, process_tree, program, kind)
@@ -5581,6 +5594,7 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False):
             "AGENTSTACK_HOME": str(Path(HOOKS_DIR).parent), "AGENTSTACK_HOOKS_DIR": HOOKS_DIR,
             "AGENTSTACK_WORKTREE_ROOT": _worktree_root(),
             "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": project,
+            "AGENTSTACK_PORT": _env_text("AGENTSTACK_PORT", str(PORT)),
             "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
             "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
             "AGENT_NAME": session, "PARENT_AGENT": state.get("parent_agent", ""),
@@ -8974,6 +8988,7 @@ def spawn_names_payload() -> dict:
         os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
     return {
         "computer_use": sys.platform == "darwin",
+        **({"computer_modes": ["off", "view", "control"]} if sys.platform == "darwin" and not FRESH_MODE else {}),
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,

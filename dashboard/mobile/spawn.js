@@ -11,22 +11,35 @@
   const settings = $('spawn-settings'), modelChip = $('spawn-model-chip');
   const modelName = $('spawn-model-name'), effortMark = $('spawn-model-effort');
   const computer = $('spawn-computer'), browser = $('spawn-browser');
+  const computerTool = computer.closest('.spawn-tool');
   const browserTool = browser.closest('.spawn-tool');
+  const computerMenu = $('spawn-computer-menu');
   const browserMenu = $('spawn-browser-menu');
+  const computerLabels = {off:'Off', view:'View', control:'Control'};
   const browserLabels = {off:'Off', temporary:'Temporary Chrome', personal:'My Chrome'};
+  let computerMode = 'off';
   let browserMode = 'off';
-  const browserChoices = Object.entries(browserLabels).map(([mode, label]) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = label;
-    button.onclick = () => {
-      browserMode = mode;
-      syncBrowser(chosenRoute());
-      browserMenu.hidePopover();
-      browser.focus({preventScroll:true});
-    };
-    browserMenu.append(button);
-    return [mode, button];
+  function modeChoices(menu, control, labels, select) {
+    return Object.entries(labels).map(([mode, label]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.onclick = () => {
+        select(mode);
+        menu.hidePopover();
+        control.focus({preventScroll:true});
+      };
+      menu.append(button);
+      return [mode, button];
+    });
+  }
+  const computerChoices = modeChoices(computerMenu, computer, computerLabels, mode => {
+    computerMode = mode;
+    syncComputer(chosenRoute());
+  });
+  const browserChoices = modeChoices(browserMenu, browser, browserLabels, mode => {
+    browserMode = mode;
+    syncBrowser(chosenRoute());
   });
   const mobileControls = window.OrrerySpawnControls;
   const selects = new Map([
@@ -98,6 +111,7 @@
     if (view === 'editor') {
       canReview();
     } else {
+      if (computerMenu.matches(':popover-open')) computerMenu.hidePopover();
       if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
       if (settings.open) settings.close();
       for (const control of selects.values()) control?.close();
@@ -220,8 +234,50 @@
       (!['dsh', 'hermes'].includes(next.key) || catalog.directories[Number(directory.value)]?.native_browser === true);
   }
 
+  function computerModes(next = chosenRoute()) {
+    return catalog?.configurable && Array.isArray(next?.computer_modes)
+      ? next.computer_modes : null;
+  }
+
+  function syncComputer(next, reset = false) {
+    const modes = computerModes(next);
+    computerTool.hidden = next?.key === 'antigravity' && !modes;
+    if (!modes) {
+      if (computerMenu.matches(':popover-open')) computerMenu.hidePopover();
+      if ('computerMode' in computer.dataset) {
+        delete computer.dataset.computerMode;
+        computer.setAttribute('role', 'switch');
+        computer.setAttribute('aria-label', 'Computer use');
+        computer.setAttribute('aria-describedby', 'spawn-computer-help');
+        for (const attr of ['aria-expanded', 'aria-controls', 'aria-disabled', 'title']) computer.removeAttribute(attr);
+        reset = true;
+      }
+      if (reset) {
+        computer.setAttribute('aria-checked', String(!tools.hidden && next.key !== 'dsh'));
+        toggleMotion[0]?.sync(false);
+      }
+      return;
+    }
+    if (reset) {
+      computerMode = next.key === 'dsh' || next.key === 'antigravity' ? 'off' : 'control';
+      if (computerMenu.matches(':popover-open')) computerMenu.hidePopover();
+    }
+    if (!modes.includes(computerMode)) computerMode = modes[0] || 'off';
+    computer.dataset.computerMode = computerMode;
+    for (const attr of ['role', 'aria-checked', 'aria-describedby']) computer.removeAttribute(attr);
+    computer.setAttribute('aria-controls', computerMenu.id);
+    computer.setAttribute('aria-expanded', String(computerMenu.matches(':popover-open')));
+    computer.setAttribute('aria-disabled', String(!modes.length));
+    computer.title = 'Computer use: ' + (modes.length ? computerLabels[computerMode] : 'Unavailable');
+    computer.setAttribute('aria-label', computer.title);
+    for (const [mode, button] of computerChoices) {
+      button.hidden = !modes.includes(mode);
+      button.setAttribute('aria-pressed', String(mode === computerMode));
+    }
+  }
+
   function browserModes(next = chosenRoute()) {
-    return catalog?.configurable && next?.key !== 'antigravity' && Array.isArray(next?.browser_modes)
+    return catalog?.configurable && Array.isArray(next?.browser_modes)
       ? next.browser_modes : null;
   }
 
@@ -300,14 +356,11 @@
     if (!next) return;
     const provider = selectedModel().provider;
     const key = provider + '/' + next.key;
-    tools.hidden = !catalog.configurable || next.key === 'antigravity';
+    tools.hidden = !catalog.configurable ||
+      (next.key === 'antigravity' && !computerModes(next)?.length && !browserModes(next)?.length);
     const changed = route !== key;
-    if (changed) {
-      dismissToolHelp();
-      const on = !tools.hidden && next.key !== 'dsh';
-      computer.setAttribute('aria-checked', String(on));
-      toggleMotion[0]?.sync(false);
-    }
+    if (changed) dismissToolHelp();
+    syncComputer(next, changed);
     syncBrowser(next, changed);
     route = key;
     const previous = effort.value;
@@ -455,10 +508,12 @@
     const checked = control => control.getAttribute('aria-checked') === 'true';
     const canUseBrowser = browserAvailable(route);
     const modes = browserModes(route);
+    const screens = computerModes(route);
     selection = {
       catalog:catalog.catalog, model:modelIndex, harness:harness.value, directory:Number(directory.value),
       task:task.value.trim(), role:catalog.configurable ? role.value.trim() : '',
-      effort:effort.value || null, computer:!tools.hidden && checked(computer),
+      effort:effort.value || null,
+      computer:!tools.hidden && (screens?.includes(computerMode) ? computerMode : !screens && checked(computer)),
       ...(modes ? (modes.includes(browserMode) ? {browser_mode:browserMode} : {})
         : canUseBrowser || (!catalog.configurable && route.key !== 'antigravity')
           ? {browser:Boolean(canUseBrowser) && checked(browser)} : {}),
@@ -472,7 +527,8 @@
     if (route.efforts.length) labels.push(summaryValue('Effort', 'working', effortLabel(selection.effort || route.default_effort)));
     if (selection.role) labels.push(summaryValue('Role', 'agents', selection.role));
     if (!tools.hidden) {
-      labels.push(summaryValue('Computer use', 'launch-computer', selection.computer ? 'On' : 'Off'));
+      if (!computerTool.hidden) labels.push(summaryValue('Computer use', 'launch-computer',
+        screens ? computerLabels[selection.computer] || 'Unavailable' : selection.computer ? 'On' : 'Off'));
       if (selection.browser_mode) labels.push(summaryValue('Browser', 'launch-browser', browserLabels[selection.browser_mode]));
       else if (!modes && canUseBrowser) labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));
     }
@@ -517,6 +573,7 @@
   };
   $('spawn-close').onclick = () => sheet.close();
   sheet.addEventListener('close', () => {
+    if (computerMenu.matches(':popover-open')) computerMenu.hidePopover();
     if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
     if (settings.open) settings.close();
     catalogRequest?.abort();
@@ -605,21 +662,23 @@
   window.addEventListener('resize', resizeLaunch);
   window.visualViewport?.addEventListener('resize', resizeLaunch);
   window.visualViewport?.addEventListener('scroll', resizeLaunch);
-  for (const control of [computer, browser]) {
+  for (const [control, menu, available] of [
+    [computer, computerMenu, computerModes], [browser, browserMenu, browserModes],
+  ]) {
     const tool = control.closest('.spawn-tool');
     control.addEventListener('blur', () => {delete tool.dataset.hint;});
     tool.addEventListener('pointerleave', event => {
       if (event.pointerType === 'mouse') delete tool.dataset.hint;
     });
     control.onclick = event => {
-      if (control === browser && browserModes()) {
-        if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
+      if (available()) {
+        if (menu.matches(':popover-open')) menu.hidePopover();
         else if (control.getAttribute('aria-disabled') !== 'true') {
-          browserMenu.showPopover({source:control});
-          const anchor = browser.getBoundingClientRect(), bounds = browserMenu.getBoundingClientRect();
-          browserMenu.style.left = Math.max(12, Math.min(anchor.left, innerWidth - bounds.width - 12)) + 'px';
-          browserMenu.style.top = Math.max(12, anchor.top - bounds.height - 6) + 'px';
-          browserMenu.querySelector('[aria-pressed=true]:not([hidden])')?.focus({preventScroll:true});
+          menu.showPopover({source:control});
+          const anchor = control.getBoundingClientRect(), bounds = menu.getBoundingClientRect();
+          menu.style.left = Math.max(12, Math.min(anchor.left, innerWidth - bounds.width - 12)) + 'px';
+          menu.style.top = Math.max(12, anchor.top - bounds.height - 6) + 'px';
+          menu.querySelector('[aria-pressed=true]:not([hidden])')?.focus({preventScroll:true});
         }
         return;
       }
@@ -627,10 +686,10 @@
       dismissToolHelp();
       if (event.pointerType === 'touch' || matchMedia('(hover: none)').matches) tool.dataset.hint = 'shown';
     };
+    menu.addEventListener('toggle', () => {
+      if (available()) control.setAttribute('aria-expanded', String(menu.matches(':popover-open')));
+    });
   }
-  browserMenu.addEventListener('toggle', () => {
-    if (browserModes()) browser.setAttribute('aria-expanded', String(browserMenu.matches(':popover-open')));
-  });
   modelSearch.oninput = renderModels;
   harness.onchange = updateRoute;
   directory.onchange = () => syncBrowser(chosenRoute());

@@ -270,6 +270,12 @@ ORRERY does not add `read_file(*)`, does not enable
 `--dangerously-skip-permissions`, and does not otherwise broaden user-owned
 Antigravity permissions.
 
+For a managed interactive launch on macOS, `--settings` grants individual
+`orrery-screen` tools for that session according to the selected screen mode.
+View grants the read-only tools. Control grants the read-only and interaction
+tools. Existing Ask and Deny rules still take precedence. Global settings are
+unchanged.
+
 ## Credential boundary
 
 The session-bound wrapper resolves the current agent's mode-0600 runtime token
