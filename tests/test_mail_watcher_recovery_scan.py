@@ -16,11 +16,9 @@ real fswatch on Linux only.
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import pathlib
 import re
-import runpy
 import shlex
 import shutil
 import signal
@@ -278,188 +276,44 @@ def test_a_lease_freed_by_a_finished_worker_does_not_start_a_second_one(tmp_path
     assert not (leases / "ProbeAgent-777.lock").exists(), "the handler kept a lease it did not use"
 
 
-# --- legacy tmux recovery across watcher processes ----------------------------
-
-@pytest.fixture
-def legacy_notification(tmp_path):
-    from _fake_tmux_transport import add_transport_evidence
-
-    bin_dir = tmp_path / 'bin'
-    bin_dir.mkdir()
-    runtime = tmp_path / 'runtime'
-    state_file = runtime / 'notify-state.json'
-    recipient = tmp_path / 'signals/projects/fixture/agents/ProbeAgent'
-    recipient.mkdir(parents=True)
-    signal_path = recipient / '42.signal'
-    payload = json.dumps({'message': {'id': 42, 'from': 'Sender', 'subject': 'fixture'}})
-    signal_path.write_text(payload)
-    runner = tmp_path / 'watch-once.sh'
-    source = WATCHER.read_text().split('if command -v fswatch &>/dev/null; then')[0]
-    # Point the one-scan watcher at the real repository's private adapter.
-    source = source.replace('$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin/lib" && pwd)',
-                            str(ROOT / 'bin/lib'))
-    runner.write_text(source + '\nprocess_existing_signals\nwait\n')
-    _executable(bin_dir / 'tmux', r'''#!/bin/bash
-set -eu
-cd "$PROBE_ROOT"
-case "$1" in
-    show-environment) ;;
-    list-sessions) echo ProbeAgent ;;
-    capture-pane) echo 'Claude Code' ;;
-    display-message)
-        if [[ -f observation-lost ]]; then exit 1; fi
-        if [[ -f stop-before-enter && -f "${AGENTSTACK_NOTIFY_RECEIPT:-}" ]] &&
-           grep -q '"phase": "enter_pending"' "$AGENTSTACK_NOTIFY_RECEIPT"; then
-            touch stopped-before-enter
-            exit 1
-        fi
-        draft=$(cat draft 2>/dev/null || true)
-        printf '%s\t300\t%%1\t400\t1\t0\t%s\t1\tclaude\n' "$FAKE_TMUX_SOCKET" "$((2 + ${#draft}))"
-        printf '────────\n❯ %s\n────────\n' "$draft"
-        ;;
-    load-buffer) echo load >> calls; cat > buffer ;;
-    paste-buffer) echo paste >> calls; mv buffer draft ;;
-    send-keys)
-        [[ "$*" == 'send-keys -t %1 C-m' && -s draft ]]
-        echo enter >> calls
-        rm -f draft
-        if [[ -f lose-observation ]]; then touch observation-lost; fi
-        ;;
-    delete-buffer) rm -f buffer ;;
-    *) exit 1 ;;
-esac
-''')
-    env = {
-        **os.environ, 'HOME': str(tmp_path / 'home'),
-        'PATH': f"{bin_dir}:{pathlib.Path(sys.executable).parent}:{os.environ['PATH']}",
-        'AGENTSTACK_RUNTIME_DIR': str(runtime),
-        'AGENTSTACK_SIGNALS_DIR': str(recipient.parents[2]),
-        'AGENTSTACK_PERSISTENT_DELIVER': str(tmp_path / 'no-headless-helper'),
-        'PROBE_ROOT': str(tmp_path),
-    }
-    add_transport_evidence(bin_dir, env)
-    pathlib.Path(env['FAKE_TMUX_SESSION_FILE']).write_text('ProbeAgent')
-
-    def scan():
-        if state_file.exists():
-            state = json.loads(state_file.read_text())
-            state['ProbeAgent:42']['last_attempt_epoch'] = 0
-            state_file.write_text(json.dumps(state))
-        result = subprocess.run(['/bin/bash', str(runner)], env=env,
-                                capture_output=True, text=True, check=True, timeout=20)
-        return result.stdout, json.loads(state_file.read_text())['ProbeAgent:42']
-
-    return scan, signal_path, payload
-
-
-def test_watcher_holds_matching_drafts_and_reports_repeated_waits(tmp_path, legacy_notification):
-    scan, signal_path, _ = legacy_notification
-    draft = tmp_path / 'draft'
-    draft.write_text('A draft still being edited')
-    for attempt in range(1, 5):
-        output, state = scan()
-        assert state['wait_reason'] == 'editor_not_empty'
-        assert state['wait_count'] == attempt
-        assert ('Waiting: agent=ProbeAgent message=42 attempts=3 reason=editor_not_empty' in output) == (attempt == 3)
-        assert draft.read_text() == 'A draft still being edited'
-        assert not (tmp_path / 'calls').exists()
-    (tmp_path / 'observation-lost').touch()
-    output, state = scan()
-    assert 'Waiting: agent=ProbeAgent message=42 attempts=5 reason=input_not_found' in output
-    (tmp_path / 'observation-lost').unlink()
-    draft.write_text('ORRERY Mail notification: message from Sender [normal]: fixture. Please call fetch_inbox to read it.')
-    output, state = scan()
-    assert state['wait_reason'] == 'editor_not_empty'
-    assert signal_path.exists() and draft.exists()
-    assert not (tmp_path / 'calls').exists()
-    draft.unlink()
-    _, state = scan()
-    assert state['last_result'] == 'success'
-    assert (tmp_path / 'calls').read_text().splitlines() == ['load', 'paste', 'enter']
-    assert not signal_path.exists()
-    # The per-message filename preserves the ID even without body metadata.
-    signal_path.parent.mkdir()
-    signal_path.write_text('{}')
-    output, state = scan()
-    assert state['last_result'] == 'success'
-    assert 'Signal:' not in output and not signal_path.exists()
-    assert (tmp_path / 'calls').read_text().splitlines() == ['load', 'paste', 'enter']
-
-
-@pytest.mark.parametrize('boundary', ['before-enter', 'after-enter'])
-def test_restart_keeps_unknown_enter_pending_without_sending_again(tmp_path, legacy_notification, boundary):
-    scan, signal_path, _ = legacy_notification
-    fault = tmp_path / ('stop-before-enter' if boundary == 'before-enter' else 'lose-observation')
-    fault.touch()
-    _, state = scan()
-    assert state['last_result'] == 'submit_failed'
-    assert signal_path.is_file()
-    receipt = tmp_path / 'runtime/notify-locks/ProbeAgent-42.receipt'
-    assert json.loads(receipt.read_text())['phase'] == 'enter_pending'
-    fault.unlink()
-    (tmp_path / 'observation-lost').unlink(missing_ok=True)
-    calls = ['load', 'paste'] + (['enter'] if boundary == 'after-enter' else [])
-    if boundary == 'before-enter':
-        assert (tmp_path / 'stopped-before-enter').exists()
-    draft = tmp_path / 'draft'
-    text = 'ORRERY Mail notification: message from Sender [normal]: fixture. Please call fetch_inbox to read it.'
-    for replacement in (text, '', 'New active pane already has a user draft'):
-        draft.write_text(replacement)
-        _, state = scan()
-        assert state['last_result'] == 'submit_failed'
-        assert state['wait_reason'] == 'notification_enter_pending'
-        assert receipt.is_file() and signal_path.is_file()
-        assert draft.read_text() == replacement
-        assert (tmp_path / 'calls').read_text().splitlines() == calls
-
-
-def test_submit_watchdog_stops_the_entire_helper_group(tmp_path):
-    source = WATCHER.read_text()
-    function = source[source.index('run_to() ('):source.index('\n# 1行目は ok / invalid')]
-    child = tmp_path / 'stubborn.py'
-    started = tmp_path / 'started'
-    late = tmp_path / 'late'
-    child.write_text(
-        'import signal, time\nfrom pathlib import Path\n'
-        'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'
-        f'Path({str(started)!r}).touch()\n'
-        'time.sleep(3)\n'
-        f'Path({str(late)!r}).touch()\n')
-    script = function + '''
-tmux() { "$PYTHON" "$CHILD"; }
-AGENTSTACK_NOTIFY_RECEIPT=fixture run_to 1 tmux submit-input
+def test_the_watcher_logs_repeated_submission_reasons_once(tmp_path):
+    source = WATCHER.read_text(encoding="utf-8")
+    script = _function(source, "state_mark_result") + _function(source, "deliver_worker") + r'''
+set -euo pipefail
+STATE_FILE="$1/state.json"
+STATE_DIR="$1"
+TMPDIR="$1"
+PERSISTENT_DELIVER="$1/missing-headless-helper"
+TMUX_TIMEOUT=5
+run_to() { shift; "$@"; }
+release_delivery_lease() { :; }
+log() { printf '%s\n' "$*"; }
+tmux() {
+    case "$1" in
+        list-sessions) echo ProbeAgent ;;
+        capture-pane) echo 'Claude Code' ;;
+        display-message) printf '%%1\n' ;;
+        show-environment) : ;;
+        submit-input)
+            if [[ -z "$REASON" ]]; then return 0; fi
+            printf '%s\n' "$REASON" >&2
+            return 3
+            ;;
+    esac
+}
+for REASON in editor_not_empty editor_not_empty editor_not_empty editor_not_empty input_not_found ""; do
+    deliver_worker "$1/777.signal" ProbeAgent 777 Sender "fixture" normal 0
+done
 '''
-    result = subprocess.run(['/bin/bash', '-c', script], env={
-        **os.environ, 'PYTHON': sys.executable, 'CHILD': str(child),
-    }, timeout=5, capture_output=True)
-    assert result.returncode in (137, 143)
-    assert started.exists() and not late.exists()
-
-
-@pytest.mark.parametrize('record,expected_code,reason', [
-    ({'version': 2, 'phase': 'paste_pending'}, 4, 'notification_paste_pending'),
-    ({'version': 2, 'phase': 'enter_pending'}, 4, 'notification_enter_pending'),
-    ({'confirmed': False}, 4, 'notification_enter_pending'),
-    ({'confirmed': True}, 4, 'notification_enter_pending'),
-    ({'version': 2, 'phase': 'confirmed'}, 0, None),
-])
-def test_saved_receipts_never_open_a_new_destination(tmp_path, monkeypatch, capsys,
-                                                      record, expected_code, reason):
-    script = runpy.run_path(str(ROOT / 'bin/lib/runtime_tmux_consumer.py'))
-    payload = tmp_path / 'notice'
-    payload.write_text('Synthetic notification')
-    receipt = tmp_path / 'receipt'
-    receipt.write_text(json.dumps({
-        **record, 'pane': ['/tmp/fixture.sock', 100, '%1', 200],
-        'digest': hashlib.sha256(payload.read_bytes()).hexdigest(),
-    }))
-    monkeypatch.setenv('AGENTSTACK_NOTIFY_RECEIPT', str(receipt))
-
-    def no_consumer():
-        pytest.fail('a saved receipt must not look up a new pane')
-
-    assert script['submit_input'](['%2', str(payload)], no_consumer) == expected_code
-    assert capsys.readouterr().err.strip() == (reason or '')
+    result = subprocess.run(["/bin/bash", "-c", script, "fixture", str(tmp_path)],
+                            capture_output=True, text=True, check=True, timeout=20)
+    waiting = [line.strip() for line in result.stdout.splitlines() if "Waiting:" in line]
+    assert waiting == [
+        "Waiting: agent=ProbeAgent message=777 attempts=3 reason=editor_not_empty",
+        "Waiting: agent=ProbeAgent message=777 attempts=5 reason=input_not_found",
+    ]
+    row = json.loads((tmp_path / "state.json").read_text())["ProbeAgent:777"]
+    assert row["last_result"] == "success" and "wait_count" not in row
 
 
 # --- real fswatch on Linux -------------------------------------------------------

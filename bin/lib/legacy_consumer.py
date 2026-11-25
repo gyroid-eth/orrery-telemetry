@@ -1,5 +1,4 @@
 """One consumer adapter over the existing transport/admission API, including older helpers."""
-from functools import partial
 import os
 from pathlib import Path
 import re
@@ -33,24 +32,19 @@ class LegacyConsumer:
         self.api=(self.tmux['runtime_api_view']() if 'runtime_api_view' in self.tmux else self.tmux['module_api']('runtime_client')) if api is None else api
         self.proof_reader=proof_reader
 
-    def admission(self,target,operation,*,deadline=None):
+    def admission(self,target,operation):
         if target.startswith('='):target=target[1:]
         selector={'pane':target} if re.fullmatch(r'%[0-9]+',target) else ({'window':target} if re.fullmatch(r'@[0-9]+',target) else {'session':target.split(':',1)[0]})
-        return self.tmux['legacy_admission'](self.transport,self.home,operation=operation,api=self.api,proof_reader=self.proof_reader,deadline=deadline,**selector)
+        return self.tmux['legacy_admission'](self.transport,self.home,operation=operation,api=self.api,proof_reader=self.proof_reader,**selector)
 
-    def submit_text(self,pane,text,*,deadline=None,session=None,**options):
+    def submit_text(self,pane,text,*,on_wait=None):
         if not re.fullmatch(r'%[0-9]+',pane):
             return 'refused'
+        self.admission(pane,'input')
         def admitted():
-            proof = self.admission(pane,'input',deadline=deadline)
-            return bool(proof and (session is None or proof['panes'][0]['session'] == session))
-        if not admitted():
-            return 'refused'
-        command = self.transport.command
-        if deadline is not None:
-            command = partial(command, deadline=deadline)
+            return bool(self.admission(pane,'input'))
         return self.tmux['module_api']('pane_submission')['submit'](
-            command,admitted,pane,text,deadline=deadline,**options)
+            self.transport.command,admitted,pane,text,on_wait=on_wait)
 
     def admitted_argv(self,args,*,_creation=None):
         args=list(args)

@@ -105,63 +105,29 @@ def test_watcher_reads_the_end_of_a_scrolled_claude_draft():
     assert not submission['ready'](view, 'A different prompt that ends elsewhere.')
 
 
-@pytest.mark.parametrize('rows,cursor', [
-    (['────────', '❯ A fixture notification', '────────'], 1),
-    (['────────', '❯ A fixture', '  notification', '────────'], 2),
-])
-def test_watcher_leaves_a_preexisting_matching_draft_alone(monkeypatch, rows, cursor):
+def test_expired_submit_after_load_still_deletes_its_buffer(monkeypatch):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
     monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
+    now = 0
+    loaded = []
+    deleted = []
     reasons = []
 
     def command(*args, input=None):
-        assert args[0] == 'display-message'
-        meta = f'/tmp/fixture.sock\t100\t%1\t200\t{cursor}\t0\t15\t1\tclaude'
-        return subprocess.CompletedProcess(args, 0, '\n'.join([meta, *rows]), '')
-
-    assert submit(command, lambda: True, '%1', 'A fixture notification', on_wait=reasons.append) == 'refused'
-    assert reasons == ['editor_not_empty']
-
-
-@pytest.mark.parametrize('changed', ['deadline', 'draft'])
-def test_after_recording_enter_the_watcher_checks_time_and_editor_again(monkeypatch, changed):
-    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
-    submit = submission['submit']
-    monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
-    now = 0.0
-    text = 'A fixture notification'
-    draft = ''
-    enter_recorded = False
-    reasons = []
-
-    def tick(seconds):
         nonlocal now
-        now += seconds
-
-    def mark_enter(identity):
-        nonlocal enter_recorded
-        enter_recorded = True
-
-    def command(*args, input=None):
-        nonlocal draft
         screen = ''
         if args[0] == 'display-message':
-            if enter_recorded:
-                if changed == 'deadline':
-                    tick(6)
-                else:
-                    draft += ' edited'
-                    tick(6)
-            screen = f'/tmp/fixture.sock\t100\t%1\t200\t1\t0\t2\t1\tclaude\n────────\n❯ {draft}\n────────'
-        elif args[0] == 'paste-buffer':
-            draft = text
+            screen = '/tmp/fixture.sock\t100\t%1\t200\t0\t0\t2\t1\tclaude\n❯ '
+        elif args[0] == 'load-buffer':
+            loaded.append(args[2])
+            now = 6
         else:
-            assert args[0] in ('load-buffer', 'delete-buffer')
+            assert args[0] == 'delete-buffer'
+            deleted.append(args[2])
         return subprocess.CompletedProcess(args, 0, screen, '')
 
-    monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(monotonic=lambda: now, sleep=tick))
-    receipt = SimpleNamespace(before_paste=lambda identity: None, before_enter=mark_enter)
-    assert submit(command, lambda: True, '%1', text, receipt=receipt, on_wait=reasons.append) == 'unknown'
-    assert enter_recorded
-    assert reasons == (['submission_deadline'] if changed == 'deadline' else ['draft_not_confirmed'])
+    monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(monotonic=lambda: now))
+    assert submit(command, lambda: True, '%1', 'Fixture notice', on_wait=reasons.append) == 'refused'
+    assert reasons == ['submission_deadline']
+    assert len(loaded) == 1 and loaded == deleted
