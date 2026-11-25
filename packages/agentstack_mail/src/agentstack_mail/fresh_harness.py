@@ -89,7 +89,9 @@ def plan(client, root, provider, settings, run, cwd, prompt, session_id, *, pers
         backend_kind=settings['runner']['connection_kind'], product_root=str(root),
         state_dir=str(state), runtime_dir=str(client.path.parent), fresh_client_dir=str(client.path.parent),
         cwd=str(cwd), mcp_config=str(mcp), prompt_file=str(task), instructions_file=str(instructions),
-        tools=selection_spec.get('tools', {'base':'default','tools':{}}), env=env)
+        tools=selection_spec.get('tools', {'base':'default','tools':{}}), env=env,
+        # A persistent agent keeps its own profile; only children see personal skills.
+        personal_skills=persistent is None)
     for key in ('effort','helper_model','web_search'):
         if key in selection_spec:document[key] = selection_spec[key]
     document.update({key:settings['runner'][key] for key in ('url_index','url_key','server_url') if key in settings['runner']})
