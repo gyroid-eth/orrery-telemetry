@@ -1490,6 +1490,7 @@ else:
          "preview", str(selected)],
         env={**os.environ, "HOME":str(tmp_path), "PATH":f"{fake_bin}:{os.environ['PATH']}",
              "PARENT_AGENT":"Unrelated", "AGENTSTACK_HOME":str(home), "AGENTSTACK_HOOKS_DIR":str(hooks),
+             "AGENTSTACK_LABEL_PREFIX":"org.agentstack.test.gemini-adapter",
              "AGENTSTACK_PYTHON":sys.executable, "AGENTSTACK_RUNTIME_DIR":str(runtime),
              "AGENTSTACK_WORKTREE_ROOT":str(tmp_path / "worktrees"), "AGENTSTACK_PROJECT_KEY":"/fixture",
              "AGENTSTACK_GEMINI_TASK_FILE":str(task), "FIXTURE_CAPTURE":str(capture)},
