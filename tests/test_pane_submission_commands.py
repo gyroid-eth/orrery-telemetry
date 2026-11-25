@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
     ('claude', '/log', '/login', False),
     ('claude', '/log', None, False),
     ('claude', '/log note', None, True),
+    ('claude-wrapped', '/compact', '/compact', True),
+    ('claude-wrapped', '/compact', '/compact-later', False),
     ('codex', '/compact', '/compact', True),
     ('codex', '/comp', '/compact', False),
     ('codex', '/compact', None, False),
@@ -34,15 +36,20 @@ def test_watcher_submits_only_proven_slash_completion(monkeypatch, editor, edito
         if args[0] == 'display-message':
             draft = editor_text if paste and not sent else ''
             active = paste and not sent and selection
-            if editor == 'claude':
+            if editor.startswith('claude'):
                 options = [f'  ❯ {selection}  selected', '    /other  unselected'] if active else []
+                if active and editor == 'claude-wrapped':
+                    # A narrow pane wraps long descriptions under their option.
+                    options[1:1] = ['              description that wraps']
+                    options.append('              another wrapped description')
                 lines = [*options, '────────', f'❯ {draft}', '────────']
                 cursor = len(options) + 1
             else:
                 options = [f'\x1b[1;7m› {selection}  selected\x1b[0m', ''] if active else []
                 lines = [*options, f'› {draft}', '  Context 100% left']
                 cursor = len(options)
-            screen = (f'/tmp/fixture.sock\t11\t%1\t12\t{cursor}\t0\t{len(draft)+2}\t1\t{editor}\n'
+            command_name = 'claude' if editor.startswith('claude') else editor
+            screen = (f'/tmp/fixture.sock\t11\t%1\t12\t{cursor}\t0\t{len(draft)+2}\t1\t{command_name}\n'
                       + '\n'.join(lines) + '\n')
         elif args[0] == 'load-buffer':
             assert input == editor_text
