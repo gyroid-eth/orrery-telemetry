@@ -662,14 +662,44 @@ def test_large_retired_claude_roster_never_scans_transcripts(monkeypatch, tmp_pa
     def forbidden_scan(*_args, **_kwargs):
         raise AssertionError("display polling entered the transcript content scanner")
 
+    transcript_root = Path(server.CLAUDE_PROJECTS)
+    scandir = server.os.scandir
+    listdir = server.os.listdir
+    catalog_scans = []
+
+    def check_directory(path):
+        if isinstance(path, int):
+            return
+        directory = Path(path)
+        if directory == transcript_root:
+            catalog_scans.append(directory)
+        elif directory.is_relative_to(transcript_root):
+            forbidden_scan()
+
+    def guarded_scandir(path="."):
+        check_directory(path)
+        return scandir(path)
+
+    def guarded_listdir(path="."):
+        check_directory(path)
+        return listdir(path)
+
     monkeypatch.setattr(server, "_scan_selfref", forbidden_scan)
-    started = time.perf_counter()
+    monkeypatch.setattr(server, "_all_transcripts", forbidden_scan)
+    monkeypatch.setattr(server.os, "scandir", guarded_scandir)
+    monkeypatch.setattr(server.os, "listdir", guarded_listdir)
+    # Cache expiry is unrelated to the amount of filesystem work a cold
+    # poll does. Hold the dashboard's clock still while counting that work.
+    monkeypatch.setattr(server, "time", SimpleNamespace(
+        **{**vars(time), "monotonic": lambda: 1.0}
+    ))
     deck = server.build_agents(30)
-    deck_elapsed = time.perf_counter() - started
     assert len(deck) == 60
-    assert deck_elapsed < 0.5
+    assert len(catalog_scans) == 1
 
     server._RESUME_CAPABILITY_CACHE.clear()
+    server._CLAUDE_TRANSCRIPT_CATALOG_CACHE.update(checked_at=0.0, root="", key=None)
+    catalog_scans.clear()
     monkeypatch.setattr(
         server,
         "_raw_graph",
@@ -689,8 +719,6 @@ def test_large_retired_claude_roster_never_scans_transcripts(monkeypatch, tmp_pa
         },
     )
     monkeypatch.setattr(server, "_annotations", lambda: {})
-    started = time.perf_counter()
     network = server.graph_payload(30, True)
-    network_elapsed = time.perf_counter() - started
     assert len(network["nodes"]) == 60
-    assert network_elapsed < 0.5
+    assert len(catalog_scans) == 1
