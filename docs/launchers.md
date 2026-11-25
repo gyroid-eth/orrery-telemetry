@@ -127,7 +127,7 @@ ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/child-agents/<name>.json
 
 private な `harness_state_dir` に初期 prompt・native launch plan・native 専用の短い指示を保存します。指示の正本は `bin/lib/harness_instructions.md` で、既存の共通 renderer が起動・Mail 等の共通規則を取り込みます。初回起動と同じ ID の再開で、dsh の `AGENTS.md` / Hermes の system prompt へ渡します。ORRERY の子作成・raw 認証回復・他 runtime 専用の手順は載せません。共有編集の予約と自己専用 scratch の区別、停止条件は保持します。dsh の tool-subagent や Hermes の auxiliary/delegation 設定、skills の配布は変えません。Claude / Codex の指示本文も不変です。
 
-この変更の後に起動した dsh と Hermes の子は、Claude の子と同じ利用者の skill（`$CLAUDE_CONFIG_DIR/skills`、未設定なら `~/.claude/skills`）も読みます。installer は同じ名前の利用者 skill を製品の skill で置き換えないので、Claude と同じく利用者の skill が優先されます。dsh は `customSkillDirs` として渡します。Hermes は子の profile の `skills/` に利用者の skill を link し、同じ名前（ディレクトリ名か frontmatter の `name`）の製品 skill の link を外します。`config.yaml` は書きません。起動と再開のたびに読み直し、directory が無ければ従来どおりです。常駐 agent と、この変更より前に作った子は対象外で、profile を変えません。
+dsh の子は、Claude の子と同じ利用者の skill（`$CLAUDE_CONFIG_DIR/skills`、未設定なら `~/.claude/skills`）も `customSkillDirs` として読みます。native の順位でこの directory は子の `DSH_HOME/skills` の製品 skill より先に探されるので、installer が同じ名前の利用者 skill を残す Claude と同じく、利用者の skill が優先されます。起動と再開のたびに読み直し、directory が無ければ従来どおりです。生成するのは起動ごとの native config だけで、子の profile や利用者の設定は書きません。Hermes の子の skill は従来どおり製品の skill です。
 
 鍵や親 token の値は指示に含めません。追加の stdio/HTTP MCP は共通の tool 選択からコピーし、明示指定の承認や filter を native config に写せない場合は起動を止めます。installer の既定に含まれる項目は、native config に写せるものを適用し、使えない項目を通知して外します。native tool の adapter は、既存の鍵読取・登録・予約 hook の判定を呼びます。
 

@@ -427,60 +427,16 @@ class ThinConfig(unittest.TestCase):
             self.generate()
         self.assertEqual((path / 'SKILL.md').read_text(), 'user skill')
 
-    def test_personal_skills_replace_product_links_without_writing_config(self):
-        personal, moved = self.base / 'claude-config/skills', self.base / 'claude-moved/skills'
-        for root in (personal, moved):
-            (root / 'delegate').mkdir(parents=True)
-            (root / 'delegate/SKILL.md').write_text('---\nname: delegate\ndescription: personal\n---\n')
-        # A directory under another name that declares a product skill's name.
-        (personal / 'daily-log').mkdir()
-        (personal / 'daily-log/SKILL.md').write_text('---\nname: "log"\ndescription: personal\n---\n')
-        product = (ROOT / 'skills').resolve()
-        for platform in ('darwin', 'linux'):
-            with self.subTest(platform=platform), patch.object(sys, 'platform', platform):
-                child = {'agent_name': 'Fixture' + platform.title(), 'state_dir': str(self.base / platform)}
-                home = config.child_home({**self.document, **child})
-                target = lambda name: (home / 'skills' / name).resolve()
-                self.generate(**child, skill_roots=[])
-                before = (home / 'config.yaml').read_bytes()
-                self.assertEqual(target('delegate'), product / 'delegate')
-                self.assertFalse((home / config.PERSONAL_LEDGER).exists())
-                self.generate(**child, skill_roots=[str(personal)])
-                # Profile skills outrank every other native root, so the personal copy wins.
-                self.assertEqual(target('delegate'), (personal / 'delegate').resolve())
-                self.assertEqual(target('daily-log'), (personal / 'daily-log').resolve())
-                self.assertFalse((home / 'skills/log').exists())
-                self.assertEqual((home / 'config.yaml').read_bytes(), before)
-                # Only the recorded personal links follow a moved directory.
-                self.generate(**child, skill_roots=[str(moved)])
-                self.assertEqual(target('delegate'), (moved / 'delegate').resolve())
-                self.assertFalse((home / 'skills/daily-log').exists())
-                self.assertEqual(target('log'), product / 'log')
-                self.generate(**child, skill_roots=[])
-                self.assertEqual(target('delegate'), product / 'delegate')
-                self.assertFalse((home / config.PERSONAL_LEDGER).exists())
-                self.assertEqual((home / 'config.yaml').read_bytes(), before)
-                with self.assertRaisesRegex(ValueError, '^invalid_skill_roots$'):
-                    self.generate(**child, skill_roots=['relative/skills'])
-
-    def test_personal_skill_links_keep_profile_skills_and_recover_an_interrupted_launch(self):
+    def test_personal_skill_roots_leave_hermes_links_and_config_unchanged(self):
+        # Personal skills reach dsh only; Hermes keeps the product links.
         personal = self.base / 'claude-config/skills'
-        (personal / 'notes').mkdir(parents=True)
-        (personal / 'notes/SKILL.md').write_text('---\nname: notes\ndescription: personal\n---\n')
-        own = self.profile / 'skills/notes'
-        own.mkdir(parents=True)
-        (own / 'SKILL.md').write_text('profile skill')
-        stale = self.profile / 'skills/stale'
-        stale.symlink_to(personal)
-        # A launch that stopped after recording its intent left one link behind.
-        self.save(self.profile / config.PERSONAL_LEDGER, ['stale'])
+        (personal / 'delegate').mkdir(parents=True)
+        (personal / 'delegate/SKILL.md').write_text('---\nname: delegate\ndescription: personal\n---\n')
+        self.generate()
+        before = (self.profile / 'config.yaml').read_bytes()
         self.generate(skill_roots=[str(personal)])
-        self.assertEqual((own / 'SKILL.md').read_text(), 'profile skill')
-        self.assertFalse(stale.is_symlink())
-        self.assertFalse((self.profile / config.PERSONAL_LEDGER).exists())
-        self.save(self.profile / config.PERSONAL_LEDGER, ['../outside'])
-        with self.assertRaisesRegex(ValueError, '^invalid_skill_ledger$'):
-            self.generate(skill_roots=[str(personal)])
+        self.assertEqual((self.profile / 'skills/delegate').resolve(), (ROOT / 'skills/delegate').resolve())
+        self.assertEqual((self.profile / 'config.yaml').read_bytes(), before)
 
     def test_native_personality_kept_with_shared_instructions(self):
         (self.source / 'hermes_cli/personality.py').write_text("BUILTIN_PERSONALITIES: dict = {'concise': 'Be concise'}\n")

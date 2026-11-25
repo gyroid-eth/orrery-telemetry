@@ -232,10 +232,9 @@ def generate_plan(document, runner):
     # Re-evaluate against authenticated Mail, never the previous merged output.
     # Keep the source in saved input for dynamic prelaunch regeneration as well.
     document.setdefault('mcp_base_config', document['mcp_config'])
-    # Opt-in recorded when a child is created; saved children from before it,
-    # and persistent agents, never get personal skills. Re-read the directory
-    # at every launch and resume of an opted-in child, like the Claude CLI.
-    document['skill_roots'] = personal_skill_roots() if document.get('personal_skills') is True else []
+    # Re-read at every launch and resume, like the Claude CLI does. Only the
+    # dsh generator uses it; Hermes keeps its product skill links unchanged.
+    document['skill_roots'] = personal_skill_roots()
     managed_screen = None
     if 'project_key' in document:
         generation = document.setdefault('screen_generation', uuid.uuid4().hex)
@@ -388,7 +387,6 @@ def prepare(args):
         state_dir=str(state_dir), mcp_config=str(Path(args.mcp_config).resolve()),
         prompt_file=str(prompt), instructions_file=str(instructions),
         manifest_file=str(Path(args.manifest).resolve()), tools=json.loads(args.tools),
-        personal_skills=True,
         env=dict(AGENT_NAME=args.agent_name, AGENTSTACK_HOME=str(ROOT),
                  AGENTSTACK_RUNTIME_DIR=str(runtime), AGENTSTACK_PROJECT_KEY=args.project_key))
     document.update({key: runner[key] for key in ('url_index', 'server_url', 'url_key') if key in runner})
