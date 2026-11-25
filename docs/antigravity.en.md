@@ -29,8 +29,9 @@ scripts/install-gemini-provider.sh --dry-run
 
 Choose a setup based on how you will use the provider. The dry run works without `agy`.
 
-- For **NEW AGENT** or other delegated children only, run
-  `scripts/install-gemini-provider.sh`. The child launcher configures Mail MCP in its worktree.
+- For [**NEW AGENT**](#dashboard-new-agent) or other delegated children, run
+  `scripts/install-gemini-provider.sh`. The launcher configures Mail MCP in the
+  private launch configuration for a standalone agent or in the worktree for a delegated agent.
 - **To send Mail from a top-level `agent-start-gemini` session**, first run
   `scripts/install-gemini-provider.sh --dry-run --configure-mcp`. Show the user
   the planned `orrery-mail` entry in `~/.gemini/config/mcp_config.json`. After approval,
@@ -128,25 +129,30 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 ## Dashboard NEW AGENT
 
-When the optional provider is installed and Dashboard restarts, **NEW AGENT**
-offers Antigravity. On macOS, you can leave the parent blank and open an
-interactive agent in the selected folder, including a folder outside Git.
-The CLI receives the first task once and supports Mail, Reader, and Resume.
+[Install the optional provider](#install-the-optional-provider-payload) and restart Dashboard
+to see Antigravity in **NEW AGENT**. On macOS, when the catalog advertises standalone
+support (API 50 or later), leave the parent blank to open an interactive agent in
+the selected folder, including a folder outside Git. The CLI receives the first
+task once. You can use Mail, Reader, and Resume from history.
 ORRERY loads its Mail and hook settings from a private directory for that
-launch and removes the directory when the agent exits. The selected folder and
-personal configuration need no changes.
+launch and removes the directory when the agent exits. It leaves the selected folder and
+personal configuration untouched. On Linux/WSL, or when the catalog does not advertise
+standalone support, choose a parent to delegate the launch.
+
+In API 53, macOS offers Off, View, and Control under **Computer use**.
+For **Browser**, choose from the modes the catalog offers.
+See [computer use requirements and setup](computer-use.en.md) and the
+[launch API](api.en.md#get-apispawn-names).
 
 ![NEW AGENT with the Antigravity tab selected: the resources row sits under the task, and the footer explains what is still required](images/new_agent_capabilities_dark.png)
 
 ![The same state in the light theme](images/new_agent_capabilities_light.png)
 
-Requirements checked before ORRERY Mail registration, so a launch that cannot
-start does not leave a retained child identity behind:
+The dashboard checks launch requirements before registering with ORRERY Mail.
 
-- Linux/WSL launches and delegated macOS launches require a parent and its
-  local owner credential.
-- Launches with a worktree require a Git repository and a base that resolves
-  to a commit (default `HEAD`).
+- A delegated launch needs the parent's local owner credential.
+- Delegated launches and standalone launches with Isolation selected need a
+  folder in a Git repository and a base that resolves to a commit (default `HEAD`).
 - The launcher requires `agy`, `tmux`, the selected Python, the adapter hook,
   and the Gemini provider helpers.
 - `AGENTSTACK_GEMINI_MODELS`, when explicitly set, is the restrictive model
@@ -185,7 +191,8 @@ Engine and isolation rules:
   CLI launchers' `high` fallback is not applied to Dashboard launches.
 - **Delegated launches use an isolated worktree.** On macOS, a standalone
   launch creates a worktree when you select Isolation.
-- **Delegated launches require resources.** Enter comma-separated paths relative to the
+- **Delegated launches require resources.** Leave resources blank for a standalone launch.
+  For delegation, enter comma-separated paths relative to the
   repository root, for example `src/**,tests/**`. Absolute paths, `..`, `~`,
   control characters, a leading `-`, backslashes, and `.git` are rejected, as
   is any existing symlink component that resolves outside the repository. The
@@ -196,8 +203,9 @@ Engine and isolation rules:
   filesystem such as default APFS resolves names, so `.GI?/config` or `SR?/**`
   is judged against `.git` or `src` in any letter case.
 
-The launcher delivers the first task to Antigravity. Delegated launches on
-Linux/WSL report to the parent when they exit. Interactive agents on macOS
+The dedicated launcher passes the first task directly to the Antigravity CLI,
+so Dashboard creates no separate task Mail. Delegated launches on Linux/WSL
+automatically report to the parent when they exit. Interactive agents on macOS
 can receive follow-up requests through Mail. `/api/spawn-status` and
 `dashboard/logs/spawn.log` record `provider=gemini`.
 
@@ -218,12 +226,7 @@ leaves the launcher-owned shell runner alive so report/release/retire/cleanup ca
 finish. For a top-level interactive Antigravity session, `EXIT` keeps the normal
 interactive `/exit` path.
 
-ORRERY does not currently implement Antigravity conversation resume or native
-transcript history. Gone or retired Antigravity entries therefore fail closed
-instead of falling through to Claude/Codex transcript lookup. A top-level
-Antigravity session whose `agy` process has exited but whose human shell remains
-is kept attachable as `finished`; Dashboard jump does not kill that shell to
-attempt an unsupported resume.
+The macOS interactive route supports Reader and Resume when the dashboard can verify the saved registration and conversation. Resume reuses the working folder, or the worktree used at launch. A session without a verified history binding shows the reason. When an interactive Antigravity process has exited but a human shell remains, the terminal remains attachable as `finished`.
 
 ## Headless permission caveat
 
@@ -275,11 +278,11 @@ For a managed interactive launch on macOS, `--settings` grants individual
 View grants the read-only tools. Control grants the read-only and interaction
 tools. Existing Ask and Deny rules still take precedence. Global settings are
 unchanged.
-Standalone Dashboard launches and delegated children also get session-only
-grants for the managed `orrery-mail` proxy, using the same tool list as Codex
-children, including `whois`. ORRERY skips these grants if the global or workspace
-configuration contains an enabled server with the same name and a different
-definition.
+For these interactive sessions, ORRERY grants standalone Dashboard agents and
+delegated children access to the managed `orrery-mail` proxy's tools at launch
+for that session. The list is the same as for Codex children and includes
+`whois`. ORRERY skips these grants if the global or workspace configuration
+contains an enabled server with the same name and a different definition.
 Standalone Resume uses the lower of the original selection and the previous
 relay mode for both the new relay and the CLI grants. Delegated Resume reuses
 the workspace MCP configuration, including disabled servers, tool filters,

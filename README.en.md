@@ -4,6 +4,16 @@
 
 Claude Code, Codex, DeepSeek and Local LLM agents can talk directly, divide the work and check each other's results. ORRERY Telemetry shows their work and Mail round trips on one screen. Claude Code and Codex use their own CLIs; DeepSeek and Local LLMs use dsh or Hermes. Choose which to prepare: you do not need to install Claude Code or Codex before using DeepSeek or Local models. Pair Telemetry with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to use their terminals in the same workspace.
 
+## To install both (the orrery one-liner)
+
+For your first install, start with the **cockpit in your browser**. Follow [the prerequisites for your OS](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#before-you-start), then run this line to install both the cockpit and Telemetry.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh | bash
+```
+
+Review and approve the plan yourself. Check for `ORRERY's base is ready` and **Your first flight** in your browser. [Completion checks and feature setup](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#check-that-the-base-install-is-complete) · [Install with help from your agent](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install-with-agent.md)
+
 ![A child joins the open NETWORK view, sends ready, and exchanges three shiritori Mail round trips](docs/img/network-mail.gif)
 
 ## Start from your goal
@@ -25,7 +35,7 @@ The actual bundled Telemetry NEW AGENT, showing the real scientist names, portra
 
 ## Install Telemetry only
 
-This repository alone gives you the part that runs behind the scenes. You need Python 3.11 or later, `git`, `tmux`, and `uv` (on a Mac: `brew install tmux uv`). On Windows, run it inside WSL2 Ubuntu.
+This repository alone gives you the part that runs behind the scenes. You need Python 3.11 or later, `git`, `tmux`, and `uv`. Follow the [OS prerequisites](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#before-you-start) for `curl`, `lsof`, and `xz`. If you use uv's official installer, add it to the current PATH. On Windows, run the steps inside WSL2 Ubuntu.
 
 ```bash
 git clone https://github.com/gyroid-eth/orrery-telemetry.git
@@ -59,16 +69,6 @@ At a work boundary, EXIT a child and change its tools in the same conversation w
 - **Telemetry** is what runs agents, Mail, and the dashboard behind the scenes, plus the Telemetry screen that shows their state.
 - **[Cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md)** is the screen where you arrange and drive terminals. Starting agents, Mail, and the Telemetry screen are handled by Telemetry, so cockpit is used together with Telemetry (its terminals open even when Telemetry is not running).
 - Installing from the cockpit side **installs both.**
-
-## To install both (the orrery one-liner)
-
-Run this in a Mac terminal, or inside WSL2 Ubuntu. It installs cockpit and Telemetry together.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh | bash
-```
-
-Where things go (`~/orrery`, `~/orrery-telemetry`, `~/.agentstack`, `~/orrery-work`), the ports, how to change the work folder, and how to remove everything are in [orrery's README](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start). To remove a standalone Telemetry, see [Uninstall](docs/install.en.md#uninstall).
 
 ## Start with the guides on screen
 
@@ -108,6 +108,7 @@ Japanese documents are the source of truth. The English entry point is the [Engl
 | Start Telemetry on its own or look up a term | [Getting started](docs/getting-started.en.md) |
 | Check installation, updates, and requirements | [Installation](docs/install.en.md) |
 | Read from one designated phone | [Mobile view-only setup](docs/mobile.en.md) (off by default) |
+| Read from ChatGPT | [ChatGPT MCP](integrations/chatgpt_mcp/README.en.md) |
 | Diagnose a problem | [Troubleshooting](docs/troubleshooting.en.md) |
 | Develop a local deterministic daemon helper | [Dedicated bindings and notifications](docs/daemon-agents.en.md) (deployment requires separate approval) |
 | Validate candidate absolute reservations | [Candidate contract and tests](docs/absolute-reservations.en.md) (legacy mode remains the default) |

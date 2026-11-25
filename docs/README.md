@@ -17,6 +17,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 
 - [目的と provider・model・harness を選ぶ](getting-started.md#provider-model-harness) — 観測、API の model で作成、agent 同士の連携の3導線。[対応組合せと現在の制限](managed-catalog.md)で準備・OS・画面の範囲を確認する。
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート) — 1行で両方を入れ、画面の初回ガイドから始める。
+- [利用中の agent と導入を進める](https://github.com/gyroid-eth/orrery/blob/master/docs/install-with-agent.md) — 共通導入の計画と承認。
 - [Telemetry 単独で使い始める](getting-started.md) — 対象者・用語と、単独 install、agent 起動、Mail の通し確認。
 
 ## 使い方
@@ -25,7 +26,8 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [指定スマホで状況を見る](mobile.md) — 既定オフの閲覧画面、本人認証と端末制限、手動有効化と停止。
 - [委任と child agent](delegation.md) — ORRERY /delegate、組み込み子との違いと渡す道具の選択。
 - [Launcher と identity](launchers.md) — agent-start、名前、resume、/delegate と /log、通知の流れ。
-- [子の computer use](computer-use.md)
+- [Computer use](computer-use.md) — NEW AGENT の画面操作とブラウザ、権限の確認、Cua Driver の準備。
+- [ChatGPT MCP](../integrations/chatgpt_mcp/README.md) — 読み取り専用アダプターと専用 Tunnel。
 - [Obsidian と一緒に使う](obsidian.md) — ログ・論文ノート・タスクを vault と Daily Note に置く。
 
 ## 空のMailへの切替候補

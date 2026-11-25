@@ -329,7 +329,7 @@ scientist rail の `available` は bare surname ではなく、134 adjective の
 
 - provider tab（server の catalog から作られ、設定済みの環境では DeepSeek / Local も並びます）
 - provider ごとの model card と用途 guide
-- Claude は Sonnet / Opus / Haiku
+- Claude はカタログに応じて Sonnet・Opus・Haiku・Fable を選べます
 - Codex の既定は起動対象 CLI が 0.159.0 以上なら `gpt-6.1-sol`、古い版なら `gpt-6-sol`（版不明なら新鮮な catalog で判定）。旧世代は `gpt-6-sol` など正式 ID で指定できます
 - Codex の effort 候補は model catalog の `model_efforts` / `model_effort_defaults` に従います。明示 effort の最終可否は Codex CLI が判定します
 - DeepSeek / Local は設定済み catalog の Model と Harness（dsh / Hermes）から選びます。model を選んで利用可能な harness を指定し、利用不可の項目は「Coming soon」と表示され、選択できません。Helper と Effort は選んだ model / harness の能力に従います。[設定手順](install.md)と[API reference](api.md)も参照してください。
@@ -368,13 +368,13 @@ task は必須、最大4000文字です。ADVANCED の開閉状態は `localStor
 - group: 任意、最大24文字
 - isolation: isolated worktree と base revision
 
-parent を選ばないと `standalone: true` を送り、`PARENT_AGENT` のない独立 agent として起動します。parent を選ぶと通常 child になり、task を child inbox へ送り、parent を CC した audit trail を残します。
+parent を選ばないと `standalone: true` を送り、`PARENT_AGENT` のない独立 agent として起動します。parent を選んだ通常の子では、task は子の inbox に届き、親には BCC で控えが届きます。Antigravity の依頼は専用 launcher が CLI へ渡します。
 
 ### Spawn 順序
 
 1. `register_agent` で child identity と専用 token を作成
 2. role / group annotation（best effort）
-3. 通常 child だけ、parent を sender にして task message と CC audit trail を作成
+3. 通常の委任では親を差出人・BCC にした task Mail を作成。Antigravity では launcher が依頼を渡す
 4. token を mode `0600` の one-shot file に保存
 5. `spawn_child.sh --pre-registered` を background 起動
 6. launcher の readiness verdict を最大120秒待つ

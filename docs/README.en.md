@@ -17,6 +17,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 
 - [Choose a goal, provider, model and harness](getting-started.en.md#provider-model-harness) — Observe agents, create one with an API model, or coordinate agents. Check the [combinations and limitations](managed-catalog.en.md). Configured DeepSeek/Local models offer dsh/Hermes selection in NEW AGENT; runtime and API settings must be prepared separately.
 - [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) — Install both with one line and start with the on-screen first-flight guide.
+- [Install with help from your agent](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install-with-agent.md) — Review the shared plan and approvals.
 - [Standalone getting started](getting-started.en.md) — Audience, terms, standalone install, agent startup, and an end-to-end Mail check.
 
 ## Use the screen
@@ -25,7 +26,8 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Read from a designated phone](mobile.en.md) — The reader is off by default; owner admission, device restrictions, manual enable and disable steps.
 - [Delegation and child agents](delegation.en.md) — ORRERY /delegate, differences from native children, and tool selection.
 - [Launchers and identity](launchers.en.md) — agent-start, names, resume, /delegate and /log, and notification flow.
-- [Computer use for children (Japanese)](computer-use.md)
+- [Computer use](computer-use.en.md) — Screen and browser choices in NEW AGENT, permission status, and Cua Driver setup.
+- [ChatGPT MCP](../integrations/chatgpt_mcp/README.en.md) — Read-only adapter and dedicated tunnel.
 - [Using Obsidian](obsidian.en.md) — Store logs, paper notes, and tasks in a vault and Daily Note.
 
 ## Candidate switch to empty Mail

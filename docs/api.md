@@ -210,7 +210,7 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 
 API 49 は `GET /api/spawn-names` にハーネス別の `browser_modes` を追加します。起動時に `tools.browser_mode` へ `off`、`temporary`、`personal` のいずれかを指定します。従来の Browser 指定との併用はできません。
 
-API 53 の macOS カタログは `computer_modes` に `off`、`view`、`control` を返します。View は `tools.screen.access: "read"`、Control は `tools.screen.access: "operate"` を使います。Off は明示した `tools` から画面の指定を外します。スマホの `/view/spawn` は選択を `computer` に渡し、旧クライアントの真偽値も受け付けます。
+API 53 の macOS カタログは `computer_modes` に `off`、`view`、`control` を返します。View は `tools.screen.access: "read"`、Control は `tools.screen.access: "operate"` を使います。Off は明示した `tools` から画面の指定を外します。スマホの `/view/spawn` は選択を `computer` に渡し、旧クライアントの真偽値も受け付けます。Antigravity で利用できるブラウザのモードは `browser_modes.antigravity` を参照します。
 
 API 49 は dsh・Hermes の子へ Chrome DevTools を渡せる起動フォルダを、`dirs` と同じ表記の `native_browser_dirs` で返します。スマホは選択したフォルダが含まれる場合に Browser を表示します。起動時にも設定を検証します。
 
@@ -744,6 +744,10 @@ response:
 
 API 46 の旧運用では `history_session_id` を指定できます。指定すると、稼働中の tmux セッションと保存された会話・登録・起動経路の一致を確認してから終了します。
 
+## POST `/api/reactivate`
+
+legacy の稼働中の agent の Mail 受信を戻します。JSON body に `{"session":"<name>"}` を指定します。dashboard は tmux session の生存を確認してから ORRERY Mail で退役を解除します。
+
 ## POST `/api/kill`
 
 request:
@@ -830,13 +834,13 @@ request:
 | `task` | yes | task 本文。UI は最大4000文字 |
 | `name` | no | 指定時は hyphen を除去し、`available` 必須 |
 | `dir` | no | 存在する working directory。既定は source repo |
-| `provider` | no | `claude`（既定）、`codex`、`gemini`、または catalog が返した native 接続 ID（旧 `deepseek` / `strata`、追加例 `strata-epyc`）。catalog の ID を送る |
+| `provider` | no | `claude`（既定）、`codex`、`gemini`（追加 provider の Antigravity）、または catalog が返した native 接続 ID（旧 `deepseek` / `strata`、追加例 `strata-epyc`）。catalog の ID をそのまま送る |
 | `harness` | DeepSeek / Local 必須 | `dsh` または `hermes`。Claude は `claude-code`（従来 alias `claudecode`）、Codex は `codex-cli`（従来 alias `codex`）を省略可 |
 | `helper_model` | no | 省略または `same` は主モデルを継承。DeepSeek / Local は選択した model × harness の `helper_models` にある同 backend の正式 ID も指定可。未提供・別 backend の ID は拒否 |
 | `web_search` | no | native の dsh / Hermes だけ。`exa` または `searxng` で今回の検索先を上書きする。URL・資格の参照は managed spawn manifest の共通 `web_search` を使う。省略時は共通設定、共通設定も無ければ従来どおり。既存 API 世代の任意 field |
 | `model` | DeepSeek / Local 必須 | 正式 ID。DeepSeek / Local は選択した provider と harness の有効な catalog entry と一致必須。Claude / Codex は既存の省略時の既定を維持 |
 | `url_index`, `url_key` | 動的Local必須 | 選択model行の両値をそのまま送る。indexは0以上の整数、keyは設定URLと束縛。URL変更・並べ替えは拒否し、再取得・再選択が必要。固定model・他providerには指定不可 |
-| `effort` | Antigravity のみ必須 | 明示時だけ送る。Claude / Codex は `model_efforts` / `model_effort_defaults`、DeepSeek / Local は選択した model × harness の能力で検証。未指定は CLI 設定を使用し、能力不明の値は推測しない。Antigravity は `low`、`medium`、`high` から明示する |
+| `effort` | Antigravity のみ必須 | Antigravity は選択したモデルで catalog が示す値（`low`、`medium`、`high`、対応モデルでは `xhigh`）を明示する。Claude / Codex は `model_efforts` / `model_effort_defaults`、DeepSeek / Local は選択した model × harness の能力に従う。値が確かめられないときは推測しない。省略できる provider では省略時に CLI や harness の既定を使う |
 | `role` | no | 最大40文字 |
 | `group` | no | 最大24文字 |
 | `worktree` | no | isolated worktree |
@@ -854,7 +858,7 @@ API 41 から、標準の `/api/spawn` で `base` と `tools` を両方省略す
 
 API 44 から、Codex child の `/api/spawn` と道具を変更する `/api/jump` で `{"tools":{"chrome_extension":true}}` を指定すると、設定済みの `chrome@openai-bundled` を有効にします。macOS では `orrery-screen` と併用できます。
 
-`base` か `tools` で選択した child は、選択どおりにできなければ（Mail の proxy が無い、server を写せないなど）起動しません。形の誤りはここで 400、child の起動ディレクトリで決まる誤りは launcher の失敗として返ります。macOS の Antigravity では管理 relay の画面指定を受け付けます。ほかの指定の対象は表のとおりです。
+`base` か `tools` で選択した child は、選択どおりにできなければ（Mail の proxy が無い、server を写せないなど）起動しません。形の誤りはここで 400、child の起動ディレクトリで決まる誤りは launcher の失敗として返ります。API 53 では macOS の Antigravity が管理 relay の `tools.screen` と、catalog が示す `tools.browser_mode` を受け付けます。[Antigravity の起動条件](antigravity.md#dashboard-new-agent)を参照してください。
 
 未知の request field はモデル解決や起動の前に HTTP 400 で拒否します。任意の Gemini provider を導入した環境では `resources` も受け付けます（[Gemini の委任](delegation.md)を参照）。他の provider では拒否します。
 
@@ -897,7 +901,7 @@ Codex のモデル省略または `sol` で既定を変更した場合、preview
 }
 ```
 
-`standalone: true` では `parent` を空に固定し、`PARENT_AGENT` を subprocess environment から削除します。synthetic self-mail は作らず、task の先頭4000文字を launcher へ直接渡します。通常 child は parent を sender とする inbox message と、parent 自身への BCC の audit trail を作り（BCC には通知が出ないので、parent が自分の依頼で起こされない）、登録 summary / launcher prompt は先頭80文字です。
+`standalone: true` では `parent` を空に固定し、`PARENT_AGENT` を subprocess environment から削除します。synthetic self-mail は作らず、task の先頭4000文字を launcher へ直接渡します。通常 child は parent を sender とする inbox message と、parent 自身への BCC の audit trail を作り（BCC には通知が出ないので、parent が自分の依頼で起こされない）、登録 summary / launcher prompt は先頭80文字です。Antigravity の依頼は別に task Mail を作らず、専用 launcher が CLI へ渡します。
 
 API 50 の `gemini` は、macOS で `/api/spawn-names` に `capabilities.standalone: true` を返します。親なしでは `dir` が作業フォルダになり、`worktree: true` を選んだ場合だけ Git が必要です。親付きの起動には従来どおり worktree と `resources` が必要です。
 
@@ -946,6 +950,8 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 
 ### global runtime 読取（API 18）
 
+`GET /api/global/clients` は global の operator admission が必要です。固定 client を一覧し、`?name=<agent>` を指定するとその agent に対応する client に絞ります。
+
 `GET /api/runtime-observations?agent_ids=1,2` は既存の HTTP operator admission に通った要求だけを受け付けます。ID は正の63bit整数、重複なし、1〜200件。入力が不正なら `QUERY_INVALID` です。公開 Mail tool の追加はありません。応答 schema は `global-runtime-observation.json` の1定義です。
 
 `items` は各 ID の `liveness`、nullable な `act_state` / `ctx_used`、`session_count`、`parent_agent_id` / `parent_state`、`activity_freshness` / `reason` を返します。token・pane capture・私有 path は返しません。未知を waiting や context 0 に置き換えません。[観測と能力の確認](dashboard.md#global-runtime-observation)を参照してください。
@@ -954,6 +960,17 @@ curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'
 
 
 API 25: 旧 managed の `attempt_id` による起動・状態照会は廃止しました。`POST /api/spawn` と `GET /api/spawn-status?name=<name>` の標準の経路を使います。旧要求には `unsupported_attempt` を返します。
+
+## dashboard のローカル操作用 route
+
+| Route | 用途 |
+| --- | --- |
+| `GET /api/mobile-serve` | WSL のローカル dashboard でスマホ用 Serve の追加・解除を preview |
+| `POST /api/mobile-serve` | preview の `action` と `revision` を JSON で確認。WSL の同一 origin のローカルブラウザーが対象 |
+| `GET /api/wsl-anchor` | legacy dashboard の WSL 保持状態と更新経過時間を表示 |
+| `POST /api/wsl-anchor/lease` | 表示中の dashboard ページが `id` で保持を更新し、`release` で解放 |
+
+画面での操作は [スマホ用画面](mobile.md) と [WSL の診断](troubleshooting.md) を参照してください。
 
 <a id="スマホ閲覧用api-28"></a>
 

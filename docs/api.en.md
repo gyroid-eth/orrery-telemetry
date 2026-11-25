@@ -211,7 +211,7 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 
 API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
 
-On macOS, the API 53 catalog lists `off`, `view`, and `control` in `computer_modes`. View uses `tools.screen.access: "read"` and Control uses `tools.screen.access: "operate"`. For Off, omit the screen selection from the explicit `tools` object. Mobile `/view/spawn` sends one of the modes as `computer` and still accepts the boolean from older clients.
+On macOS, the API 53 catalog lists `off`, `view`, and `control` in `computer_modes`. View uses `tools.screen.access: "read"` and Control uses `tools.screen.access: "operate"`. For Off, omit the screen selection from the explicit `tools` object. Mobile `/view/spawn` sends one of the modes as `computer` and still accepts the boolean from older clients. See `browser_modes.antigravity` for the available Antigravity browser modes.
 
 API 49 also adds `native_browser_dirs`, a list of launch folders from `dirs` whose Chrome DevTools definition can be copied into a dsh or Hermes child. The phone shows Browser for these harnesses when the selected folder appears in the list. The launcher checks the settings again at launch.
 
@@ -741,6 +741,10 @@ Only a real tmux session in the `running / finished` category is eligible. `warm
 
 On legacy API 46, optional `history_session_id` requires the current tmux session to agree with the saved conversation, registration, and launch origin before exit.
 
+## POST `/api/reactivate`
+
+Restore Mail reception for a running legacy agent. Send the JSON body `{"session":"<name>"}`. The dashboard checks that its tmux session exists, then asks ORRERY Mail to unretire the agent.
+
 ## POST `/api/kill`
 
 Request:
@@ -827,12 +831,13 @@ Request:
 | `task` | yes | Task body. The UI accepts up to 4,000 characters |
 | `name` | no | Remove hyphens when specified; must be `available` |
 | `dir` | no | Existing working directory. Defaults to the source repository |
-| `provider` | no | `claude` (default), `codex`, `gemini`, or an exact native connection ID from the catalog (legacy `deepseek`/`strata`, or an added ID such as `strata-epyc`). Send the catalog ID |
+| `provider` | no | `claude` (default), `codex`, `gemini` for the optional Antigravity provider, or a native connection ID from the catalog (legacy `deepseek` / `strata`, or an added ID such as `strata-epyc`). Send the exact catalog ID |
 | `harness` | DeepSeek / Local required | `dsh` or `hermes`. Claude optionally accepts `claude-code` (legacy alias `claudecode`), Codex `codex-cli` (legacy alias `codex`) |
 | `helper_model` | no | Omitted or `same` inherits the main model. DeepSeek / Local also accepts same-backend formal IDs in the selected model/harness `helper_models`; undeclared or foreign IDs are rejected |
+| `web_search` | no | Native dsh / Hermes only. Set `exa` or `searxng` to override the search provider for this launch. The shared `web_search` setting in the managed spawn manifest supplies the URL and credential reference. Omission uses the shared settings if present, or keeps the existing behavior |
 | `model` | DeepSeek / Local required | Formal ID matching an available provider/model/harness catalog entry. Existing Claude/Codex omitted-model defaults are unchanged |
 | `url_index`, `url_key` | dynamic Local required | Copy both from the selected model row. Index is a nonnegative integer; key binds the configured URL. A changed/reordered URL is refused and requires refreshed selection. These fields are not accepted for fixed-model or other providers |
-| `effort` | Required for Antigravity | Send only explicit choices. Claude/Codex use model-specific metadata; DeepSeek/Local validate the selected model and harness capability. Omit to use CLI settings; unknown values are never guessed. For Antigravity, choose `low`, `medium`, or `high` |
+| `effort` | Required only for Antigravity | For Antigravity, send a value offered for the selected model (`low`, `medium`, `high`, or `xhigh` where supported). Claude / Codex use `model_efforts` / `model_effort_defaults`. DeepSeek / Local use the selected model and harness capabilities. Send known values. Where omission is allowed, the CLI or harness default applies |
 | `role` | no | At most 40 characters |
 | `group` | no | At most 24 characters |
 | `worktree` | no | Isolated worktree |
@@ -850,7 +855,7 @@ Since API 41, the standard `/api/spawn` applies the installer's `AGENTSTACK_CHIL
 
 Since API 44, `{"tools":{"chrome_extension":true}}` enables the configured `chrome@openai-bundled` plugin for a Codex child in `/api/spawn` and tool-changing `/api/jump`. macOS supports combining it with `orrery-screen`.
 
-A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. On macOS, Antigravity accepts a managed screen selection. The rest of these options apply to the providers listed in the table.
+A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. In API 53, Antigravity on macOS accepts a managed relay through `tools.screen` and the catalog's browser modes through `tools.browser_mode`. See the [Antigravity launch requirements](antigravity.en.md#dashboard-new-agent).
 
 Unknown request fields return HTTP 400 before model resolution or launch. When the optional Gemini provider is installed, it also accepts `resources` (see [Gemini delegation](delegation.en.md)); other providers reject that field.
 
@@ -893,7 +898,7 @@ Success:
 }
 ```
 
-With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a BCC audit copy for the parent (BCC raises no notification, so the parent is not woken by its own task); the registration summary / launcher prompt uses the first 80 characters.
+With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a BCC audit copy for the parent (BCC raises no notification, so the parent is not woken by its own task); the registration summary / launcher prompt uses the first 80 characters. The Antigravity launcher passes the task directly to its CLI without separate task Mail.
 
 In API 50, the `gemini` entry from `/api/spawn-names` on macOS advertises `capabilities.standalone: true`. A standalone launch uses `dir` as its working folder. Git is required only when `worktree: true` is selected. Delegated launches still require a worktree and `resources`.
 
@@ -942,6 +947,8 @@ Explicit same-intent replay from registration status sends `registration_sha256`
 
 ### Global runtime reads (API 18)
 
+`GET /api/global/clients` requires global operator admission. It lists fixed clients, or filters them by their agent name with `?name=<agent>`.
+
 `GET /api/runtime-observations?agent_ids=1,2` requires the existing HTTP operator admission. IDs are unique positive 63-bit integers, with 1–200 per request. Invalid input returns `QUERY_INVALID`. No public Mail tools are added. `global-runtime-observation.json` contains the single response schema.
 
 Each item returns `liveness`, nullable `act_state` / `ctx_used`, `session_count`, `parent_agent_id` / `parent_state`, and `activity_freshness` / `reason`. Tokens, pane captures and private paths are excluded. Unknown is never replaced with waiting or context zero. See [observation and capability checks](dashboard.en.md#global-runtime-observation).
@@ -950,6 +957,17 @@ Capabilities include `global_runtime_observation=1` and `operator_session=1`. Gl
 
 
 API 25: legacy managed `attempt_id` spawn/status requests are retired and return `unsupported_attempt`. Use standard `POST /api/spawn` and `GET /api/spawn-status?name=<name>`.
+
+## Local dashboard UI routes
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/mobile-serve` | Preview adding or removing phone Serve from the local WSL dashboard |
+| `POST /api/mobile-serve` | Confirm the preview's `action` and `revision` as JSON from the same-origin local browser on WSL |
+| `GET /api/wsl-anchor` | Report the legacy dashboard's WSL keepalive status and how long ago it was updated |
+| `POST /api/wsl-anchor/lease` | Renew a visible dashboard page's lease by `id`, or release it with `release` |
+
+See the [phone guide](mobile.en.md) and [WSL troubleshooting](troubleshooting.en.md) for the corresponding controls.
 
 <a id="mobile-reader-api-28"></a>
 
