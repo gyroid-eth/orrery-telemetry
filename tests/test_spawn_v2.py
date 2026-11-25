@@ -564,7 +564,8 @@ def test_auto_spawn_registers_an_explicit_hyphenated_name(monkeypatch, tmp_path)
     assert calls[2][0] == "send_message"
     assert calls[2][1]["sender_token"] == "parent-owner-token"
     assert calls[2][1]["subject"] == "タスク依頼: work ## Task summary with details"
-    assert calls[2][1]["cc"] == ["Parent"]
+    # The parent keeps an audit copy without a notification of its own task.
+    assert calls[2][1]["bcc"] == ["Parent"] and "cc" not in calls[2][1]
     assert task in calls[2][1]["body_md"]
     assert pathlib.Path(launched[0][4]).read_text() == "server-child-token"
     assert launched[0][2] == "Zesty-Curie"
