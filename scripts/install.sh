@@ -238,6 +238,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
       DRY_RUN=true
+      export PYTHONDONTWRITEBYTECODE=1
       shift
       ;;
     --retire-legacy-mail)
@@ -1168,11 +1169,53 @@ preflight_required_commands() {
     return
   fi
 
-  if ! command -v git >/dev/null 2>&1; then
-    preflight_error "git is required. Install it with your OS package manager (macOS: xcode-select --install; Debian/Ubuntu: sudo apt install git)."
+  local command_name missing="" packages="" python_package=python3
+  for command_name in curl git tmux; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+      missing="$missing $command_name"
+      packages="$packages $command_name"
+    fi
+  done
+  if [[ "$PREFLIGHT_OS" == Linux ]]; then
+    if command -v lsof >/dev/null 2>&1 || [[ -x /usr/sbin/lsof ]]; then
+      say "preflight: lsof is available for dashboard port ownership"
+    else
+      say "preflight: using Linux /proc for dashboard port ownership (lsof is optional)"
+    fi
+    if [[ "$HERMES_OPT_IN" == enable ]] || {
+      [[ "$HERMES_OPT_IN" != disable && -f "$INSTALL_DIR/dashboard/hermes-provider.json" ]] &&
+        [[ -z "$PYTHON_SELECTION_ERROR" ]] &&
+        "$PYTHON_BIN" -c 'import json, sys; sys.exit(json.load(open(sys.argv[1])).get("enabled") is not True)' \
+          "$INSTALL_DIR/dashboard/hermes-provider.json" 2>/dev/null
+    }; then
+      if ! command -v xz >/dev/null 2>&1; then
+        missing="$missing xz (Hermes)"
+        packages="$packages xz-utils"
+      fi
+      if [[ -z "$PYTHON_SELECTION_ERROR" ]] &&
+         ! "$PYTHON_BIN" -c 'import ctypes; ctypes.CDLL("libatomic.so.1")' 2>/dev/null; then
+        missing="$missing libatomic.so.1 (Hermes)"
+        packages="$packages libatomic1"
+      fi
+    elif ! command -v xz >/dev/null 2>&1; then
+      say "preflight: xz is absent; install xz-utils if you add Hermes"
+    fi
+  elif [[ "$PREFLIGHT_OS" == Darwin ]]; then
+    python_package=python@3.12
+    if ! command -v lsof >/dev/null 2>&1 && [[ ! -x /usr/sbin/lsof ]]; then
+      preflight_error "lsof is required to verify dashboard port ownership on macOS. Restore /usr/sbin/lsof and rerun."
+    fi
   fi
-  if ! command -v tmux >/dev/null 2>&1; then
-    preflight_error "tmux is required at install time and runtime. Install it with Homebrew (brew install tmux) or your Linux package manager."
+  if [[ "$PREFLIGHT_SKIP_PYTHON" != 1 && -n "$PYTHON_SELECTION_ERROR" ]]; then
+    packages="$packages $python_package"
+  fi
+  if [[ -n "$missing" || -n "$packages" ]]; then
+    [[ -z "$missing" ]] || preflight_error "Missing required tools:$missing"
+    if [[ "$PREFLIGHT_OS" == Linux ]]; then
+      say "Fix (Debian/Ubuntu): sudo apt update && sudo apt install -y${packages}" >&2
+    elif [[ "$PREFLIGHT_OS" == Darwin ]]; then
+      say "Fix (Homebrew): brew install${packages}" >&2
+    fi
   fi
 }
 
@@ -1689,9 +1732,9 @@ preflight_agent_mail_port() {
 run_preflight() {
   PREFLIGHT_ERRORS=()
   validate_preflight_switches
-  preflight_required_commands
   preflight_platform
   preflight_python
+  preflight_required_commands
   preflight_codex_defaults
   preflight_target_writable
   preflight_agent_mail_port
@@ -2322,9 +2365,56 @@ listener_pids() {
   if [[ -z "$lsof_bin" && -x /usr/sbin/lsof ]]; then
     lsof_bin=/usr/sbin/lsof
   fi
-  [[ -n "$lsof_bin" ]] || return 1
-  "$lsof_bin" -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null |
-    sed -n '/^[0-9][0-9]*$/p' | sort -u
+  if [[ -n "$lsof_bin" ]]; then
+    "$lsof_bin" -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null |
+      sed -n '/^[0-9][0-9]*$/p' | sort -u
+    return
+  fi
+  [[ "$PREFLIGHT_OS" == Linux ]] || return 1
+  "$PYTHON_BIN" - "$PORT" <<'PY'
+from pathlib import Path
+import sys
+
+proc = Path("/proc")
+port = int(sys.argv[1])
+
+def listener_inodes():
+    result = set()
+    for name in ("tcp", "tcp6"):
+        try:
+            entries = (proc / "net" / name).read_text().splitlines()[1:]
+        except FileNotFoundError:
+            if name == "tcp6":  # IPv6 can be disabled in this kernel.
+                continue
+            raise
+        for entry in entries:
+            fields = entry.split()
+            if fields[3] == "0A" and int(fields[1].rsplit(":", 1)[1], 16) == port:
+                result.add(f"socket:[{fields[9]}]")
+    return result
+
+inodes = listener_inodes()
+if not inodes:
+    raise SystemExit(1)
+owners = {}
+for process in proc.iterdir():
+    if not process.name.isdecimal():
+        continue
+    try:
+        for fd in (process / "fd").iterdir():
+            try:
+                destination = str(fd.readlink())
+            except OSError:
+                continue
+            if destination in inodes:
+                owners.setdefault(destination, set()).add(int(process.name))
+    except OSError:
+        continue  # Process exited, or its file descriptors are inaccessible.
+if inodes != owners.keys() or inodes != listener_inodes():
+    raise SystemExit(1)  # A listener we cannot attribute must block replacement.
+for pid in sorted(set().union(*owners.values())):
+    print(pid)
+PY
 }
 
 process_parent_pid() {
@@ -2455,7 +2545,7 @@ check_port() {
     if [[ "$DRY_RUN" == true ]]; then
       warn "port $PORT is already in use; live install would stop before service registration"
     else
-      die "port $PORT is already in use; set AGENTSTACK_PORT or --port"
+      die "port $PORT is already in use and could not be verified as this install's dashboard; investigate the listener or set AGENTSTACK_PORT or --port"
     fi
   fi
 }
