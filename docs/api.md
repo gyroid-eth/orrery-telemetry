@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":49}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":52}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -374,6 +374,8 @@ legacy の各エージェント行に以下の表示用フィールドを追加�
 | `parent_agent` | 親の名前または `null` | 親名を確認できた子にだけ返します。 |
 
 `orrery-screen` の権限を変更すると、次回の一覧取得時に現在の値を返します。ほかの権限は起動時の設定を示します。サーバーの接続状況や OS の許可は検査しません。
+
+API 52 の旧運用の `GET /api/agents` は、起動記録のない稼働中の Claude Code／Codex CLI の状態を `permission_source: "process"` とともに返します。対象の引数と子孫プロセスからローカルの Cua Driver と Codex の Chrome DevTools を確認し、Claude では明示の `--chrome`／`--no-chrome` を読みます。プロセスや引数、画面 relay のモード、Claude の Chrome フラグを確認できない場合、`computer_use` または `browser_use` が `null` になり、短い英語の `computer_use_reason`／`browser_use_reason` が付きます。スマホの Reader にも現在値と理由が届きます。観測の対象は指定のローカルの道具と起動フラグです。接続状態、OS の許可、他の MCP サーバーは観測の対象外です。
 
 ### 所属projectの読み取りメタデータ（legacy、API 37）
 
