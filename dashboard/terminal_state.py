@@ -41,7 +41,9 @@ _ASK_CODEX_RE = re.compile(
 _QUESTION_RE = re.compile(r"Enter to select.{0,80}Esc to cancel")
 _CLAUDE_APPROVAL_SCROLL_RE = re.compile(r"[↑↓] [1-9]\d* more lines?")
 _AGY_COMMAND_APPROVAL_CONTROLS = "↑/↓ Navigate · tab Amend · ctrl+g edit/expand command"
+AGY_MCP_APPROVAL_CONTROLS = "↑/↓ Navigate · tab Amend"
 _AGY_APPROVAL_FOOTER_RE = re.compile(r"esc to cancel(?:\s{2,}[a-z-]+ · [^·]+ · [a-z]+)?")
+_AGY_MCP_STATUS = re.compile(r"(?:auto|plan|accept-edits) · [^·]+ · (?:low|medium|high|xhigh|max)")
 _AGY_COMMAND_OPTION_BREAK_RE = re.compile(r"\n(?=>? ?[1-9]\d*\. )")
 _AGY_COMMAND_ALWAYS_RE = re.compile(
     r"[1-9]\d*\. Yes, and always allow(?: in this conversation)? "
@@ -187,6 +189,22 @@ def current_modal_activity(current):
     rows = [row.strip() for row in current[-16:] if row.strip()]
     if not rows:
         return None
+    # MCP has six choices and a model status row without "esc to cancel".
+    # Require the same tool name in the heading and each persistent choice.
+    if (len(rows) >= 10 and rows[-2] == AGY_MCP_APPROVAL_CONTROLS
+            and _AGY_MCP_STATUS.fullmatch(rows[-1])):
+        tool, heading = rows[-10:-8]
+        options = rows[-8:-2]
+        if (heading == "Allow calling this tool?" and re.fullmatch(r"[\w.-]+/[\w.-]+", tool)
+                and sum(option.startswith("> ") for option in options) == 1
+                and [option.removeprefix("> ") for option in options] == [
+                    "1. Yes, allow tool call",
+                    f"2. Yes, and always allow tool '{tool}' in this conversation",
+                    f"3. Yes, and always allow tool '{tool}' (Persist to settings.json)",
+                    "4. No, deny tool call",
+                    f"5. No, and always deny tool '{tool}' in this conversation",
+                    f"6. No, and always deny tool '{tool}' (Persist to settings.json)"]):
+            return "ask"
     # Antigravity puts the approval controls above its model status bar.
     if (len(rows) >= 5 and rows[-2] == _AGY_COMMAND_APPROVAL_CONTROLS
             and _AGY_APPROVAL_FOOTER_RE.fullmatch(rows[-1])):

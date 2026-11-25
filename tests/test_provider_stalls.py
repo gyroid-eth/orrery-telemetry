@@ -434,7 +434,7 @@ def test_legacy_worker_lifecycle_is_bound_to_dashboard(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_provider_monitor", None)
     monkeypatch.setattr(server, "_provider_thread", None)
     monkeypatch.setattr(server, "_provider_stop", threading.Event())
-    monkeypatch.setattr(server, "_provider_stall_samples", lambda: [])
+    monkeypatch.setattr(server, "_provider_stall_samples", lambda human_samples: [])
     server._start_provider_stall_monitor()
     first = server._provider_thread
     try:
