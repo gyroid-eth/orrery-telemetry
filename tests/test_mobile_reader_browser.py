@@ -14,7 +14,7 @@ def test_reader_unknown_permissions_disclose_reasons_without_resizing_header(pho
         computer_use_reason='Screen relay mode could not be verified',
         browser_use_reason='Chrome launch flag was not recorded')
     js("document.dispatchEvent(new Event('visibilitychange'))")
-    wait("document.querySelector('.reader-permission-summary') !== null")
+    wait("document.querySelector('.reader-permission-reasons')?.textContent.includes('Screen relay mode could not be verified')")
     assert js("document.querySelector('.reader-permission-summary').textContent") == 'Unknown'
     assert js("document.querySelectorAll('.reader-permission[data-state=unknown]').length") == 2
     assert not js("document.querySelector('.reader-permission-details').open")
@@ -25,6 +25,22 @@ def test_reader_unknown_permissions_disclose_reasons_without_resizing_header(pho
         'Browser use: Chrome launch flag was not recorded',
     ]
     assert js("document.querySelector('.reader-bar').offsetHeight") == height
+
+
+def test_reader_shows_known_and_unknown_permission_states_without_harness_specific_markup(phone):
+    _, js, wait, state = phone
+    agent = state['snapshot']['agents'][0]
+    assert js("document.querySelector('.reader-permission-summary').textContent") == 'Unknown'
+    agent.update(computer_use='view', browser_use=False)
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("document.querySelector('.reader-permission[data-state=view]') !== null")
+    assert js("Array.from(document.querySelectorAll('.reader-permission')).map(mark=>mark.title)") == [
+        'Computer use: View','Browser use: Off']
+    agent.update(computer_use_source='relay', browser_use_source='launch')
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("document.querySelector('.reader-permission[data-state=view]')?.title.includes('Current screen relay')")
+    assert js("Array.from(document.querySelectorAll('.reader-permission')).map(mark=>mark.title)") == [
+        'Computer use: View. Current screen relay', 'Browser use: Off. ORRERY launch selection']
 
 
 def two_pane_targets():

@@ -270,6 +270,19 @@ ORRERY does not add `read_file(*)`, does not enable
 `--dangerously-skip-permissions`, and does not otherwise broaden user-owned
 Antigravity permissions.
 
+For a managed interactive launch on macOS, `--settings` grants individual
+`orrery-screen` tools for that session according to the selected screen mode.
+View grants the read-only tools. Control grants the read-only and interaction
+tools. Existing Ask and Deny rules still take precedence. Global settings are
+unchanged.
+Standalone Resume uses the lower of the original selection and the previous
+relay mode for both the new relay and the CLI grants. Delegated Resume reuses
+the workspace MCP configuration, including disabled servers, tool filters,
+and the existing relay address. Screen tools follow the existing CLI approval
+rules. Standalone launches check the selected workspace for enabled screen and
+browser MCPs that conflict with ORRERY's settings and explain the conflict
+before launch.
+
 ## Credential boundary
 
 The session-bound wrapper resolves the current agent's mode-0600 runtime token

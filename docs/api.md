@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":52}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":53}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -209,6 +209,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 ## GET `/api/spawn-names`
 
 API 49 は `GET /api/spawn-names` にハーネス別の `browser_modes` を追加します。起動時に `tools.browser_mode` へ `off`、`temporary`、`personal` のいずれかを指定します。従来の Browser 指定との併用はできません。
+
+API 53 の macOS カタログは `computer_modes` に `off`、`view`、`control` を返します。View は `tools.screen.access: "read"`、Control は `tools.screen.access: "operate"` を使います。Off は明示した `tools` から画面の指定を外します。スマホの `/view/spawn` は選択を `computer` に渡し、旧クライアントの真偽値も受け付けます。
 
 API 49 は dsh・Hermes の子へ Chrome DevTools を渡せる起動フォルダを、`dirs` と同じ表記の `native_browser_dirs` で返します。スマホは選択したフォルダが含まれる場合に Browser を表示します。起動時にも設定を検証します。
 
@@ -376,6 +378,8 @@ legacy の各エージェント行に以下の表示用フィールドを追加�
 `orrery-screen` の権限を変更すると、次回の一覧取得時に現在の値を返します。ほかの権限は起動時の設定を示します。サーバーの接続状況や OS の許可は検査しません。
 
 API 52 の旧運用の `GET /api/agents` は、起動記録のない稼働中の Claude Code／Codex CLI の状態を `permission_source: "process"` とともに返します。対象の引数と子孫プロセスからローカルの Cua Driver と Codex の Chrome DevTools を確認し、Claude では明示の `--chrome`／`--no-chrome` を読みます。プロセスや引数、画面 relay のモード、Claude の Chrome フラグを確認できない場合、`computer_use` または `browser_use` が `null` になり、短い英語の `computer_use_reason`／`browser_use_reason` が付きます。スマホの Reader にも現在値と理由が届きます。観測の対象は指定のローカルの道具と起動フラグです。接続状態、OS の許可、他の MCP サーバーは観測の対象外です。
+
+API 53 の Antigravity は `permission_source: "launch"` とともに権限を返します。稼働中で現在の起動世代と照合できたときの画面権限は relay の実効値で、`computer_use_source: "relay"` が付きます。保存した選択を使う場合は `computer_use_source: "launch"`、ブラウザの選択には `browser_use_source: "launch"` が付きます。値を確定できない場合は `null` と理由を返します。
 
 ### 所属projectの読み取りメタデータ（legacy、API 37）
 

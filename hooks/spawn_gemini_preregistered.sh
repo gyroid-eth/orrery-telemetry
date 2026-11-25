@@ -450,13 +450,8 @@ if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev
   exit 1
 fi
 mkdir -p "$WORKTREE_DIR/.agents"
+if [[ "$INTERACTIVE" == 0 ]]; then
 MCP_CONFIG="$WORKTREE_DIR/.agents/mcp_config.json"
-if [[ "$(uname -s)" == Darwin ]]; then
-  "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" agy-config \
-    --out "$MCP_CONFIG" --runner "$MCP_WRAPPER" --child "$CHILD_NAME" \
-    --project-key "$PROJECT_KEY" --runtime-dir "$RUNTIME_DIR" --mail-env "$MAIL_ENV" \
-    ${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"}
-else
 AGS_GEMINI_MCP_PATH="$MCP_CONFIG" \
 AGS_GEMINI_MCP_COMMAND="$MCP_WRAPPER" \
 "$PYTHON_BIN" - <<'PY'
@@ -513,9 +508,9 @@ PY
 rm -f "$TASK_FILE"
 
 if [[ "$INTERACTIVE" == 1 ]]; then
-  interactive_args=()
+  interactive_args=(${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"})
   if [[ "$STANDALONE" == true ]]; then
-    interactive_args=(--standalone ${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"})
+    interactive_args+=(--standalone)
   fi
   AGENT_NAME="$CHILD_NAME" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" \
     "$PYTHON_BIN" "$INTERACTIVE_HELPER" prepare "$CHILD_TOKEN_FILE" "$WORKSPACE_DIR" "$GEMINI_BIN" "$MODEL" "$EFFORT" ${interactive_args[@]+"${interactive_args[@]}"}
@@ -536,6 +531,7 @@ export AGENTSTACK_HOME=$(printf '%q' "$AGENTSTACK_HOME_DIR")
 export AGENTSTACK_HOOKS_DIR=$(printf '%q' "$HOOKS_DIR")
 export AGENTSTACK_RUNTIME_DIR=$(printf '%q' "$RUNTIME_DIR")
 export AGENTSTACK_WORKTREE_ROOT=$(printf '%q' "$WORKTREE_ROOT")
+export AGENTSTACK_PORT=$(printf '%q' "${AGENTSTACK_PORT:-8770}")
 export AGENTSTACK_MCP_URL=$(printf '%q' "$MCP_URL")
 export AGENTSTACK_MAIL_ENV=$(printf '%q' "$MAIL_ENV")
 export AGENTSTACK_MAIL_HTTP_BEARER_MODE=$(printf '%q' "$HTTP_BEARER_MODE")

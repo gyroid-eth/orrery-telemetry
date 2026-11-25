@@ -811,7 +811,8 @@ def launch_browser_modes(codex_config, *, home=None):
     choices["antigravity"] = []
     if sys.platform == "darwin":
         try:
-            inherited = _agy_inherited_servers(home or Path.home())
+            inherited = _agy_inherited_servers(
+                (home or Path.home()) / ".gemini" / "config" / "mcp_config.json", "global")
         except ToolsError:
             return choices
         if not _agy_managed_browser_conflict(inherited):
@@ -923,7 +924,7 @@ def mail_alias_names(settings: dict) -> list[str]:
     return sorted(names)
 
 
-def agy_validate_selection(spec, *, home=None):
+def agy_validate_selection(spec, *, home=None, cwd=None):
     """Check Antigravity's inherited servers without creating launch state."""
     check_provider(spec, "gemini")
     if sys.platform != "darwin":
@@ -932,49 +933,69 @@ def agy_validate_selection(spec, *, home=None):
         home = Path.home()
     # Antigravity loads global servers alongside workspace entries even when
     # the workspace disables the same name. Detect this before launching.
-    inherited = _agy_inherited_servers(home)
     mode = spec["tools"].get("browser_mode")
-    if mode and _agy_managed_browser_conflict(inherited):
-        raise ToolsError("Disable the global Antigravity browser MCP before selecting a Browser mode")
-    for name, definition in inherited.items():
-        if (isinstance(definition, dict) and definition.get("disabled") is not True
-                and (_cua_server(name, definition) or _native_desktop_server(name, definition))):
-            raise ToolsError(f"Disable the global Antigravity MCP server {name!r} before launching this child; "
-                             "ORRERY uses orrery-screen for Computer use")
+    configs = [("global", home / ".gemini" / "config" / "mcp_config.json")]
+    if cwd is not None:
+        configs.append(("workspace", Path(cwd) / ".agents" / "mcp_config.json"))
+    for scope, path in configs:
+        inherited = _agy_inherited_servers(path, scope)
+        if mode and _agy_managed_browser_conflict(inherited):
+            raise ToolsError(f"Disable the {scope} Antigravity browser MCP before selecting a Browser mode")
+        for name, definition in inherited.items():
+            if (isinstance(definition, dict) and definition.get("disabled") is not True
+                    and (_cua_server(name, definition) or _native_desktop_server(name, definition))):
+                raise ToolsError(f"Disable the {scope} Antigravity MCP server {name!r} before launching this child; "
+                                 "ORRERY uses orrery-screen for Computer use")
 
 
 def agy_config(mail_command, spec, *, runtime, project, child, mail_env, home=None):
     """Project managed MCP servers into an Antigravity workspace."""
-    agy_validate_selection(spec, home=home)
+    return agy_launch_config(mail_command, spec, runtime=runtime, project=project, child=child,
+                             mail_env=mail_env, generation=uuid.uuid4().hex, home=home)[0]
+
+
+def agy_launch_config(mail_command, spec, *, runtime, project, child, mail_env, generation,
+                      home=None, cwd=None, resume_from=None):
+    agy_validate_selection(spec, home=home, cwd=cwd)
     servers = {"orrery-mail": {"command": mail_command, "args": []}}
     if sys.platform != "darwin":
-        return {"mcpServers": servers}
+        return {"mcpServers": servers}, None
     mode = spec["tools"].get("browser_mode")
     if mode in ("temporary", "personal"):
         name, definition = _browser_mcp(mode)
         servers[name] = definition
-    screen = screen_definition(spec, runtime, project, child, uuid.uuid4().hex, mail_env=mail_env)
-    if screen is not None:
-        servers[SCREEN_SERVER] = {**screen, "enabledTools": list(_screen_state()["TOOLS"])}
-    return {"mcpServers": servers}
-
-
-def _agy_inherited_servers(home):
-    inherited_path = home / ".gemini" / "config" / "mcp_config.json"
+    state = _screen_state()
+    mode_for_screen = screen_mode(spec)
     try:
-        inherited = json.loads(inherited_path.read_text()).get("mcpServers", {})
+        origin = f"http://127.0.0.1:{int(os.environ.get('AGENTSTACK_PORT', '8770'))}" if mode_for_screen else None
+        screen, screen_mode_for_launch = state["launch_definition"](
+            runtime, project, child, generation, mode_for_screen,
+            origin=origin, mail_env=mail_env, resume_from=resume_from)
+    except (OSError, ValueError) as exc:
+        raise ToolsError(str(exc)) from exc
+    if screen is not None:
+        servers[SCREEN_SERVER] = {**screen, "enabledTools": list(state["TOOLS"])}
+    return {"mcpServers": servers}, screen_mode_for_launch
+
+
+def _agy_inherited_servers(path, scope):
+    try:
+        inherited = json.loads(path.read_text()).get("mcpServers", {})
     except FileNotFoundError:
         inherited = {}
     except (ValueError, AttributeError) as exc:
-        raise ToolsError("Cannot check Antigravity's inherited MCP servers") from exc
+        raise ToolsError(f"Cannot check Antigravity's {scope} MCP servers") from exc
     if not isinstance(inherited, dict):
-        raise ToolsError("Cannot check Antigravity's inherited MCP servers")
+        raise ToolsError(f"Cannot check Antigravity's {scope} MCP servers")
     return inherited
 
 
 def _agy_managed_browser_conflict(servers):
     return any(isinstance(value, dict) and value.get("disabled") is not True
-               and _codex_chrome_server(name, value) for name, value in servers.items())
+               and (_codex_chrome_server(name, value)
+                    or (isinstance(value.get("command"), str)
+                        and os.path.basename(value["command"]) == "chrome-devtools-mcp"))
+               for name, value in servers.items())
 
 
 def claude_config(proxy: dict, *, claude_json: str, servers: dict | None = None) -> dict:

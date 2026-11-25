@@ -15,8 +15,9 @@ import tempfile
 from urllib.parse import urlsplit
 
 SERVER = "orrery-screen"
+VIEW_TOOLS = ("check_permissions", "list_apps", "list_windows", "get_window_state")
 TOOLS = (
-    "check_permissions", "list_apps", "list_windows", "get_window_state",
+    *VIEW_TOOLS,
     "launch_app", "click", "type_text", "press_key", "hotkey", "scroll", "set_value", "invoke_menu",
 )
 MODES = ("off", "view", "control")
@@ -99,8 +100,12 @@ class Store:
             conn.close()
 
     def launch(self, project, runtime, agent, generation, mode):
+        credential, _ = self._launch(project, runtime, agent, generation, mode)
+        return credential
+
+    def _launch(self, project, runtime, agent, generation, mode, *, resume_from=None):
         if mode is None and not self.path.exists():
-            return None
+            return None, None
         target = dict(zip(TARGET, (project, runtime, agent, generation)))
         identity = _validated_target(target)
         if mode is not None and mode not in MODES:
@@ -108,15 +113,22 @@ class Store:
         credential = secrets.token_urlsafe(32) if mode is not None else None
         with self.connect(create=mode is not None, write=True) as db:
             old = db.execute("""
-                SELECT project, runtime, agent, generation FROM current_launch WHERE runtime=? AND agent=?
+                SELECT project, runtime, agent, generation, computer_use
+                FROM current_launch WHERE runtime=? AND agent=?
             """, (runtime, agent)).fetchall()
+            if mode is not None and resume_from is not None:
+                # Rotate the binding and carry the lower mode in one transaction.
+                # Older Antigravity plans have no generation to compare.
+                previous = next((row["computer_use"] for row in old if row["project"] == project
+                                 and (resume_from == "" or row["generation"] == resume_from)), None)
+                mode = min(mode, previous if previous in MODES else "off", key=MODES.index)
             db.execute("DELETE FROM current_launch WHERE runtime=? AND agent=?", (runtime, agent))
             if credential is not None:
                 db.execute("INSERT INTO current_launch VALUES (?, ?, ?, ?, ?, ?, ?)",
                            (*identity, _digest(credential), mode, "default" if mode == "off" else "launch"))
         for previous in old:
-            binding_path(self, dict(previous)).unlink(missing_ok=True)
-        return credential
+            binding_path(self, {key: previous[key] for key in TARGET}).unlink(missing_ok=True)
+        return credential, mode
 
     def revoke(self, target):
         if not self.path.exists():
@@ -281,10 +293,21 @@ def binding_path(store, target):
 
 
 def definition(runtime_dir, project, agent, generation, mode, *, scope=None, origin=None, mail_env=None):
+    return launch_definition(runtime_dir, project, agent, generation, mode,
+                             scope=scope, origin=origin, mail_env=mail_env)[0]
+
+
+def launch_definition(runtime_dir, project, agent, generation, mode, *,
+                      scope=None, origin=None, mail_env=None, resume_from=None):
+    """Return the binding and its launch mode, optionally capped by the previous generation.
+
+    An empty resume_from is the legacy case where only the project/runtime/agent
+    identity was recorded.
+    """
     runtime = launch_runtime(scope or runtime_dir)
     if mode is None:
         Store(runtime_dir).launch(project, runtime, agent, generation, mode)
-        return None
+        return None, None
     binary = _python(mail_env)
     origin = origin or "http://127.0.0.1:" + os.environ.get("AGENTSTACK_PORT", "8770")
     endpoint = urlsplit(origin)
@@ -295,11 +318,11 @@ def definition(runtime_dir, project, agent, generation, mode, *, scope=None, ori
     target = dict(zip(TARGET, (project, runtime, agent, generation)))
     binding_file = binding_path(store, target)
     try:
-        store.get(target)
+        mode = store.get(target)["computer_use"]
     except ScreenStateError as exc:
         if exc.status != 404:
             raise
-        credential = store.launch(project, runtime, agent, generation, mode)
+        credential, mode = store._launch(project, runtime, agent, generation, mode, resume_from=resume_from)
         binding = dict(project=project, runtime=runtime, generation=generation,
                        origin=origin, credential=credential)
         try:
@@ -321,4 +344,4 @@ def definition(runtime_dir, project, agent, generation, mode, *, scope=None, ori
                 "WSL_INTEROP", "WSL_DISTRO_NAME"):
         if os.environ.get(key):
             env[key] = os.environ[key]
-    return {"command": binary, "args": ["-I", "-m", "agentstack_mail.screen_mcp"], "env": env}
+    return {"command": binary, "args": ["-I", "-m", "agentstack_mail.screen_mcp"], "env": env}, mode

@@ -1478,8 +1478,8 @@ def test_mac_agy_workspace_declares_only_the_managed_screen(tmp_path, monkeypatc
         "other": {"command": "/fixture/other"},
     }}))
     raw = config_path.read_bytes()
-    monkeypatch.setattr(child_tools, "screen_definition", lambda *a, **k: {
-        "command": "/fixture/python", "args": ["-m", "agentstack_mail.screen_mcp"]})
+    monkeypatch.setitem(child_tools._screen_state(), "launch_definition", lambda *a, **k: ({
+        "command": "/fixture/python", "args": ["-m", "agentstack_mail.screen_mcp"]}, "control"))
     config = child_tools.agy_config("/fixture/mail", child_tools.normalize(tools={"screen": "operate"}),
                                     runtime=tmp_path, project="fixture", child="FixtureAgent",
                                     mail_env="", home=tmp_path)
