@@ -32,8 +32,10 @@ WRITE_TOOLS = {"write_to_file": "Write", "replace_file_content": "Edit",
                "multi_replace_file_content": "Edit"}
 ACTIVITY = {"idle": "wait", "working": "work", "tool_use": "work",
             "reviewing": "ask"}
-MAIL_TOOLS = ("send_message", "fetch_inbox", "acknowledge_message", "reserve_files",
-              "release_reservations", "renew_reservations", "show_files")
+# Keep in step with the session-bound proxy exposed to Codex children.
+MAIL_TOOLS = ("bootstrap", "fetch_inbox", "send_message", "acknowledge_message",
+              "reserve_files", "renew_reservations", "release_reservations",
+              "runtime_status", "show_files", "whois")
 
 
 def _home():
@@ -186,6 +188,31 @@ def _delegated_mcp_path(cwd):
     return path
 
 
+def _managed_mail_approval_rules(home, cwd, config_dir):
+    """Grant by tool name only when that name resolves to the child Mail wrapper."""
+    configs = [("global", home / ".gemini" / "config" / "mcp_config.json"),
+               ("workspace", Path(cwd) / ".agents" / "mcp_config.json")]
+    if config_dir is not None:
+        configs.append(("launch", config_dir / ".agents" / "mcp_config.json"))
+    managed = {"command": str(_home() / "bin" / "agentstack-gemini-mcp"), "args": []}
+    found = False
+    for scope, path in configs:
+        try:
+            servers = child_tools._agy_inherited_servers(path, scope)
+        except (OSError, child_tools.ToolsError):
+            return []
+        if "orrery-mail" not in servers:
+            continue
+        entry = servers["orrery-mail"]
+        if isinstance(entry, dict) and entry.get("disabled") is True:
+            continue
+        # A same-named inherited server can take precedence in Antigravity.
+        if entry != managed:
+            return []
+        found = True
+    return [f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS] if found else []
+
+
 def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None):
     if (prompt is None) == (conversation is None):
         raise ValueError("Provide the first task or an existing conversation")
@@ -194,8 +221,9 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
                     "type": "command",
                     "command": shlex.join([plan["python"], str(Path(__file__).resolve()), "status"]),
                 }}
+    home = Path.home()
     try:
-        configured = json.loads((Path.home() / ".gemini/antigravity-cli/settings.json").read_text())
+        configured = json.loads((home / ".gemini/antigravity-cli/settings.json").read_text())
     except FileNotFoundError:
         configured = {}
     permissions = configured.get("permissions") or {}
@@ -207,7 +235,7 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
         screen_tools = screen_policy["VIEW_TOOLS"] if screen_mode == "view" else screen_policy["TOOLS"]
         screen_permissions = [f"mcp({child_tools.SCREEN_SERVER}/{tool})" for tool in screen_tools]
     settings["permissions"] = {**permissions, "allow": list(dict.fromkeys(
-        [*permissions.get("allow", ()), *(f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS),
+        [*permissions.get("allow", ()), *_managed_mail_approval_rules(home, cwd, config_dir),
          *screen_permissions]
     ))}
     extra = []

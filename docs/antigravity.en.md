@@ -275,6 +275,11 @@ For a managed interactive launch on macOS, `--settings` grants individual
 View grants the read-only tools. Control grants the read-only and interaction
 tools. Existing Ask and Deny rules still take precedence. Global settings are
 unchanged.
+Standalone Dashboard launches and delegated children also get session-only
+grants for the managed `orrery-mail` proxy, using the same tool list as Codex
+children, including `whois`. ORRERY skips these grants if the global or workspace
+configuration contains an enabled server with the same name and a different
+definition.
 Standalone Resume uses the lower of the original selection and the previous
 relay mode for both the new relay and the CLI grants. Delegated Resume reuses
 the workspace MCP configuration, including disabled servers, tool filters,

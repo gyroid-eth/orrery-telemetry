@@ -43,8 +43,13 @@ def test_one_workspace_is_trusted_without_changing_global_settings(managed, monk
     settings = tmp_path / ".gemini/antigravity-cli/settings.json"
     settings.parent.mkdir(parents=True)
     configured = {"trustedWorkspaces": ["/fixture/other"],
-                  "permissions": {"deny": ["mcp(orrery-mail/fetch_inbox)"], "ask": ["command(git)"]}}
+                  "permissions": {"allow": ["read_file(.)"], "deny": ["mcp(orrery-mail/fetch_inbox)"],
+                                  "ask": ["command(git)", "mcp(orrery-mail/whois)"]}}
     settings.write_text(json.dumps(configured))
+    child_resume._atomic_json(cwd / ".agents" / "mcp_config.json", {"mcpServers": {
+        "orrery-mail": {"command": str(agy._home() / "bin" / "agentstack-gemini-mcp"), "args": []},
+        "fixture-other": {"command": "/fixture/other"},
+    }})
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     plan = state["gemini_launch"]
     assert agy.validate_plan(plan) == cwd
@@ -55,15 +60,35 @@ def test_one_workspace_is_trusted_without_changing_global_settings(managed, monk
     assert overlay["trustedWorkspaces"] == [str(cwd)]
     assert overlay["permissions"]["deny"] == configured["permissions"]["deny"]
     assert overlay["permissions"]["ask"] == configured["permissions"]["ask"]
-    assert "mcp(orrery-mail/send_message)" in overlay["permissions"]["allow"]
+    assert overlay["permissions"]["allow"] == [
+        "read_file(.)", *(f"mcp(orrery-mail/{tool})" for tool in agy.MAIL_TOOLS)]
     assert json.loads(settings.read_text()) == configured
-    assert agy.command(plan, cwd, conversation=SID)[-2:] == ["--conversation", SID]
+    resume = agy.command(plan, cwd, conversation=SID)
+    assert resume[-2:] == ["--conversation", SID]
+    assert json.loads(resume[resume.index("--settings") + 1])["permissions"] == overlay["permissions"]
     hook = (cwd / ".agents/hooks.json")
     assert set(json.loads(hook.read_text())["orrery-reader"]) == {"SessionStart", "PreInvocation"}
     assert hook.stat().st_mode & 0o777 == 0o600
     hook.write_text("{}")
     with pytest.raises(ValueError, match="reservation hook"):
         agy.validate_plan(plan)
+
+
+@pytest.mark.parametrize("scope", ["global", "workspace"])
+def test_same_named_foreign_mail_server_gets_no_automatic_approval(
+        managed, monkeypatch, tmp_path, scope):
+    _, cwd, state = managed
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    config_dir = tmp_path / "launch"
+    child_resume._atomic_json(config_dir / ".agents" / "mcp_config.json", {"mcpServers": {
+        "orrery-mail": {"command": str(agy._home() / "bin" / "agentstack-gemini-mcp"), "args": []},
+    }})
+    config = (tmp_path / ".gemini" / "config" if scope == "global" else cwd / ".agents")
+    child_resume._atomic_json(config / "mcp_config.json", {"mcpServers": {
+        "orrery-mail": {"command": "/fixture/foreign"},
+    }})
+    args = agy.command(state["gemini_launch"], cwd, prompt="First task", config_dir=config_dir)
+    assert json.loads(args[args.index("--settings") + 1])["permissions"] == {"allow": []}
 
 
 @pytest.mark.parametrize(("selection", "screen_mode"), [([], "off"), (["screen:read"], "view"), (["screen:operate"], "control")])
@@ -246,6 +271,7 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
         assert Path.cwd() == cwd.resolve()
         settings = json.loads(argv[argv.index("--settings") + 1])
         assert settings["trustedWorkspaces"] == [str(cwd.resolve()), str(added)]
+        assert settings["permissions"]["allow"] == [f"mcp(orrery-mail/{tool})" for tool in agy.MAIL_TOOLS]
         config = json.loads((added / ".agents" / "mcp_config.json").read_text())
         assert set(config["mcpServers"]) == {"orrery-mail"}
         hooks = json.loads((added / ".agents" / "hooks.json").read_text())
