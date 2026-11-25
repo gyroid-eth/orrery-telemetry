@@ -1025,6 +1025,57 @@ def test_a_launcher_reason_line_becomes_the_error_the_cockpit_shows(monkeypatch,
     assert "ended before prompt injection was verified" in result["detail"]
 
 
+@pytest.mark.parametrize("refused,inventory,commands", [
+    ("has-session", "OtherAgent\n", ["has-session", "list-sessions"]),
+    ("capture-pane", "", ["has-session", "capture-pane", "list-sessions"]),
+    ("kill-session", "", ["has-session", "capture-pane", "kill-session", "list-sessions"]),
+    ("capture-pane", "QuietCurie\n", ["has-session", "capture-pane", "list-sessions"]),
+    ("capture-pane", None, ["has-session", "capture-pane", "list-sessions"]),
+], ids=["already-gone", "gone-before-capture", "gone-before-kill",
+        "still-present", "inventory-refused"])
+def test_async_codex_cleanup_publishes_verdict_when_tmux_refuses(
+        monkeypatch, tmp_path, refused, inventory, commands):
+    launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path, script=_REASON_LAUNCHER)
+    monkeypatch.setattr(server, "_SPAWN_READINESS_TIMEOUT_SECONDS", 20)
+    spec = server.SpawnLaunchSpec(
+        provider="codex", program="codex", model="codex-test", script=str(launcher),
+        launcher_env=(("TEST_MARK", str(tmp_path / "mark")),),
+    )
+    calls = []
+
+    def tmux(args, **kwargs):
+        command = args[0]
+        calls.append(command)
+        if command == refused or (command == "list-sessions" and inventory is None):
+            # Guarded tmux TargetError derives from RuntimeError.
+            raise RuntimeError("TMUX_TARGET_UNAVAILABLE")
+        stdout = inventory if command == "list-sessions" else ""
+        return subprocess.CompletedProcess(args, 0, stdout, "")
+
+    final = threading.Event()
+    verdicts = []
+
+    def record(name, result):
+        if not result.get("pending"):
+            verdicts.append(result)
+            final.set()
+
+    monkeypatch.setattr(server, "_tmux_run", tmux)
+    monkeypatch.setattr(server, "_spawn_launch_record", record)
+    pending = server.spawn_with_launch_spec(
+        {"standalone": True, "name": "QuietCurie", "task": "work",
+         "dir": str(tmp_path), "async": True}, spec)
+    assert pending["pending"] is True
+    assert final.wait(5), "spawn thread did not publish a final verdict"
+    result, = verdicts
+    assert result["ok"] is False
+    assert "spawn launcher exited with status 1" in result["error"]
+    cleanup_confirmed = inventory is not None and "QuietCurie" not in inventory.splitlines()
+    assert result.get("cleanup_incomplete", False) is not cleanup_confirmed
+    assert bool(list((runtime / "spawn-tokens").iterdir())) is not cleanup_confirmed
+    assert calls == commands
+
+
 def test_without_a_reason_line_the_error_is_the_exit_status_as_before(monkeypatch, tmp_path):
     script = _REASON_LAUNCHER.replace(
         'echo "[spawn_child] reason: Run \'claude\' once in a terminal and finish its setup." >&2\n', "")
@@ -1100,7 +1151,8 @@ def test_canonical_launcher_timeout_keeps_5s_grace_and_removes_credentials(monke
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
     monkeypatch.setattr(server, "_mcp_call", lambda m, a, timeout=15: {"ok": True, "data": {"id": 73, "name": "QuietCurie", "registration_token": "tok"} if m == "register_agent" else {}})
     monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: StuckProc())
-    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    monkeypatch.setattr(server.subprocess, "run",
+                        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout="", stderr=""))
     monkeypatch.setattr(server.os, "killpg", lambda *a: events.append(("killpg", a)))
 
     for payload in ({"provider": "claude"}, {"provider": "codex", "model": server._codex_models()[0]}):

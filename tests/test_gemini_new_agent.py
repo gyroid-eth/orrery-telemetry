@@ -249,7 +249,7 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
         "program": "antigravity",
         "models": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"],
         "default_model": "gemini-3.8-flash-high",
-        "efforts": ["low", "medium", "high"],
+        "efforts": ["low", "medium", "high", "xhigh"],
         "model_efforts": {model: ["low", "medium", "high"] for model in (
             "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low")},
         "effort_default": "",
@@ -371,8 +371,8 @@ def test_gemini_spawn_rejects_standalone_on_linux_and_invalid_engine_options(tmp
     }
     bad_model = server.do_spawn({**common, "model": "foreign-not-allowed", "effort": "high"})
     assert bad_model["error"] == "model not allowed for provider gemini: foreign-not-allowed"
-    bad_effort = server.do_spawn({**common, "effort": "xhigh"})
-    assert bad_effort["error"] == "effort not allowed for provider gemini: xhigh"
+    bad_effort = server.do_spawn({**common, "effort": "max"})
+    assert bad_effort["error"] == "effort not allowed for provider gemini: max"
     assert server.do_spawn({**common, "effort": "high", "parent": ""}) == {
         "ok": False, "error": "parent name invalid",
     }
@@ -1367,7 +1367,8 @@ if sys.argv[1] == "reserve" and os.environ.get("FAKE_BLOCK_RESERVE"):
 
 
 def _adapter_run(tmp_path: pathlib.Path, resources: str, block_reserve: bool = False,
-                 links: dict[str, str] | None = None, root_escape: bool = True):
+                 links: dict[str, str] | None = None, root_escape: bool = True,
+                 effort: str = "medium"):
     repo = _make_repo(tmp_path, links, root_escape)
     home = tmp_path / "home"
     _executable(home / "bin" / "agentstack-gemini-child-mail", _FAKE_MAIL_HELPER)
@@ -1400,7 +1401,7 @@ def _adapter_run(tmp_path: pathlib.Path, resources: str, block_reserve: bool = F
         "AGENTSTACK_PYTHON": sys.executable,
         "AGENTSTACK_GEMINI_RESOURCES": resources,
         "AGENTSTACK_GEMINI_TASK_FILE": str(task),
-        "AGENTSTACK_GEMINI_EFFORT": "medium",
+        "AGENTSTACK_GEMINI_EFFORT": effort,
         "PARENT_AGENT": "Parent",
         "FAKE_MAIL_LOG": str(tmp_path / "mail.log"),
     }
@@ -1509,6 +1510,11 @@ else:
 
 def test_adapter_rejects_absolute_resource_before_worktree(tmp_path):
     run = _adapter_run(tmp_path, "src/**,/etc/**")
+
+
+@pytest.mark.parametrize("effort", ["medium", "xhigh"])
+def test_adapter_rejects_absolute_resource_before_worktree(tmp_path, effort):
+    run = _adapter_run(tmp_path, "src/**,/etc/**", effort=effort)
     _stdout, stderr = run.proc.communicate(timeout=30)
     assert run.proc.returncode == 2, stderr
     assert "unsafe resource declaration: /etc/**" in stderr
@@ -1685,11 +1691,40 @@ def test_gemini_effort_resolution_cannot_bypass_model_allowlist(gemini_env, monk
     assert not gemini_env.launches.launched
 
 
+def test_gemini_xhigh_resolves_model_before_registration_and_adapter(gemini_env, monkeypatch):
+    high = "gemini-4-neon-high"
+    xhigh = "gemini-4-neon-xhigh"
+    monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", high)
+    payload = _gemini_payload(gemini_env, model=high, effort="xhigh")
+    assert server.do_spawn(payload) == {"ok": False, "error": (
+        f"model not allowed for provider gemini at effort xhigh: {xhigh}")}
+    assert not gemini_env.launches.mcp_calls
+    monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", f"{high},{xhigh}")
+    result = server.do_spawn(payload)
+    assert result["ok"] is True
+    assert (result["model"], result["effort"]) == (xhigh, "xhigh")
+    assert gemini_env.launches.registrations[result["child_name"]]["model"] == xhigh
+    [(args, kwargs)] = gemini_env.launches.launched
+    assert args[args.index("--model") + 1] == xhigh
+    assert kwargs["env"]["AGENTSTACK_GEMINI_MODEL"] == xhigh
+    assert kwargs["env"]["AGENTSTACK_GEMINI_EFFORT"] == "xhigh"
+
+
 def test_gemini_unqualified_custom_model_is_preserved(gemini_env, monkeypatch):
     monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", "custom-model")
     result = server.do_spawn(_gemini_payload(gemini_env, model="custom-model", effort="low"))
     assert result["ok"] is True
     assert result["model"] == "custom-model"
+
+
+@pytest.mark.parametrize("model", ["custom-model", "gemini-pro-orchestrator"])
+def test_gemini_unsuffixed_model_rejects_xhigh_before_registration(gemini_env, monkeypatch, model):
+    # The catalog offers xhigh only for families with a -xhigh variant.
+    monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", model)
+    assert server.do_spawn(_gemini_payload(gemini_env, model=model, effort="xhigh")) == {
+        "ok": False, "error": "effort not allowed for provider gemini: xhigh"}
+    assert not gemini_env.launches.mcp_calls
+    assert not gemini_env.launches.launched
 
 
 def test_claude_configuration_error_and_missing_default_are_visible_and_block_launch():

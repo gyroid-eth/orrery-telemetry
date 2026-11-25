@@ -93,7 +93,7 @@ else
 fi
 [[ -n "$TASK_FILE" && -s "$TASK_FILE" ]] || { echo "$PROG: full task handoff file is missing" >&2; exit 2; }
 [[ -d "$WORK_DIR" ]] || { echo "$PROG: workdir does not exist: $WORK_DIR" >&2; exit 2; }
-case "$EFFORT" in low|medium|high) ;; *) echo "$PROG: invalid effort: $EFFORT" >&2; exit 2 ;; esac
+case "$EFFORT" in low|medium|high|xhigh) ;; *) echo "$PROG: invalid effort: $EFFORT" >&2; exit 2 ;; esac
 if [[ ${#GEMINI_TOOLS[@]} -gt 0 ]]; then
   "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" parse --provider gemini "${GEMINI_TOOLS[@]}" >/dev/null || exit 2
 fi

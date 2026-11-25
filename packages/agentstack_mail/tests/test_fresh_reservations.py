@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import sys
+import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from fastmcp import Client
@@ -79,7 +82,8 @@ def test_two_simultaneous_exclusive_requests_commit_only_one(tmp_path, known_rul
     asyncio.run(run())
 
 
-def test_alias_missing_glob_and_distinct_folder_scopes(tmp_path, known_rules):
+@pytest.mark.parametrize('clock', ['native', 'scheduler-pause'])
+def test_alias_missing_glob_and_distinct_folder_scopes(tmp_path, known_rules, monkeypatch, clock):
     async def run():
         async with state(tmp_path) as (runtime, people):
             folder = tmp_path / 'work';folder.mkdir()
@@ -92,12 +96,34 @@ def test_alias_missing_glob_and_distinct_folder_scopes(tmp_path, known_rules):
             other = tmp_path / 'other';other.mkdir()
             await runtime.core.reservation('reserve', **arguments(runtime, people, actor=1,
                 request_id='different-folder', paths_input=[str(other / 'missing.py')]))
+            if clock == 'scheduler-pause':
+                # Simulate descheduling during glob work without delaying
+                # real filesystem operations or the SQLite transaction.
+                elapsed = itertools.count(0, 0.3)
+                monkeypatch.setattr(reservation_paths, 'time', SimpleNamespace(
+                    monotonic=lambda: next(elapsed), thread_time=time.thread_time))
             await runtime.core.reservation('reserve', **arguments(runtime, people,
                 request_id='glob', paths_input=[str(folder / '**' / '*.txt')]))
             with pytest.raises(B1Error, match='RESERVATION_CONFLICT'):
                 await runtime.core.reservation('reserve', **arguments(runtime, people, actor=1,
                     request_id='glob-child', paths_input=[str(folder / 'nested' / 'new.txt')]))
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('operation', ['scopes', 'comparison'])
+def test_glob_budget_still_refuses_excessive_active_work(tmp_path, known_rules, monkeypatch, operation):
+    folder = tmp_path / 'work'
+    folder.mkdir()
+    glob = reservation_paths.normalize_path(str(folder / '**' / '*.txt'))
+    other = reservation_paths.normalize_path(str(tmp_path / 'other' / 'missing.txt'))
+    clock = iter([0.0, 0.3])
+    monkeypatch.setattr(reservation_paths, 'time', SimpleNamespace(thread_time=lambda: next(clock)))
+    with pytest.raises(reservation_paths.ReservationError, match='GLOB_SCOPE_UNKNOWN'):
+        if operation == 'scopes':
+            reservation_paths.reservation_scopes(glob)
+        else:
+            monkeypatch.setattr(reservation_paths, 'reservation_scopes', lambda path: [path])
+            reservation_paths.paths_overlap(glob, other)
 
 
 def test_renew_release_replay_owner_and_expiry_contract(tmp_path, known_rules):

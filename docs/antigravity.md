@@ -174,7 +174,8 @@ do not run `agy models`; discovery is used only for the picker.
 Engine and isolation rules:
 
 - **Effort is explicit.** The Dashboard selects no effort for Antigravity, keeps
-  `SPAWN` disabled until `low`, `medium`, or `high` is chosen, and the server
+  `SPAWN` disabled until an available effort is chosen (`low`, `medium`, `high`,
+  or `xhigh` where the catalog lists that variant), and the server
   rejects a request without one (`effort required for provider gemini`). The
   CLI launchers' `high` fallback is not applied to Dashboard launches.
 - **親付きの起動は worktree を使います。** macOS の親なし起動で worktree を作るには、

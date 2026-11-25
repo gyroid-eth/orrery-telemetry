@@ -303,6 +303,12 @@ if mobile_plist.is_file() and not mobile_plist.is_symlink() and mobile_job_belon
     else:
         mobile_plist.unlink(missing_ok=True)
 
+if sys.platform == "linux":
+    mobile_systemd = manifest_path.parent / "dashboard/mobile_systemd.py"
+    if mobile_systemd.is_file():
+        import runpy
+        runpy.run_path(str(mobile_systemd))["uninstall"](manifest_path.parent, dry_run=dry_run)
+
 remove_claude_mcp()
 remove_settings_hooks()
 

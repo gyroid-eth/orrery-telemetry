@@ -8,6 +8,8 @@
 
 ORRERYのcockpitがあれば、**Settings → Phone**からオン・オフできます（[次節](#cockpitのsettingsからオンにする)）。その下の表と[手動で有効にする](#手動で有効にする)は、cockpitを使わずに手で設定する場合の手順です。
 
+WindowsのWSL2を使う場合は、[WSL2でPhone accessを使う](#wsl2でphone-accessを使う)に沿ってServeの設定とサービスの確認を進めます。
+
 ## スマホへ通知する（Android Chrome・任意）
 
 通知は既定でオフです。Phone accessの本人確認とpolicy確認を済ませた後、正規installerでoptional依存を用意します。まず `bash scripts/install.sh --with-mobile-push --dry-run` で計画を確認し、同じinstall先への `--with-mobile-push` 付きinstallを通常の承認手順で実行します。通常のinstallにはこの依存を追加しません。productionのPythonへ手でpipを実行しないでください。
@@ -66,7 +68,7 @@ cockpitの画面からは変えられない前提が2つあります。どちら
 
 ### 手順3: Serve 9443 → reader（本人・terminal）
 
-手順3に出ている`tailscale serve --https=9443 http://127.0.0.1:8781`を**Copy**し、terminalで1回実行してから**Check again**を押します。ORRERYはServeを読むだけで、変更しません。
+macOSでは手順3に出ている`tailscale serve --https=9443 http://127.0.0.1:8781`を**Copy**し、terminalで1回実行してから**Check again**を押します。WSL2では[TelemetryのSettings](#wsl2でphone-accessを使う)で変更内容を見てから確定します。
 
 **確かめる:** **Check again**で手順3に✓が付く。付かないときは、`tailscale serve`の出力を読みます。HTTPS Certificatesが無効なら、ここで有効にするよう求められます（[始める前に](#始める前に本人1回)）。
 
@@ -116,16 +118,27 @@ loginとaddressをまだ設定していない状態でdemo modeのまま**Phone 
 裏ではTelemetryの`~/.agentstack/bin/agentstack-mobile`が動きます。cockpitはこのcommandを呼ぶだけで、Telemetryのfileを直接は書きません。
 
 - 設定は`~/.agentstack/mobile.json`（mode 0600）に置きます。keyは`access`・`send`・`owner_login`・`public_origin`・`policy_reviewed_at`と3つのportで、鍵やtokenは入りません。
-- readerはlaunchdのjob `org.agentstack.mobile-relay`として、`mobile_relay.py --config ~/.agentstack/mobile.json`で動きます。logは`~/.agentstack/logs/mobile-relay.log`です。設定を変えるとjobを入れ直し、Phone accessを切るとjobとplistを消します。installはcommandを置くだけで、jobは作りません。uninstallはjobを止めてplistを消します。
+- readerは`mobile_relay.py --config ~/.agentstack/mobile.json`で動きます。macOSではlaunchdのjob `org.agentstack.mobile-relay`で、logは`~/.agentstack/logs/mobile-relay.log`です。WSL2ではsystemdのuser unit `org.agentstack.mobile-relay.service`で、logはjournalに入ります。設定を変更すると再起動します。Phone accessを切るかuninstallすると、管理しているサービスを停止して削除します。installはcommandを置くだけです。
 - 手で起動したreaderが8781を使っている間は、badgeが**MANUAL**になり、Statusに**A reader not started from Settings is running on 127.0.0.1:8781**と出ます。スマホからはそのreaderを今も読めます。Settingsのスイッチはそのreaderを動かせないので、押せなくなり、`agentstack-mobile apply`も`port_in_use`で何も変えません。Settingsへ移るには、そのreaderを起動したterminalで止め（Ctrl-C）、**Phone access**を入れます。手のflagは次のように置き換わります: `--enable-terminal`は**Send from phone**、`--phone-policy-reviewed`は4の**I reviewed the policy**、Historyは**Phone access**に含まれます。
 - **Send from phone**は、cockpit側の受け口もその場で切り替わり、`~/.orrery/config.json`の`enable_mobile_terminal`に保存されます。backendの再起動はいりません。terminalで`agentstack-mobile off`などを実行した場合は、次にSettingsを開いたときに揃います。手で起動したreaderが動いている間と、Settingsを一度も使っていない間は、`enable_mobile_terminal`を今の値のまま変えません。
 - loginかaddressを変えると、4の確認は取り消され、会話とSendは確認し直すまで止まります。確認を自分で取り消すには`echo '{"policy_reviewed": false}' | agentstack-mobile apply`を実行します。
 - launchdがreaderを起動できなかったときは、Phone accessをオフに戻し、jobもplistも残しません（次のloginで勝手に起動しないように）。
 - jobは、オンにしたときのPythonでreaderを動かします。そのPython（venvやHomebrewの古い版）を消すと、Statusに**The Python this reader was set up with is gone**と出ます。Phone accessを一度切って入れ直すと、今のPythonで作り直します。
 - cockpitのdemo modeでは、Phoneの節はlogin・address・ServeのURLを画面に出しません（demo modeが隠すのはユーザー名と機械名だけなので）。設定と変更はdemo modeを切って行います（[demo modeのとき](#demo-modeのとき)）。
-- Tailscale ServeとFunnelは読むだけです。Funnelが有効なら警告を出します。policyとServeは変更しません。
+- PhoneのスイッチはServeとFunnelの状態を読み取ります。WSL2のServeの追加・削除は別の操作です。policyとFunnelはTailscaleで管理します。
 
 cockpitなしで同じことをするには、`agentstack-mobile status`で状態を見て、`echo '{"access": true, "owner_login": "owner@example.com", "public_origin": "https://computer.example.ts.net:9443", "policy_reviewed": true}' | agentstack-mobile apply`で入れ、`agentstack-mobile off`で切ります。
+
+## WSL2でPhone accessを使う
+
+systemdを有効にした最新のWSL2ディストリビューションが必要です。WSL内の`systemctl --user show-environment`が成功することを確かめます。スマホから使う間はディストリビューションを動かしておきます。systemdのサービスだけではWSLを起動し続けたり、Windowsへのサインイン時にWSLを起動したりできません。[MicrosoftのWSL systemdガイド](https://learn.microsoft.com/windows/wsl/systemd)
+
+1. Tailscaleにサインインし、上の手順でMagicDNSとHTTPS Certificatesを有効にします。WSL内に`tailscale`があればそれを使います。無ければPATHまたはWindowsのProgram Filesにある`tailscale.exe`を使います。Windows側を使う場合はWSL interopとWindowsからWSLへのlocalhost転送が必要です。`agentstack-mobile status`でサインインと候補のアドレスを確かめます。[WSL interop](https://learn.microsoft.com/windows/wsl/filesystems#run-windows-tools-from-linux)、[WSLのネットワーク](https://learn.microsoft.com/windows/wsl/networking)
+2. Cockpitの**Settings → Phone**で本人のloginとアドレスを確かめ、**Confirm and turn on**を押します。WSL内の`systemctl --user status org.agentstack.mobile-relay.service`と`journalctl --user -u org.agentstack.mobile-relay.service`で起動を確かめます。Windows側のTailscaleを使う場合は、Windows PowerShellで`curl.exe -i http://127.0.0.1:8781/`を実行します。`403`と`request_denied`が返れば、転送がリレーに届き、Serveの本人情報が必要なことを確認できます。
+3. Windows PowerShellの`tailscale.exe serve status --json`（Linux版の場合はWSL内の`tailscale serve status --json`）で現在のServe設定を保存します。ローカルのTelemetry dashboardを直接開き、**Network → Settings → Phone access → Review Serve**を押します。**HTTPS 9443 → http://127.0.0.1:8781**を確認して**Add Serve**を押します。取り消す場合は**Cancel**です。HTTPS 9443が空いている場合だけ追加でき、443や8443などの既存の待受は対象外です。確定中は別の画面でTailscaleの9443を編集しないでください。
+4. Cockpitに戻り**Check again**を押し、上の手順4でtailnetのpolicyを確認してからスマホで候補のアドレスを開きます。変更に失敗した場合は、Serveの状態、HTTPS Certificates、CLIの権限を確認します。[Tailscale Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve)
+
+戻す場合は、再び**Review Serve**を押して、プレビューを確認し**Remove Serve**を押します。Telemetryで追加し、そのままの設定が残っている専用のServeだけを削除できます。残ったServe設定を手順3で保存した内容と比較してください。Cockpitで**Phone access**を切るか`agentstack-mobile off`を実行し、user unitが消えたことを確かめます。Phone accessを切る場合もuninstallする場合も、Serveの削除には別途確認ボタンを使います。
 
 ## エージェントに設定を頼む
 
@@ -361,14 +374,17 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 
 - スマホが送るのは、表示中の名簿にあるagentの名前と、**Show older**のときにreaderが発行したpageの印（10分有効。最新のpageを更新している間は延びる）と、fileを開くときにreaderが発行した参照のID（同じ条件）だけです。スマホからfileのpathは送りません。記録のcursorとcockpitの参照IDはPC側に留まります。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼びます。dashboardのboundの記録はcockpitが自分で引き、読んだ後にも確かめ直します。中身は伏せません（下記）。
 - 表示するのは**bound**の記録だけです。unbound・stale・未確認のagentは、短い説明と`binding_missing`などの理由のcodeだけを出し、記録の本文は出しません。
-- 1 pageは最大40件・512 KiBです。発言1件とMailの本文1通はそれぞれ16 KiBで切り、切ったことを示します。pageに収まらなかった発言は飛ばさず、次の**Show older**で出します。1件だけでpageに収まらない発言は、さらに短く切って切ったことを示します。それでも出せないものがあれば、その位置に**Some messages are omitted here**と出します。toolの呼び出しは名前の1行だけで、toolの出力とdiffは送りません。fileと画像は名前のchipで出ます（下記のpreview）。発言から端末の行へ移る機能はスマホにはありません。
+- 1 pageは最大40件・512 KiBです。発言1件とMailの本文1通はそれぞれ16 KiBで切り、切ったことを示します。pageに収まらなかった発言は飛ばさず、次の**Show older**で出します。1件だけでpageに収まらない発言は、さらに短く切って切ったことを示します。それでも出せないものがあれば、その位置に**Some messages are omitted here**と出します。toolの呼び出しは名前の1行だけで、toolの出力は送りません。fileと画像は名前のchipで出ます（下記のpreview）。発言から端末の行へ移る機能はスマホにはありません。
+- Claude Code と Codex の Edit・Write では追加・削除の行数が出ます。押すとその操作の記録だけを取得し、段の直下に差分を文字として表示します。最初のページには行数だけが入り、差分には 400 行と 64 KiB の上限があります。Demo mode では既存の規則で path と本文を伏せます。
+- Claude Code の Bash と Codex の Shell は、押すと記録されたコマンドと出力が段の直下に開きます。分かっている非ゼロの終了コードは段を開く前から表示します。本文は押したときにその操作分だけ取得します。コマンドは 8 KiB、出力は 400 行または 64 KiB までです。最初は出力の 8 行を表示し、残りは **Show N more lines** で開けます。制御文字を除いたテキストを描き、Demo mode では既存の規則で伏せます。
 - 開けるfileのchipは押せる形（末尾に**›**）で、押すとConversationの上にpreviewを出します。readerはcockpitの固定のroute `GET /telemetry/conversation/preview`をloopbackで呼び、cockpitがそのたびに、記録とbindingが変わっていないこと、agentの作業folder（またはPCで指定したroot）の中であること、symlinkでない本来のpathであること、種類と大きさ・画素数を確かめます。fileの名前では断りません。textは先頭32 KiBまでで、伏せずに文字として表示し、切ったときは**Showing the start of the file**と出します。HTML・SVGも文字として出し、実行しません。画像はcockpitがスマホのプレビュー上限に合わせて必要なときに縮小し、画素だけをPNGに描き直します。readerがさらに確かめます（IHDR・IDAT・IENDだけのPNG、1辺8192 px・合計8 Mpx・4 MiBまで）。元画像の読取上限を超える場合、開けない種類、範囲外のfileは理由だけを出します。表示するのは**今のfile**で、記録した時点の中身と違うことがあり、previewの下にそう出します。previewを表示できたときだけ上に**Save**が出て、押すと、表示しているものと同じ中身（textは表示した範囲、画像は描き直したPNG）を端末に保存します。HTML・SVG・XMLは文字のfileとして、名前の末尾に`.txt`を足します。新しく読みに行くことはありません。Android・iOSとも、browserのdownloadとしてDownloadsやFilesに入ります。iOSで画像を写真に入れたいときは、画像を長押しして保存します。保存したfileは端末に残り、Closeでは消えません。通常のfile chipにはtoolの呼び出しから取り出した参照を使います。範囲外・previewしない種類のfileには、cockpitが参照を付けないので、名前だけの押せないchipになります。
-- assistantの本文は太字・見出し・リスト・表・コードを描き、コードと表に**COPY**を付けます。生のHTMLは文字として表示します。HTTP(S)／mailtoのリンクだけを別tabで開き、それ以外のリンクとローカルpathは文字のままです。`!`の記録は**SHELL**のコマンドと出力にまとめ、それぞれコピーできます。長い出力は畳んで開けます。自動通知は短い活動の要約だけを出し、task IDや出力fileのpathなどのsystemの詳細は渡しません。記録中のORRERY Mailはcardから本文を開けますが、既読・ACK・返信はしません。描画器の出典と同期確認は[同梱ソースの説明](../dashboard/mobile/MARKDOWN_SOURCE.md)にあります。
+- assistantの本文は太字・見出し・リスト・表・コードを描き、コードと表に**COPY**を付けます。生のHTMLは文字として表示します。HTTP(S)／mailtoのリンクは別tabで開けます。`!`の記録は**SHELL**のコマンドと出力にまとめ、それぞれコピーできます。長い出力は畳んで開けます。自動通知は短い活動の要約だけを出し、task IDや出力fileのpathなどのsystemの詳細は渡しません。記録中のORRERY Mailはcardから本文を開けますが、既読・ACK・返信はしません。描画器の出典と同期確認は[同梱ソースの説明](../dashboard/mobile/MARKDOWN_SOURCE.md)にあります。
 - コンピューターの負荷が高いと、cockpitが記録とbindingを確かめるのに数秒かかり、最初の表示まで**Loading the record…**が数秒続くことがあります。readerは15秒まで待ち、それでも返らなければ**Taking longer than usual**と**Retry**を出します。待つか押せば読み直し、表示中の発言は消しません。
 - tabが前面の間は約5秒ごとに最新のpageを更新します。上へscrollして読んでいる間は新しい発言で表示が動きません。読み返している間は新しい発言の追従を止め、下端へ戻すと再開します。保持は最大200件で、そこに達すると**Show older**は止まります。pageの印が切れたら最新のpageを読み直します。
 - 送信は既存のTerminal経路のままです。Terminalが有効でpaneを選んだら、両タブ共通の常設欄で**↑（Review input）→ Send once**の確認・上限・受領を使います。Reviewは現在のタブの入力欄内で行い、送り先・送る文面・その後のEnterを確認します。確認欄に端末の末尾は出しません。legacy接続で同じagentに複数のtmux paneがある場合は、windowとpaneの番号を表示し、宛先を選べます。選び直すと元の確認と下書きは破棄します。端末の取得が1回失敗しても、下書きと直前に確認した表示を保ちます。失敗が続くと自動で再接続します。**Pane changed**と出た場合は、**Refresh panes**から選び直し、送信前に再確認してください。Terminalから入力を始めた場合も、送信後はConversationへ戻って送った文の吹き出しを末尾に出します。送信成功時の受領表示は約3秒で消えます。結果不明時はCheck receiptで照会できます。送信・準備中と結果不明時は、宛先の変更や新しい入力で受領情報を捨てません。**Received by terminal**の後の仮の行は、送信後の記録に同じ文が届けば消え、**Dismiss**で閉じるか、最長3分で消えます。`!`は対応するSHELLの記録と照合します。この行は画面内だけの表示で、agentの受領の証明ではありません。
 - ORRERY Mail の `show_files` で明示した画像は、tool の折りたたみの外にも小さく表示します。元の chip は折りたたみの中に残ります。小さい画像をタップすると既存の拡大 preview が開き、閉じると元の画像へ focus が戻ります。画像以外は名前だけを表示します。画像の取得には、PC が記録から発行した参照を使います。
 - 発言や記録された Mail 本文の Markdown 画像（絶対パスまたは `~/` の PNG・JPEG・GIF・WebP）は、cockpit が参照を付けると本文内に表示し、タップで拡大します。この画像は作業フォルダの外にあっても取得でき、cockpit は解決済みのパスを no-follow で開き、サイズと画素数の上限を確認して PNG に描き直します。参照がないか取得できない場合は説明とパスを表示します。外部の HTTP(S) 画像はリンクとして表示し、タップしたときだけ外部のページを開きます。
+- agent の返事に PNG・JPEG・GIF・WebP の絶対パスが単独の行で書かれていると、cockpit が同じ画像の規則で参照を付けます。その行をタップするとプレビューが開き、そのときに画像を取得します。
 - 一覧の画像は画面付近だけを同時に2枚まで取得します。reader に Pillow があれば最大320pxの PNG へ縮小し、無ければ既存の PNG を使います。拡大時は通常の preview を取得します。スクロール中に保持する縮小画像は原則24枚までで、画面外の古いものから解放します。背景では取得を止め、復帰時は中断したものを取り直し、Close・別agent・ページの離脱では画像と遅れた応答を破棄します。
 - **Reply with reference:** 本文を長押しで選択すると、選択範囲の下にボタンを表示します。1つの発言の本文だけを対象にし、発言をまたぐ選択は参照にしません。押すと入力欄の上に発言者・時刻・引用のカードを置き、**×**で外しても書いた返信は残します。選択中はタブをスワイプで切り替えず、通常の履歴更新でも本文の選択を保ちます。Reviewには `Reference: <agent> · <role> · <ts> | Recorded message: <id> | Quote: "<引用>" | Reply: <返信>` の1行を表示します。引用の改行は JSON のエスケープで保ちます。記録された返信は、スマホの1行形式とデスクトップの複数行形式の両方を Reader の参照カードで表示します。4096 bytesは参照・返信・画像のpathを含む合計です。上限を超えたら理由を出してReviewを無効にし、引用を黙って切りません。宛先agent・paneの選択やReaderのmount/resetが変わった参照では送らず、外して選び直す必要があります。Claudeの本文全体が同じidの単独`pasted_content`で包まれていた場合は中身を表示・照合し、id不一致や混在した本文はそのままにします。
 - Close・別agentへの切替・ページの離脱で更新を止め、スマホから記録・pageの印・参照のID・開いていたpreview（画像のdataを含む）・仮の行を消します。遅れた応答で復活させません。背景では取得を止め、画面と読む位置をメモリに残します。読み込み中に中断したpreviewは復帰時に同じ参照で取り直し、表示済みのpreviewはそのまま残します。再読込み用にagent名・タブと選択時に得たMailの識別IDだけをsessionStorageに残し、記録の本文・下書き・previewはURL・log・browser storageへ残しません。reader側で発行済みの印は期限まで残りますが、本文を含まず、同じagentにしか使えません。
@@ -379,7 +395,7 @@ Historyだけを止めるには、手で起動するreaderに`--disable-history`
 
 ## 止める・戻す
 
-cockpitのSettingsで入れた場合は、**Phone access**を切ります（または`agentstack-mobile off`）。launchdのjobとplistが消えます。手で起動した場合は、readerを実行したターミナルでCtrl-Cを押します。どちらの場合も、専用Serveは自分で外します。
+WSL2のSettingsで設定した場合は[上の戻し方](#wsl2でphone-accessを使う)に従います。macOSではCockpitの**Phone access**を切るか`agentstack-mobile off`を実行することで、launchdのjobとplistが消えます。手で起動した場合は、readerを実行したターミナルでCtrl-Cを押します。手で追加したServeは、元の設定に対応するコマンドで外します。
 
 ```sh
 tailscale serve --https=9443 off

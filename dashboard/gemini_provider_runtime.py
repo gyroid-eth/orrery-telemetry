@@ -32,7 +32,8 @@ _DEFAULT_MODELS = (
     "gemini-3.8-flash-medium",
     "gemini-3.8-flash-low",
 )
-_EFFORTS = ("low", "medium", "high")
+_UNSUFFIXED_EFFORTS = ("low", "medium", "high")
+_EFFORTS = (*_UNSUFFIXED_EFFORTS, "xhigh")
 # Dashboard launches require an explicit effort.  The direct CLI launchers keep
 # their historical ``high`` fallback; this declaration does not reach them.
 CAPABILITIES = {
@@ -201,10 +202,10 @@ def _catalog_item(models: list[str]) -> dict:
     available = set(models)
     model_efforts = {}
     for model in models:
-        family, _, level = model.rpartition("-")
+        family, separator, level = model.rpartition("-")
         model_efforts[model] = ([effort for effort in _EFFORTS
                                  if f"{family}-{effort}" in available]
-                                if level in _EFFORTS else list(_EFFORTS))
+                                if separator and level in _EFFORTS else list(_UNSUFFIXED_EFFORTS))
     return {
         "id": PROVIDER_ID,
         "label": "Antigravity",
@@ -775,12 +776,15 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
             if CAPABILITIES["effort_required"]:
                 return {"ok": False, "error": "effort required for provider gemini"}
             effort = "high"
-        if effort not in _EFFORTS:
+        family, separator, model_effort = model.rpartition("-")
+        suffixed = bool(separator) and model_effort in _EFFORTS
+        # Accept the same levels the catalog offers: an id without an effort
+        # suffix keeps the historical low/medium/high.
+        if effort not in (_EFFORTS if suffixed else _UNSUFFIXED_EFFORTS):
             return {"ok": False, "error": f"effort not allowed for provider gemini: {effort}"}
         # The UI groups effort-qualified ids into one model family. Resolve
         # the selected effort before registration so roster, log, and agy agree.
-        family, separator, model_effort = model.rpartition("-")
-        if separator and model_effort in _EFFORTS:
+        if suffixed:
             resolved_model = f"{family}-{effort}"
             if not permitted(resolved_model):
                 return {"ok": False, "error": (

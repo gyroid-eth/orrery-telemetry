@@ -27,7 +27,12 @@ SHELLS = frozenset({
 })
 PROMPT = re.compile(r'^(\s*(?:(?:[⌸│]|[\w.-]+)\s+)?)([❯›>])(?:[ \u00a0]+|$)(.*)')
 BORDER = re.compile(r'^[╭╰]?[─━]{8,}[╮╯]?$')
+CLAUDE_NAMED_BORDER = re.compile(r'^[─━]{8,}[ \t]+\S(?:.*\S)?[ \t]+[─━]+$')
+CLAUDE_SCROLLED_BORDER = re.compile(r'^[─━]{2,}[ \t]+[↑↓][ \t]+\d+[ \t]+more(?:[ \t]+[─━]+)?$')
 SGR = re.compile(r'\x1b\[[0-9;:]*m')
+DIM = re.compile(r'\x1b\[(?:[0-9]+;)*2(?:;[0-9]+)*m')
+CLAUDE_QUEUE_HINT = 'Press up to edit queued messages'
+CLAUDE_SUGGESTION = re.compile(r'^[  ]*\x1b\[(?:[0-9]+;)*2(?:;[0-9]+)*m[^\x1b]+(?:\x1b\[(?:0|22)?m[  ]*)?$')
 COLLAPSED = re.compile(r'\[Pasted text #\d+(?: \+\d+ lines?)?\]')
 HERMES_PASTE = re.compile(r'\[Pasted text #(\d+): (\d+) lines → /.+/pastes/paste_\1_\d{6}\.txt\]')
 PASTING = re.compile(r'^\s*(?:Pasting(?:…|\.\.\.)|Waiting for startup\b)', re.I)
@@ -38,7 +43,12 @@ AGY_PLACEHOLDER = {
 }
 DSH_PLACEHOLDER = 'Say something, or type / for commands…'
 DSH_PASTE = re.compile(r'▸ (\d+) lines?・(\d+) chars?・(.+?)・hover to peek')
-
+SLASH_NAME = re.compile(r'/[\w.:-]+')
+SLASH_OPTION = re.compile(r'^[ \t]{2,}' + SLASH_NAME.pattern + r'(?=[ \t]|$)')
+CLAUDE_SLASH_SELECTION = re.compile(r'^[ \t]+❯[ \t]+(' + SLASH_NAME.pattern + r')(?=[ \t]|$)')
+CODEX_SLASH_SELECTION = re.compile(r'^›[ \t]+(' + SLASH_NAME.pattern + r')(?=[ \t]|$)')
+SLASH_CONTINUATION = re.compile(r'^[ \t]{8,}[^ \t/❯]')
+REVERSE_VIDEO = re.compile(r'\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m')
 
 
 @dataclass(frozen=True)
@@ -54,6 +64,9 @@ class Frame:
     dsh: bool = False
     bracketed: bool | None = None
     foreground_command: str = ''
+    slash_picker: bool = False
+    selected_command: str | None = None
+    scrolled: bool = False
 
     @property
     def identity(self):
@@ -72,6 +85,25 @@ class Frame:
         return bool(self.foreground_command) and (
             self.foreground_command not in SHELLS
             or not re.search(r'[\x00-\x1f\x7f-\x9f]', text))
+
+
+def _slash_selection(lines, plain, start, *, codex):
+    """Read the active row from the picker directly above the editor."""
+    selection = CODEX_SLASH_SELECTION if codex else CLAUDE_SLASH_SELECTION
+    # Codex separates the inline picker from the editor with a blank row.
+    # Claude uses the top border and can show options below the selected row.
+    # In a narrow pane Claude wraps a long description onto indented rows
+    # that carry no command name; they belong to the option above them.
+    for index in range(start - 2, max(-1, start - 24), -1):
+        row = plain[index]
+        match = selection.match(row)
+        if match:
+            if not codex or REVERSE_VIDEO.search(lines[index].partition('›')[0]):
+                return match[1]
+            break
+        if not (SLASH_OPTION.match(row) or not codex and SLASH_CONTINUATION.match(row)):
+            break
+    return None
 
 
 def frame(metadata, lines, pane):
@@ -96,12 +128,24 @@ def frame(metadata, lines, pane):
         line=plain[start].rstrip()
         if BORDER.fullmatch(line.strip()):
             break
+        if CLAUDE_SCROLLED_BORDER.fullmatch(line.strip()):
+            # A tall Claude draft scrolls inside its frame: the prompt glyph
+            # and the first rows are hidden above this marker.
+            tail=[row.strip() for row in plain[cursor+1:] if row.strip()]
+            if start==cursor or '↑' not in line or not tail or not (
+                    BORDER.fullmatch(tail[0]) or CLAUDE_SCROLLED_BORDER.fullmatch(tail[0])):
+                break
+            draft='\n'.join(row.strip() for row in plain[start+1:cursor+1]).strip()
+            return Frame(*base, draft, False, bracketed=bracketed,
+                         foreground_command=command, scrolled=True)
         match=PROMPT.match(line)
         if not match:
             continue
         prefix,glyph,first=match.groups()
         left=prefix.strip()
-        upper=start>0 and bool(BORDER.fullmatch(plain[start-1].strip()))
+        top=plain[start-1].strip() if start>0 else ''
+        upper=bool(BORDER.fullmatch(top) or
+                   (glyph=='❯' and not left and CLAUDE_NAMED_BORDER.fullmatch(top)))
         tail=[row.strip() for row in plain[cursor+1:] if row.strip()]
         lower=bool(tail and BORDER.fullmatch(tail[0]))
         framed=upper and lower
@@ -126,8 +170,15 @@ def frame(metadata, lines, pane):
         # rotating Hermes suggestions and distinguishes Codex hints from drafts.
         if cursor==start and column<=len(prefix)+2:
             styled=lines[start]
+            # A queued turn leaves an empty Claude editor that draws this
+            # dim hint, with the caret possibly styling its first letter.
+            # After a turn Claude can also suggest a next prompt, drawn
+            # entirely dim; a typed draft is never dim.
+            claude_hint=(glyph=='❯' and framed and not boxed and
+                         ('\x1b[3m' in styled or (draft==CLAUDE_QUEUE_HINT and DIM.search(styled))
+                          or bool(CLAUDE_SUGGESTION.match(styled.partition('❯')[2]))))
             if (glyph=='›' and draft=='Ask Codex to do anything' and '\x1b[2m' in styled
-                    or glyph=='❯' and framed and not boxed and '\x1b[3m' in styled
+                    or claude_hint
                     or boxed and draft==DSH_PLACEHOLDER and '\x1b[38;5;145m' in styled
                     or agy and draft in AGY_PLACEHOLDER):
                 draft=''
@@ -142,14 +193,40 @@ def frame(metadata, lines, pane):
             previous_row=next((row.strip().lower() for row in reversed(above) if row.strip()), '')
             menu=previous_row.startswith(('enter/tab insert · esc close','enter insert · esc close'))
         hermes=glyph=='❯' and framed and not boxed and (left or any('☤' in row for row in around))
-        return Frame(*base,draft,waiting,menu,bool(hermes),boxed,bracketed,command)
+        codex = glyph == '›'
+        slash_picker = codex or (glyph == '❯' and not boxed and not hermes
+                                 and (upper or command == 'claude'))
+        selected_command = None
+        if draft.startswith('/') and slash_picker and start >= 2:
+            if (codex and not plain[start-1].strip()) or (not codex and upper):
+                selected_command = _slash_selection(lines, plain, start, codex=codex)
+        return Frame(*base, draft, waiting, menu or selected_command is not None,
+                     bool(hermes), boxed, bracketed, command,
+                     slash_picker=slash_picker, selected_command=selected_command)
     return Frame(*base,None,False)
 
 
+def mismatched_command(observed, text):
+    command = text.strip()
+    return bool(observed and not observed.waiting and observed.allows_paste(text)
+                and observed.draft == command and observed.selected_command
+                and SLASH_NAME.fullmatch(command) and observed.selected_command != command)
+
+
 def ready(observed, text):
-    if (observed is None or observed.draft is None or observed.waiting or observed.selected
+    if (observed is None or observed.draft is None or observed.waiting
             or not observed.allows_paste(text)):
         return False
+    if observed.scrolled:
+        # Only the end of a tall draft is visible, so it must end the text.
+        shown=''.join(observed.draft.split())
+        return len(shown)>=16 and ''.join(text.split()).endswith(shown)
+    if observed.selected or (observed.slash_picker and (text == '/' or SLASH_NAME.fullmatch(text))):
+        # A bare slash command can open its picker after the text itself
+        # appears. Require a named selection and compare the full draft.
+        command = text.strip()
+        return (observed.selected_command == command == observed.draft
+                and SLASH_NAME.fullmatch(command) is not None)
     if ''.join(observed.draft.split())==''.join(text.split()):
         return True
     # Claude represents a pasted multiline or long prompt as this native

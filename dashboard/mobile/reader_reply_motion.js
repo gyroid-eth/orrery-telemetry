@@ -251,13 +251,20 @@
     frame=0;
     if (document.hidden||reduce?.matches){finishReplies();return;}
     while (queueIndex<queued.length&&!queued[queueIndex].cue.isConnected) unqueue(queued[queueIndex++]);
-    if (performance.now()>=nextWord&&queueIndex<queued.length){
+    // Show every word that is due this frame, so a short interval is not
+    // capped at one word per frame on long replies.
+    const now=performance.now();
+    if(nextWord<now-50)nextWord=now;
+    let shown=false;
+    while (now>=nextWord&&queueIndex<queued.length){
       const item=queued[queueIndex++];unqueue(item);
+      if(!item.cue.isConnected)continue;
       animate(item.cue,word,wordFrame);
       for(const decoration of item.decorations)rise(decoration,0,190);
-      nextWord=performance.now()+item.interval;
-      frontier=item.cue;keepReplyInView();
+      nextWord+=item.interval;
+      frontier=item.cue;shown=true;
     }
+    if(shown)keepReplyInView();
     if(queueIndex<queued.length)frame=requestAnimationFrame(revealNext);
     else{
       if(following&&scroll?.isConnected)scroll.scrollTop=scroll.scrollHeight;
@@ -268,7 +275,7 @@
     if (!canAnimate(body)) return;
     const cues=readingOrder(tokenize(body,'reader-reply-word').cues);
     if(!cues.length)return;
-    const interval=Math.min(stagger,Math.max(34,820/Math.max(1,cues.length-1))),marked=new Set();
+    const interval=Math.min(stagger,Math.max(4,820/Math.max(1,cues.length-1))),marked=new Set();
     for(const cue of cues){
       cue.dataset.replyQueued='';
       const decorations=[];

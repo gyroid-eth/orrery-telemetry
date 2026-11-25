@@ -2,12 +2,46 @@
 import base64
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
 
 from mobile_reader_browser import phone
 from test_mobile_graph_updates import graph
+
+
+@pytest.mark.parametrize(('mail','spawn'),[(True,False),(True,True),(False,True)],
+                         ids=['mail-only','mail-over-parent','parent-only'])
+def test_mail_edges_open_from_real_touch_even_over_a_parent_line(phone,mail,spawn):
+    client,js,wait,state=phone
+    graph(js,wait,state,2)
+    event=dict(key='a'*32,source='Agent0',target='Agent1',kind='to',event_at=time.time())
+    state['mail']=event
+    state['snapshot']['graph'].update(
+        edges=[dict(source='Agent0',target='Agent1',kind='to',count=1)] if mail else [],
+        spawn=[dict(source='Agent0',target='Agent1',local=True)] if spawn else [],
+    )
+    js('testNetwork.update('+json.dumps(state['snapshot'])+');testNetwork.pause();testNetwork.hot=0;'
+       '[...testNetwork.map.values()].forEach((node,i)=>{node.x=175+i*210;node.y=220});'
+       'OrreryNetworkCore.paint(testNetwork.map,testNetwork.elements,testNetwork.params.NSIZE);testNetwork.fit()')
+    point=js("""(() => {
+        const edge=document.querySelector('#gsvg .edge-hit');
+        const midpoint=attr=>(Number(edge.getAttribute(attr+'1'))+Number(edge.getAttribute(attr+'2')))/2;
+        const p=new DOMPoint(midpoint('x'),midpoint('y')).matrixTransform(edge.getScreenCTM());
+        return {x:p.x,y:p.y};
+    })()""")
+    client.call('Emulation.setTouchEmulationEnabled',enabled=True)
+    client.call('Input.dispatchTouchEvent',type='touchStart',touchPoints=[dict(point,id=1)])
+    client.call('Input.dispatchTouchEvent',type='touchEnd',touchPoints=[])
+    if mail:
+        wait("document.querySelector('#pair-sheet').open&&document.querySelector('#pair-events .mail-route')!==null")
+        assert js("document.querySelector('#pair-title').textContent")=='Agent0 ↔ Agent1'
+        assert [url for url in state['get_calls'] if url.startswith('/view/mail?')]==[
+            '/view/mail?window=day&a=Agent0&b=Agent1&direction=both']
+    else:
+        assert js("!document.querySelector('#pair-sheet').open&&!document.querySelector('#terminal-sheet').open")
+        assert not any(url.startswith('/view/mail?') for url in state['get_calls'])
 
 
 def test_roles_use_the_existing_renderer_and_update_without_relayout(phone):
@@ -185,7 +219,12 @@ def test_expanded_graph_fits_both_orientations_and_back_closes_reader_first(phon
     for width,height in [(390,844),(844,390)]:
         client.call('Emulation.setDeviceMetricsOverride',width=width,height=height,deviceScaleFactor=2,mobile=True)
         js('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
-        assert js("(()=>{const r=document.querySelector('#net').getBoundingClientRect(),b=document.querySelector('#fit').getBoundingClientRect();return r.height>120&&r.x>=0&&r.y>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&b.bottom<=r.bottom&&b.right<=r.right})()")
+        assert js("""(() => {
+            const net=document.querySelector('#net');
+            const r=net.getBoundingClientRect(), b=net.querySelector('[data-mode=all]').getBoundingClientRect();
+            return r.height>120&&r.x>=0&&r.y>=0&&r.right<=innerWidth&&r.bottom<=innerHeight
+                &&b.bottom<=r.bottom&&b.right<=r.right;
+        })()""")
     js("testNetwork.elements.node.get('Agent0').grp.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))")
     wait("document.querySelector('#terminal-sheet').open")
     js('history.back()')
