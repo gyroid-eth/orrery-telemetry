@@ -152,6 +152,8 @@ macOSで`tailscale`がPATHに無いときは、CLIは通常`/Applications/Tailsc
 
 Tailscaleを接続し、Android ChromeでreaderのHTTPSのServeアドレスを開きます。Chromeのメニューから **アプリをインストール**（版によっては **ホーム画面に追加** の中）を選び、インストールします。古いブラウザのショートカットは消して入れ直してください。新しい **ORRERY** のアイコンから開くとURLバーなしで表示されます。通常のブラウザのタブでアドレスを開いた場合はURLバーが出ます。iOSではSafariの **ホーム画面に追加** を使います。
 
+コンピューターごとのServeアドレスから追加すると、アプリ名は **ORRERY · コンピューター名** になります。ホーム画面では短いコンピューター名が表示される場合があります。
+
 インストール後も、本人のアクセス条件と接続は必要です。記録のoffline保存やservice workerは追加しません。Android Chromeのメニューからのインストールにservice workerは不要です（[Chrome公式の条件](https://developer.chrome.com/blog/update-install-criteria)）。操作は端末のsafe-area内に収めます。更新後のインストールと背景からの復帰は実機でも確かめてください。
 
 同梱のアイコンは `dashboard/assets/orbit.svg` から `python3 scripts/mobile_pwa_icons.py` で再生成します（開発用に `rsvg-convert` が必要）。
@@ -324,7 +326,7 @@ Conversationの本文で左へ、Terminalの本文で右へ、はっきり横に
 
 安全に試せる専用paneで、別paneへの切替とClose後の開き直しが新しい末尾から始まること、**Review input**→**Edit**で入力が保たれ、確認するpaneと文面が正しいことを確認します。送信を試す場合は、受け手が分かり、副作用のない短いテスト入力を明示的に受け入れるpaneだけを使い、宛先・全文・Enterを確認して**Send once**を1回押し、応答と受理表示を確認してください。実行中のagentや用途不明のshellにはテスト文字を送らないでください。背景では取得が止まり、開いているagent・タブ・読む位置・メモリ内の下書きが残ることも確かめます。復帰時はpaneのrevisionを再確認し、変化・消失した場合は選び直しと再確認が必要です。期限切れの確認は編集へ戻ります。結果不明の送信は再送せず **Check receipt** を残します。
 
-ConversationとTerminalの下には宛先chipと丸い入力欄を常に表示します。UTF-8で4KiB以内の1行を書き、**↑（Review input）**で同じ欄を確認へ切り替えます。宛先agent・window・pane、まだ送信していないこと、全文と続くEnterを確認し、**Send once**を1回押します。**Edit**で文面を保持して入力に戻れます。確認は30秒で失効し、出力更新で本文や宛先・期限を差し替えません。paneの交換や取得失敗後は再確認が必要です。送信後も前面で開いていれば同じpaneの応答を見られます。**Received by terminal**はtmuxの受理までで、agentの実行やタスク完了を意味しません。**Outcome unknown**では一部だけ届いた可能性があり、自動再送しません。**Check receipt**は受理状態の照会だけです。
+ConversationとTerminalの下には丸い入力欄があります。送り先の肖像と名前はReaderの見出しにあります。複数のReaderを並べて入力欄を開いたときは、入力シートの見出しで送り先を確認できます。UTF-8で4KiB以内の1行を書き、**↑（Review input）**で同じ欄を確認へ切り替えます。宛先agent、まだ送信していないこと、全文と続くEnterを確認し、**Send once**を1回押します。**Edit**で文面を保持して入力に戻れます。確認は30秒で失効し、出力更新で本文や宛先・期限を差し替えません。端末の取得が1回失敗しても、直前に確認した表示と入力を保ちます。取得失敗が続くと自動で再接続してpaneを確認し直します。接続先やpaneが変わった場合は、送信前に再確認が必要になることがあります。送信後も前面で開いていれば同じpaneの応答を見られます。**Received by terminal**はtmuxの受理までで、agentの実行やタスク完了を意味しません。**Outcome unknown**では一部だけ届いた可能性があり、自動再送しません。**Check receipt**は受理状態の照会だけです。
 
 入力の末尾にある連続したCR/LFは送信文から除き、Reviewと送信には同じ1行を使います。途中の改行・4096 bytes超・使えない文字があるときは入力欄の近くに理由を表示します。
 
@@ -354,7 +356,7 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 | 3 | agent | readerの起動コマンドに`--phone-policy-reviewed`（8791以外なら`--cockpit-port`も）があることを確かめる。先に同じflagで`--check`し（`conversation history and previews are on`と出る）、今の管理方法でreaderを再起動する。以前の`--enable-history`もそのまま使える |
 | 4 | **本人** | スマホでagentを開き、**Conversation** tabを確認する。末尾に**›**の付いたfileのchipを押してpreviewが開き、**Close**で消えることを確かめる |
 
-有効にすると上部に**History enabled**（Terminalも有効なら**History · Terminal**）と出て、入口が**History**になります。agentを開くと**Conversationが全画面**になり、上の細い帯に顔・名前・状態・Conversation／Terminal・**×**が並び、各ボタンは44px四方以上のtap領域を持ちます。Terminalが有効なら入力欄と送り先chipが下に常設されます。開いた直後に入力へfocusを移したり、キーボードを開いたりしません。説明はこのガイドにまとめ、未確認・通信断・送信失敗は画面上に残します。paneが未選択なら入力と↑は無効で、Terminalで選び直す案内を表示します。**×**で閉じ、Back／Escapeはpreview、次に入力のfocusを外し、非入力時は画面を閉じます。常設欄だけで戻る操作を妨げません。末尾の**Working**は、記録に作業の経過があるときだけ**Working · 2m05s**のように出し、無いときは**Working**だけです。返事待ちは赤い短い行で出します。
+有効にすると上部に**History enabled**（Terminalも有効なら**History · Terminal**）と出て、入口が**History**になります。agentを開くと**Conversationが全画面**になり、上の細い帯に顔・名前・状態・Conversation／Terminal・**×**が並び、各ボタンは44px四方以上のtap領域を持ちます。Terminalが有効なら入力欄が下に常設されます。開いた直後に入力へfocusを移したり、キーボードを開いたりしません。説明はこのガイドにまとめ、未確認・通信断・送信失敗は画面上に残します。送り先を確認できない間は入力と↑が無効になり、**Refresh panes** から確認をやり直せます。**×**で閉じ、Back／Escapeはpreview、次に入力のfocusを外し、非入力時は画面を閉じます。常設欄だけで戻る操作を妨げません。末尾の**Working**は、記録に作業の経過があるときだけ**Working · 2m05s**のように出し、無いときは**Working**だけです。返事待ちは赤い短い行で出します。
 
 
 - スマホが送るのは、表示中の名簿にあるagentの名前と、**Show older**のときにreaderが発行したpageの印（10分有効。最新のpageを更新している間は延びる）と、fileを開くときにreaderが発行した参照のID（同じ条件）だけです。スマホからfileのpathは送りません。記録のcursorとcockpitの参照IDはPC側に留まります。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼びます。dashboardのboundの記録はcockpitが自分で引き、読んだ後にも確かめ直します。中身は伏せません（下記）。
@@ -364,7 +366,7 @@ Terminalだけを戻す場合は共有設定を`false`にするか項目を除�
 - assistantの本文は太字・見出し・リスト・表・コードを描き、コードと表に**COPY**を付けます。生のHTMLは文字として表示します。HTTP(S)／mailtoのリンクだけを別tabで開き、それ以外のリンクとローカルpathは文字のままです。`!`の記録は**SHELL**のコマンドと出力にまとめ、それぞれコピーできます。長い出力は畳んで開けます。自動通知は短い活動の要約だけを出し、task IDや出力fileのpathなどのsystemの詳細は渡しません。記録中のORRERY Mailはcardから本文を開けますが、既読・ACK・返信はしません。描画器の出典と同期確認は[同梱ソースの説明](../dashboard/mobile/MARKDOWN_SOURCE.md)にあります。
 - コンピューターの負荷が高いと、cockpitが記録とbindingを確かめるのに数秒かかり、最初の表示まで**Loading the record…**が数秒続くことがあります。readerは15秒まで待ち、それでも返らなければ**Taking longer than usual**と**Retry**を出します。待つか押せば読み直し、表示中の発言は消しません。
 - tabが前面の間は約5秒ごとに最新のpageを更新します。上へscrollして読んでいる間は新しい発言で表示が動きません。読み返している間は新しい発言の追従を止め、下端へ戻すと再開します。保持は最大200件で、そこに達すると**Show older**は止まります。pageの印が切れたら最新のpageを読み直します。
-- 送信は既存のTerminal経路のままです。Terminalが有効でpaneを選んだら、両タブ共通の常設欄で**↑（Review input）→ Send once**の確認・上限・受領を使います。Reviewは現在のタブの入力欄内で行い、送り先・送る文面・その後のEnterを確認します。確認欄に端末の末尾は出しません。送り先の行を押すとpaneを選び直せ、そのとき元の確認と下書きは破棄します。共通のpane確認の更新は続き、対象の変更や取得失敗があれば送信前に再確認が必要です。Terminalから入力を始めた場合も、送信後はConversationへ戻って送った文の吹き出しを末尾に出します。送信成功時の受領表示は約3秒で消えます。結果不明時はCheck receiptで照会できます。送信・準備中と結果不明時は、宛先の変更や新しい入力で受領情報を捨てません。**Received by terminal**の後の仮の行は、送信後の記録に同じ文が届けば消え、**Dismiss**で閉じるか、最長3分で消えます。`!`は対応するSHELLの記録と照合します。この行は画面内だけの表示で、agentの受領の証明ではありません。
+- 送信は既存のTerminal経路のままです。Terminalが有効でpaneを選んだら、両タブ共通の常設欄で**↑（Review input）→ Send once**の確認・上限・受領を使います。Reviewは現在のタブの入力欄内で行い、送り先・送る文面・その後のEnterを確認します。確認欄に端末の末尾は出しません。legacy接続で同じagentに複数のtmux paneがある場合は、windowとpaneの番号を表示し、宛先を選べます。選び直すと元の確認と下書きは破棄します。端末の取得が1回失敗しても、下書きと直前に確認した表示を保ちます。失敗が続くと自動で再接続します。**Pane changed**と出た場合は、**Refresh panes**から選び直し、送信前に再確認してください。Terminalから入力を始めた場合も、送信後はConversationへ戻って送った文の吹き出しを末尾に出します。送信成功時の受領表示は約3秒で消えます。結果不明時はCheck receiptで照会できます。送信・準備中と結果不明時は、宛先の変更や新しい入力で受領情報を捨てません。**Received by terminal**の後の仮の行は、送信後の記録に同じ文が届けば消え、**Dismiss**で閉じるか、最長3分で消えます。`!`は対応するSHELLの記録と照合します。この行は画面内だけの表示で、agentの受領の証明ではありません。
 - ORRERY Mail の `show_files` で明示した画像は、tool の折りたたみの外にも小さく表示します。元の chip は折りたたみの中に残ります。小さい画像をタップすると既存の拡大 preview が開き、閉じると元の画像へ focus が戻ります。画像以外は名前だけを表示します。画像の取得には、PC が記録から発行した参照を使います。
 - 発言や記録された Mail 本文の Markdown 画像（絶対パスまたは `~/` の PNG・JPEG・GIF・WebP）は、cockpit が参照を付けると本文内に表示し、タップで拡大します。この画像は作業フォルダの外にあっても取得でき、cockpit は解決済みのパスを no-follow で開き、サイズと画素数の上限を確認して PNG に描き直します。参照がないか取得できない場合は説明とパスを表示します。外部の HTTP(S) 画像はリンクとして表示し、タップしたときだけ外部のページを開きます。
 - 一覧の画像は画面付近だけを同時に2枚まで取得します。reader に Pillow があれば最大320pxの PNG へ縮小し、無ければ既存の PNG を使います。拡大時は通常の preview を取得します。スクロール中に保持する縮小画像は原則24枚までで、画面外の古いものから解放します。背景では取得を止め、復帰時は中断したものを取り直し、Close・別agent・ページの離脱では画像と遅れた応答を破棄します。

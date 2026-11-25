@@ -114,11 +114,12 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import agent_card, legacy_http_admission, claude_history
+    from dashboard import agent_card, legacy_http_admission, claude_history, agy_history
 except ModuleNotFoundError:  # direct script execution
     import agent_card
     import legacy_http_admission
     import claude_history
+    import agy_history
 
 
 def _same_origin_request(handler) -> bool:
@@ -1978,6 +1979,12 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None, session
     `reuse_stopped` lets the roster poll reuse the verdict of a row that is not
     running for a short while; the light route never does.
     """
+    program = row.get("program")
+    if program in agy_history.PROGRAMS:
+        if FRESH_MODE or GLOBAL_MODE:
+            return agy_history.unbound("protected_history_required")
+        return agy_history.binding(RUNTIME_DIR, row["name"],
+                                   _resume_registration(row["name"], agy_history.PROGRAMS), session_state)
     if reuse_stopped and row.get("running") is False:
         key = (row.get("name"), row.get("program"), row.get("category"), row.get("created"))
         cached = _STOPPED_BINDING_REUSE.get(key)
@@ -1986,7 +1993,6 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None, session
             cached = _history_binding_fields(row, now=now, claude_index=claude_index)
             _STOPPED_BINDING_REUSE.put(key, cached, mark)
         return dict(cached)
-    program = row.get("program")
     if program in {"codex", "codex-cli"}:
         return _codex_history_binding(row["name"], now=now)
     if program in {"claude", "claude-code"}:
@@ -5927,12 +5933,6 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
             f'exec env -u OPENAI_API_KEY codex resume {sid} '
             f'-C {shlex.quote(cwd)} {_codex_child_launch_flags()}'
         )
-    # Claude in Chrome defaults (possibly in the tmux server env) belong to
-    # Claude children; a Codex child must not hand them on to its own spawns.
-    inner = (
-        'unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE; '
-        + inner
-    )
     resume_environment = {
         "AGENTSTACK_HOME": install_home,
         "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR,
@@ -5955,6 +5955,16 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
     configured_python = os.environ.get("AGENTSTACK_PYTHON", "").strip()
     if configured_python:
         resume_environment["AGENTSTACK_PYTHON"] = configured_python
+    if launch_origin == "child":
+        # Apply the verified child settings after the login profile runs, as
+        # Claude does. The bootstrap uses the environment to locate its owner.
+        exports = "".join(
+            f"export {key}={shlex.quote(value)}; " for key, value in resume_environment.items()
+        )
+        inner = exports + inner
+    # Claude in Chrome defaults (possibly in the tmux server env) belong to
+    # Claude children; a Codex child must not hand them on to its own spawns.
+    inner = 'unset AGENTSTACK_CLAUDE_CHILD_CHROME AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE; ' + inner
     tmux_environment = [
         argument
         for key, value in resume_environment.items()

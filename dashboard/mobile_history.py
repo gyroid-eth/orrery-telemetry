@@ -278,6 +278,13 @@ def project_page(raw, issue=None):
         items = [dict(x, text=claude_pasted_text(x['text'])) if isinstance(x, dict)
                  and x.get('kind') == 'text' and x.get('role') == 'user'
                  and isinstance(x.get('text'), str) else x for x in items]
+    elif raw.get('provider') == 'antigravity':
+        # These results have no call ID. Keep the same fixed label as Desktop
+        # without relaying arguments, output, or a guessed success verdict.
+        items = [dict(id=x.get('id'), ts=x.get('ts'), cursor_before=x.get('cursor_before'),
+                      kind='tool', role='assistant', text='Tool result')
+                 if isinstance(x, dict) and x.get('kind') == 'tool_result'
+                 and x.get('role') == 'assistant' else x for x in items]
     pairs = [(e, x) for x in items for e in (project_event(x, issue=issue),) if e]
     trimmed = len(raw['events']) > 200 or len(pairs) > PAGE_EVENTS
     pairs = pairs[-PAGE_EVENTS:]
@@ -428,7 +435,7 @@ class HistoryClient:
                                      raw.get('reason_code', '') if isinstance(raw, dict) else '')
         events, older, limited, omitted = project_page(raw, lambda ref: self._issue_ref(name, ref))
         issued = self._issue_token(name, older) if older is not None else None
-        provider = raw.get('provider') if raw.get('provider') in {'codex', 'claude', 'dsh', 'hermes'} else ''
+        provider = raw.get('provider') if raw.get('provider') in {'codex', 'claude', 'dsh', 'hermes', 'antigravity'} else ''
         result = {'ok': True, 'agent': name, 'provider': provider, 'events': events,
                   'older': issued, 'limited': limited, 'omitted': omitted,
                   'tail_only': raw.get('mode') == 'fresh_tail'}

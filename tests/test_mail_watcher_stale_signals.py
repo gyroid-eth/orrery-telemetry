@@ -4,8 +4,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import subprocess
 import tempfile
+import sys
 
 import pytest
 from _installed_client_payload import copy_client_library
@@ -70,7 +72,21 @@ os.execv({tmux!r},[{tmux!r},*sys.argv[1:]])
 def test_absent_signals_are_discarded_once_and_live_delivery_continues(watcher):
     signal,run,runtime,failure,tmux=watcher
     paths=[signal('Absent',number) for number in range(1,25)]
-    tmux('new-session','-d','-s','Living',"printf 'Claude\\n'; cat")
+    worker=runtime.parent/'synthetic-notification-editor.py'
+    worker.write_text(r"""
+import os,tty
+tty.setraw(0)
+os.write(1,b'\x1b[?2004h'+'Claude\r\n❯ '.encode())
+raw=b''
+while not raw.endswith(b'\x1b[201~'):
+    raw+=os.read(0,1)
+draft=raw.removeprefix(b'\x1b[200~').removesuffix(b'\x1b[201~')
+os.write(1,draft.replace(b'\n',b'\r\n'))
+assert os.read(0,1)==b'\r'
+os.write(1,'\r\n❯ '.encode())
+import time;time.sleep(30)
+""")
+    tmux('new-session','-d','-x','150','-s','Living',shlex.join([sys.executable,str(worker)]))
     live=signal('Living',100)
     first=run();state=json.loads((runtime/'notify-state.json').read_text())
     assert all(not path.exists() for path in paths)

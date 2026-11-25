@@ -77,8 +77,9 @@ def phone(request):
     snapshot = dict(schema=1, window='day', observed_at=time.time(), sources={k: source for k in ['agents', 'graph', 'mail']}, agents=[agent], period=dict(seconds=86400, activity_unknown=0), graph=dict(nodes=[agent], edges=[], spawn=[], degraded=False, unrepresented_edges=0), timeline=dict(scope='0'*32, mail=[], states=[], events_truncated=False, edges_truncated=False, states_truncated=False))
     events = [dict(id='result', kind='text', role='assistant', text=RESULT, ts='2026-01-01T08:45:00Z'), dict(id='request', kind='text', role='user', text='Please check the large cache once more.', ts='2026-01-01T08:45:30Z'), dict(id='question', kind='text', role='assistant', text='Use the same inputs for the next run?', ts='2026-01-01T08:46:00Z')]
     state = dict(events=events, error=None, preview_error=False, calls=[], get_calls=[], mail=None, draft='', snapshot=snapshot)
-    contract = dict(contract='orrery-mobile-pane-v1', epoch='fixture-epoch')
     choice = dict(choice='fixture-choice', name='SampleAgent', pane_label='Window 0 · pane 0', revision='fixture-revision')
+    def terminal_contract():
+        return dict(contract='orrery-mobile-pane-v1', epoch=state.get('terminal_epoch','fixture-epoch'))
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -127,7 +128,7 @@ def phone(request):
                 return self.send(dict(ok=True, agent=agent, provider=state.get('provider',''),
                                       limited=False, tail_only=False, **page))
             if path == '/view/terminal':
-                return self.send(dict(contract, api=31, supported='legacy-managed-pane', enabled=True, ack='tmux-command-accepted'))
+                return self.send(dict(terminal_contract(), api=31, supported='legacy-managed-pane', enabled=True, ack='tmux-command-accepted'))
             if path == '/view/conversation/preview':
                 preview=state.get('file_preview',dict(ok=True, kind='text', text='File contents', notice='Current file, not a recorded snapshot.'))
                 if 'thumbnail=1' in self.path and preview.get('kind')=='image':
@@ -149,13 +150,21 @@ def phone(request):
             state['calls'].append((operation, payload))
             if self.path == '/view/spawn' and state.get('spawn_receipt'):
                 return self.send(state['spawn_receipt'])
-            selected = next((t for t in state.get('targets', [choice]) if t['choice'] == payload.get('choice')), choice)
+            contract = terminal_contract()
+            targets = state.get('targets', [choice])
+            selected = next((t for t in targets if t['choice'] == payload.get('choice')), None)
+            if state.get('reject_stale_terminal') and (payload.get('epoch') != contract['epoch']
+                    or operation in {'preview','prepare'} and selected is None):
+                return self.send(dict(error='input_unavailable'),status=503)
+            selected = selected or choice
             if operation == 'targets':
-                targets = state.get('targets', [choice])
                 if state.get('workspace'):
                     targets = [target for target in targets if target['name'] == payload.get('name')]
                 return self.send(dict(contract, targets=targets))
             if operation == 'preview':
+                if state.get('preview_failures',0):
+                    state['preview_failures'] -= 1
+                    return self.send(dict(error='input_unavailable'),status=503)
                 return self.send(dict(contract, target=selected, text=state.get('preview_text', 'Generated terminal tail\nReady.'), max_lines=state.get('preview_lines',120), max_bytes=state.get('preview_bytes',12288), observed_at=time.time()), status=503 if state['preview_error'] else 200)
             if operation == 'image':
                 if payload.get('image') is None:

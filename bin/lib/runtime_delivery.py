@@ -1,7 +1,7 @@
 """Global launch and notification operations over the fixed client layout.
 
 This module has no Mail storage connection. External effects happen between
-prepare and confirm, with every local mutex released.
+prepare and confirm, with delivery-state mutexes released.
 """
 from __future__ import annotations
 
@@ -1540,22 +1540,14 @@ class RuntimeDelivery(RuntimeFiles):
         target=matched[1]['pane_id'] if matched else None
         prepared=self.prepare(mid,'tmux',admissible=target is not None)
         if prepared['state']!='handoff':return prepared
-        # No local mutex is held while invoking tmux or waiting for it.
-        buffer='orrery-'+prepared['attempt_id']
+        transport=matched[0]
         try:
-            transport=matched[0]
-            loaded=transport.command('load-buffer','-b',buffer,'-',input=prepared['notification'])
-            if loaded.returncode:
-                return self.callback(mid,prepared['attempt_id'],known_failure=True)
-            current=self.tmux_target()
-            if not current or current[0].path!=transport.path or current[1]!=matched[1]:return self.callback(mid,prepared['attempt_id'])
-            pasted=transport.command('paste-buffer','-d','-p','-b',buffer,'-t',target)
-            if pasted.returncode:
-                return self.callback(mid,prepared['attempt_id'])
-            current=self.tmux_target()
-            if not current or current[0].path!=transport.path or current[1]!=matched[1]:return self.callback(mid,prepared['attempt_id'])
-            submitted=transport.command('send-keys','-t',target,'C-m')
-            return self.callback(mid,prepared['attempt_id'],confirmed=submitted.returncode==0)
+            def admitted():
+                current=self.tmux_target()
+                return bool(current and current[0].path==transport.path and current[1]==matched[1])
+            submit=self.api['runtime_tmux_api']()['module_api']('pane_submission')['submit']
+            result=submit(transport.command,admitted,target,prepared['notification'])
+            return self.callback(mid,prepared['attempt_id'],confirmed=result=='accepted',known_failure=result=='refused')
         except (OSError,RuntimeError,subprocess.TimeoutExpired):
             return self.callback(mid,prepared['attempt_id'])
 

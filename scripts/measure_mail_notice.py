@@ -176,14 +176,24 @@ def sink(args):
     handlers = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         tty.setraw(0)
-        os.write(1, b'\x1b[?2004hmeasurement-ready\r\n')
+        prompt = '❯ '.encode()
+        visible = prompt
+        os.write(1, b'\x1b[?2004hmeasurement-ready\r\n' + prompt)
         write_line(fd, event(base, 'sink_ready', clock_impl=clock_info(), program=PROGRAM))
         while True:
             data = os.read(0, 4096)
             if not data:
                 return
-            for payload in parser.feed(data):
-                received = time.monotonic_ns()
+            submitted = parser.feed(data)
+            received = time.monotonic_ns()
+            # Expose a completed draft to the watcher without echoing any
+            # notification bytes. Keep a partial bracketed paste unready.
+            display = ('Pasting…'.encode() if parser.inside else
+                       prompt + b'[Pasted text #1]' if parser.pending else prompt)
+            if display != visible:
+                os.write(1, b'\r\x1b[2K' + display)
+                visible = display
+            for payload in submitted:
                 try:
                     records = notice_events(payload, base, args.sender, at_ns=received)
                 except MeasurementError as error:

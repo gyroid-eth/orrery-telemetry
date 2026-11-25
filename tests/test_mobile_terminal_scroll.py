@@ -144,14 +144,18 @@ def test_pane_switch_and_reopen_start_at_the_new_tail():
     """)
 
 
-def test_failed_preview_and_recovery_show_the_fresh_tail():
+def test_missed_preview_keeps_the_last_tail_and_reading_position():
     run("""
-      q('#terminal-output').scrollTop=100;failPreview=true;await tick();
-      assert.equal(q('#terminal-output').textContent,'');
-      assert.equal(q('.terminal-age').textContent,'');assert.equal(q('.terminal-preview-note').textContent,'');
-      failPreview=false;const retry=[...timers].find(([,t])=>t.ms===6000);assert.ok(retry);
-      timers.delete(retry[0]);await retry[1].fn();await settle();
-      assert.equal(q('#terminal-output').scrollTop,bottom(q('#terminal-output')));
+      const p=q('#terminal-output'),shown=p.textContent,age=q('.terminal-age').textContent;
+      p.scrollTop=100;failPreview=true;await tick();
+      assert.equal(p.textContent,shown);assert.equal(p.scrollTop,100);
+      assert.equal(q('.terminal-age').textContent,age);
+      assert.equal(q('.terminal-stream').textContent,'Preview delayed');
+      failPreview=false;shift=100;await tick();
+      assert.equal(p.textContent,shown);assert.equal(p.scrollTop,100);
+      assert.equal(q('.terminal-stream').textContent,'New output · paused');
+      p.scrollTop=bottom(p);p.events.scroll();
+      assert.match(p.textContent,/^line 100/);
     """)
 
 

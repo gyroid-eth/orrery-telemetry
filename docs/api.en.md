@@ -211,7 +211,7 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 
 API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
 
-API 48 adds `native_browser_dirs`, a list of launch folders from `dirs` whose Chrome DevTools definition can be copied into a dsh or Hermes child. The phone shows Browser for these harnesses when the selected folder appears in the list. The launcher checks the settings again at launch.
+API 49 also adds `native_browser_dirs`, a list of launch folders from `dirs` whose Chrome DevTools definition can be copied into a dsh or Hermes child. The phone shows Browser for these harnesses when the selected folder appears in the list. The launcher checks the settings again at launch.
 
 API33 adds dynamic Local providers with `dynamic_models: true` / `model_source: server`. The picker explicitly reads each configured endpoint's `/v1/models`; static validation and spawn POST do not discover models. Each model retains its raw `id`, optional `display_name`, zero-based `url_index`, opaque `url_key`, `model_state` (`loaded`, `available`, `unloaded`), `context` and `context_source` (`server`, `override`, `default`). Missing/unknown status permits a valid ID; only explicit unloaded disables it. `Available` is not a loaded claim. Per-URL failure appears in `endpoints[].reason`; a failed discovery publishes no stale model rows. URLs and credential references are not in the public catalog. Dynamic effort is unreported and helper is Same as main. Actual command generation/exact resume makes one selected-URL lookup and refuses ID absence, explicit unloaded or lookup failure. It does not continuously lock the server model.
 
@@ -414,6 +414,10 @@ A receipt timestamp older than the current tmux `session_created` returns `stale
 Only `history_binding: bound` publishes `transcript_path` (the absolute child-owned `HERMES_HOME/state.db` path). Bound/stale rows include the evidence's `history_session_id` (native ID) and `history_receipt_ts` (the callback's original ISO timestamp, with UTC offset). Existing `program: hermes` identifies the format. Readers must verify **both the database path and session ID** and filter `messages.session_id`: multiple sessions share one HOME/database. This path is not a JSONL transcript.
 
 Binding verifies the project/agent registration, child-specific launch/input, pinned private HOME, self `on_session_start` callback, and exact CLI session in SQLite. It never selects by cwd, newest session, or modification time. Missing/mismatched proof or a launch/resume in preparation yields `unbound`; a receipt older than a new terminal launch without explicit exact resume yields `stale`. Neither publishes a path; `history_binding_reason` / `history_binding_reason_code` explain why. Success uses an empty explanation and code `bound`. Retired children remain readable while proof is retained; removal/purge unbinds them. Provider-internal switching/compression without a new callback can leave this binding on the earlier recorded segment; it never guesses descendant sessions or emergency diverted JSONL. Fresh Hermes TUI history uses the protected `/api/history` route described above.
+
+#### Antigravity (API 48)
+
+For managed interactive launches in legacy mode, the official hook binds the conversation UUID and its `transcript.jsonl` or `transcript_full.jsonl` path to the current Mail registration and tmux launch. The ordinary binding fields publish the path only when bound. Receiving more than one UUID for that launch returns `unbound` with `session_conflict`. Headless result logs are outside this binding.
 
 ### Other agent display fields
 
