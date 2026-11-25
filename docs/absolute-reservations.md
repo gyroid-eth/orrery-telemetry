@@ -12,7 +12,7 @@
 
 `reservation_paths.normalize_path()` を server/client/CLI/hook が共用します。server は絶対 path を要求します。client は観測済み cwd を明示し、その cwd で相対 path を絶対化します。旧 `project_key` は受け取って無視し、anchor にしません。旧 raw lease の anchor が不明なら、絶対 path での取り直しまたは移行証拠を求めます。現在の旧 lease はこの PR で変換しません。
 
-存在する親の symlink と `..` を解決し、新規 file の末尾を保持します。Unicode を無条件に NFC 化せず、既存 file の case/Unicode/hardlink の alias は filesystem の同一性で比較します。`*` は `/` を越えず、`**` は複数階層に対応します。`/a/b` と `/a/bb` は別範囲です。glob 同士の部分的な重なりを確定できない場合は保守的に競合とします。glob 内の symlink directory も解決するので、link 先の新規 file を見落としません。scope 解決は metadata だけを読み、1,000 steps/0.25秒、比較は10,000 pairs/0.25秒で打ち切り、`GLOB_SCOPE_UNKNOWN` として要求を止めます。広い予約を黙って非競合にしません。
+存在する親の symlink と `..` を解決し、新規 file の末尾を保持します。Unicode を無条件に NFC 化せず、既存 file の case/Unicode/hardlink の alias は filesystem の同一性で比較します。`*` は `/` を越えず、`**` は複数階層に対応します。`/a/b` と `/a/bb` は別範囲です。glob 同士の部分的な重なりを確定できない場合は保守的に競合とします。glob 内の symlink directory も解決するので、link 先の新規 file を見落としません。scope 解決は metadata だけを読み、1,000 steps、比較は 10,000 pairs を上限とします。どちらも処理スレッドの CPU 時間が 0.25 秒に達した場合も `GLOB_SCOPE_UNKNOWN` で要求を止めます。広い予約を黙って非競合にしません。
 
 glob を含む末尾の `..`、不明な symlink anchor、曖昧な separator は診断で拒否します。`tool://`・`resource://`・`service://` は filesystem と別型の exact match です。POSIX の `~` や Windows drive を推測で展開しません。Windows drive は確認済みの WSL mapping を client に明示し、Mail server と同じ filesystem の `/mnt/...` へ変換します。別 host の filesystem は対象外です。
 

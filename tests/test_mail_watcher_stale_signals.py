@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import tempfile
 import sys
+import time
 
 import pytest
 from _installed_client_payload import copy_client_library
@@ -100,6 +101,79 @@ import time;time.sleep(30)
     assert run().stdout.count('Signal:')==1 and not old.exists()
     assert 'Signal:' not in run().stdout
     assert not list((runtime/'notify-locks').glob('*.lock'))
+
+
+@pytest.mark.parametrize("initial_mode", ["", "auto · "], ids=["model-only", "mode-then-model-only"])
+def test_interactive_antigravity_notification_with_model_only_footer(watcher, initial_mode):
+    signal, run, runtime, _, tmux = watcher
+    hooks = runtime.parent / "hooks"
+    for name in ("gemini_interactive.py", "child_resume.py"):
+        shutil.copy2(ROOT / "hooks" / name, hooks / name)
+    worker = runtime.parent / "antigravity-editor.py"
+    received = runtime.parent / "submitted.jsonl"
+    worker.write_text(r"""
+import json, os, sys, textwrap, tty
+from pathlib import Path
+
+received, mode = sys.argv[1:]
+border = "─" * 80
+model = "Gemini 4 Neon (Low) · low"
+hint = "Auto mode: edits & safe commands auto-approved (shift+tab to cycle)"
+begin, end = b"\x1b[200~", b"\x1b[201~"
+tty.setraw(0)
+os.write(1, b"\x1b[?2004h")
+
+def draw(text, footer, *, draft=False):
+    lines = textwrap.wrap(text, width=76)
+    screen = [border, "> " + lines[0], *["  " + line for line in lines[1:]], border, footer]
+    column = 2 + len(lines[-1]) if draft else 2
+    os.write(1, ("\x1b[2J\x1b[H" + "\r\n".join(screen) + f"\x1b[2A\r\x1b[{column}C").encode())
+
+draw(hint, mode + model)
+while True:
+    raw = bytearray()
+    while end not in raw:
+        raw.extend(os.read(0, 4096))
+    pasted, _, early = raw.partition(end)
+    assert pasted.startswith(begin) and not early, "Enter must wait for the visible draft"
+    text = pasted[len(begin):].decode()
+    draw(text, mode + model, draft=True)
+    assert os.read(0, 1) == b"\r"
+    with Path(received).open("a", encoding="utf-8") as output:
+        output.write(json.dumps(text) + "\n")
+    draw(hint, model)
+""", encoding="utf-8")
+    agent = "FixtureAgy"
+    tmux("new-session", "-d", "-x", "100", "-y", "28", "-s", agent,
+         shlex.join([sys.executable, str(worker), str(received), initial_mode]))
+    tmux("set-environment", "-t", agent, "AGENTSTACK_GEMINI_INTERACTIVE", "1")
+    target = f"={agent}:"
+    deadline = time.monotonic() + 10
+    while True:
+        screen = tmux("capture-pane", "-p", "-t", target).stdout
+        if initial_mode + "Gemini 4 Neon (Low) · low" in screen:
+            break
+        assert time.monotonic() < deadline, screen
+        time.sleep(.03)
+    tmux_identity = tmux("display-message", "-p", "-t", target,
+                         "#{session_name}|#{session_id}|#{session_created}|#{pid}").stdout.strip()
+    child_state = runtime / "child-agents"
+    child_state.mkdir(parents=True)
+    status = child_state / f"{agent}.agy-status.json"
+    status.write_text(json.dumps({"tmux": tmux_identity, "activity": "wait"}))
+    status.chmod(0o600)
+
+    pending = signal(agent, 100)
+    result = run()
+    state = json.loads((runtime / "notify-state.json").read_text())
+    assert state[f"{agent}:100"]["last_result"] == "success", (state, result.stdout)
+    assert not pending.exists()
+    signal(agent, 100)
+    assert "Signal:" not in run().stdout
+    assert [json.loads(line) for line in received.read_text().splitlines()] == [
+        "ORRERY Mail notification: message from FixtureSender [normal]: fixture. "
+        "Please call fetch_inbox to read it."
+    ]
 
 
 @pytest.mark.parametrize('mode',['permission','timeout'])

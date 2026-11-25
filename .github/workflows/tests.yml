@@ -97,7 +97,9 @@ jobs:
         # README が「3.11 以上」と書く以上、両端を機械で押さえる。"3.x" 単独だと
         # 下限は誰も踏まないし、新しい Python が出た日に上限が黙って動く。
         # 3.10 は 2026-09-04 に対応から外した（import は通るが mail のテストが 38 件落ちる）。
-        python-version: ["3.11", "3.12", "3.14"]
+        # macOS の job は同時に 5 つまでで、1 本に約 1 時間かかる。PR ごとに 3 本回すと
+        # 待ちが数時間になるので、PR では 3.12 だけ回し、両端の 3.11 と 3.14 は master で回す。
+        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.12"]' || '["3.11", "3.12", "3.14"]') }}
     name: tests (python ${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v4

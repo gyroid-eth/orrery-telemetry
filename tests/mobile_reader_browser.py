@@ -135,6 +135,18 @@ def phone(request):
                     from dashboard.mobile_history import thumbnail_preview
                     preview=thumbnail_preview(preview)
                 return self.send(preview)
+            if path == '/view/conversation/diff':
+                ref = parse_qs(urlsplit(self.path).query).get('ref', [''])[0]
+                diff = state.get('step_diffs', {}).get(ref)
+                if state.get('step_diff_gate'):
+                    state['step_diff_gate'].wait(4)
+                return self.send(diff or dict(ok=False, error='diff_expired'), status=200 if diff else 410)
+            if path == '/view/conversation/detail':
+                ref = parse_qs(urlsplit(self.path).query).get('ref', [''])[0]
+                detail = state.get('step_details', {}).get(ref)
+                if state.get('step_detail_gate'):
+                    state['step_detail_gate'].wait(4)
+                return self.send(detail or dict(ok=False, error='detail_expired'), status=200 if detail else 410)
             if path == '/view/portrait' and state.get('portrait'):
                 return self.send(state['portrait'], 'image/png')
             if path == '/network.css':

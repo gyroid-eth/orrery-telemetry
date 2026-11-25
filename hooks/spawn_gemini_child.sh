@@ -250,6 +250,28 @@ CHILD_NAME="$(
 [[ -n "$CHILD_NAME" ]] || { echo "$PROG: child preregistration returned no name" >&2; exit 1; }
 PREREGISTERED=true
 
+if [[ "$(uname -s)" == Darwin ]]; then
+  if [[ -z "$RESOURCES" ]]; then
+    echo "$PROG: interactive Antigravity children require declared resources" >&2
+    exit 2
+  fi
+  ( umask 077 && printf '%s' "$TASK" > "$TASK_RAW_FILE" )
+  adapter_args=(--pre-registered "$CHILD_NAME" --child-token-file "$TOKEN_FILE" --model "$MODEL")
+  if [[ -n "$WORKTREE_BASE_REV" ]]; then
+    adapter_args+=(--worktree-base "$WORKTREE_BASE_REV")
+  fi
+  AGENTSTACK_HOME="$AGENTSTACK_HOME_DIR" AGENTSTACK_HOOKS_DIR="$HOOKS_DIR" \
+    AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" \
+    AGENTSTACK_GEMINI_TASK_FILE="$TASK_RAW_FILE" AGENTSTACK_GEMINI_RESOURCES="$RESOURCES" \
+    AGENTSTACK_GEMINI_BIN="$GEMINI_BIN" AGENTSTACK_GEMINI_EFFORT="$EFFORT" \
+    AGENTSTACK_GEMINI_RESOURCE_TTL="$RESOURCE_TTL" AGENTSTACK_WORKTREE_ROOT="$WORKTREE_ROOT" \
+    AGENTSTACK_MANAGED_AGENTS_FILE="$MANAGED_FILE" AGENTSTACK_PYTHON="$PYTHON_BIN" \
+    PARENT_AGENT="$PARENT_NAME" bash "$HOOKS_DIR/spawn_gemini_preregistered.sh" \
+    "${adapter_args[@]}" "" "$WORK_DIR"
+  trap - EXIT
+  exit 0
+fi
+
 BRANCH_NAME="exp/$CHILD_NAME"
 WORKTREE_DIR="$WORKTREE_ROOT/$CHILD_NAME"
 if [[ -e "$WORKTREE_DIR" ]]; then
