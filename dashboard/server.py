@@ -70,11 +70,12 @@ if __name__ == '__main__':
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
-    from dashboard import codex_models, mail_signals, provider_stalls, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
+    from dashboard import codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import codex_models
     import mail_signals
     import provider_stalls
+    import human_wait
     import harness_runtime
     import harness_helpers
     import harness_context
@@ -6219,17 +6220,17 @@ def _block_text(content) -> list[tuple[str, str]]:
     return rows
 
 
-def _resume_registration(session: str, programs: set[str]) -> dict | None:
-    """Return the exact project registration, never an alias or another provider."""
+def _resume_registration(session: str, programs: set[str] | None) -> dict | None:
+    """Return the exact project registration, optionally restricted by program."""
 
-    include_profile = "claude" in programs or bool(programs.intersection(harness_runtime.HARNESSES))
+    include_profile = programs is not None and ("claude" in programs or bool(programs.intersection(harness_runtime.HARNESSES)))
     project_key = _project_key()
     if not project_key or not os.path.isfile(DB_PATH):
         return None
     if (index := _batched_registrations()) is not None:
         row = index.by_project.get((project_key, session))
         program = (row["program"] or "") if row else ""
-        if not row or program not in programs:
+        if not row or (programs is not None and program not in programs):
             return None
         claude = include_profile
         return {
@@ -6254,7 +6255,7 @@ def _resume_registration(session: str, programs: set[str]) -> dict | None:
     except sqlite3.Error:
         return None
     program = (row["program"] or "") if row else ""
-    if not row or program not in programs:
+    if not row or (programs is not None and program not in programs):
         return None
     return {
         "agent_id": int(row["id"]),
@@ -7385,9 +7386,19 @@ def agent_history_payload(name: str = "", hours: int | None = 24,
 
 
 try:
-    from dashboard.terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal, reader_compaction)
+    from dashboard.terminal_state import (
+        _ASK_CODEX_RE, _ASK_Q_RE, _CTX_CODEX_LEFT_RE,
+        _CTX_CODEX_USED_RE, _CTX_RE, _QUESTION_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE,
+        _WORK_RE, codex_model_effort, compact_readiness, compact_refusal,
+        current_modal_activity, reader_compaction,
+    )
 except ModuleNotFoundError:
-    from terminal_state import (_CTX_RE, _CTX_CODEX_LEFT_RE, _CTX_CODEX_USED_RE, _WORK_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE, _ASK_Q_RE, _ASK_OPT_RE, _ASK_YN_RE, _ASK_CODEX_RE, _QUESTION_RE, codex_model_effort, compact_readiness, compact_refusal, reader_compaction)
+    from terminal_state import (
+        _ASK_CODEX_RE, _ASK_Q_RE, _CTX_CODEX_LEFT_RE,
+        _CTX_CODEX_USED_RE, _CTX_RE, _QUESTION_RE, _WORK_CLAUDE_TASK_RE, _WORK_CODEX_RE,
+        _WORK_RE, codex_model_effort, compact_readiness, compact_refusal,
+        current_modal_activity, reader_compaction,
+    )
 # --------------------------------------------------------------------------- #
 # Agent runtime probe — コンテキスト残量(HP) + 動作状態を tmux ペインから読む
 #   Claude Code / Codex の TUI 表示を read-only パース。新データ源は持たない。
@@ -7593,6 +7604,7 @@ _rt_cache: dict[str, tuple[float, str, dict]] = {}
 _rt_lock = threading.Lock()
 # Kept separately so provider-specific evidence does not change runtime parsing.
 _provider_captures: dict[str, tuple[str, float, dict]] = {}
+_human_wait_captures: dict[str, tuple[str, float, dict]] = {}
 _provider_monitor = None
 _provider_thread = None
 _provider_stop = threading.Event()
@@ -7600,6 +7612,10 @@ _provider_stop = threading.Event()
 
 def _provider_generation(session: dict) -> str:
     return _runtime_generation(session.get("created"), session.get("session_id")) + ":" + str(session.get("pane_pid", 0))
+
+
+def _human_wait_generation(session: dict) -> str:
+    return _provider_generation(session) + ":" + str(session.get("server_pid", ""))
 
 
 def _provider_stall_view(name: str, session: dict):
@@ -7631,31 +7647,46 @@ def _stall_parent(name: str, generation: str) -> str:
 
 
 @_with_registration_batch
-def _provider_stall_samples():
+def _provider_stall_samples(human_samples=None):
     samples = []
     sessions = tmux_state()
     agents, _ = agentmail_state()
     tree = _process_tree_snapshot() if agents else None
     for name, session in sessions.items():
         agent = agents.get(name)
-        if not agent or agent.get("program") not in {"codex", "codex-cli"}:
+        program = agent.get("program") if agent else None
+        native = human_wait.PROGRAMS.get(program)
+        if not native or (native != "codex" and human_samples is None):
             continue
         try:
             if not _tmux_row_state(name, session, agent, tree)[2]:
                 continue
-            registration = _codex_registration(name)
+            parent = _stall_parent(name, _provider_generation(session))
+            human = human_samples is not None and parent and session.get("mail_disabled") != "1"
+            if not human and native != "codex":
+                continue
+            registration = (_codex_registration(name) if native == "codex"
+                            else _resume_registration(name, {program}))
             if not registration:
                 continue
-            _agent_runtime(name, session.get("created"), session.get("session_id"))
+            args = (name, session.get("created"), session.get("session_id"))
+            if program in harness_runtime.HARNESSES:
+                _native_context_runtime(*args, program)
+            else:
+                _agent_runtime(*args)
             with _rt_lock:
                 captured = _provider_captures.get(name)
+                observed = _human_wait_captures.get(name)
             generation = _runtime_generation(session.get("created"), session.get("session_id"))
-            if not captured or captured[0] != generation:
-                continue
-            parent = _stall_parent(name, _provider_generation(session))
-            samples.append(dict(name=name, agent_id=registration["agent_id"],
-                project_key=registration["project_key"], generation=_provider_generation(session),
-                parent=parent, capture_id=captured[1], evidence=captured[2]))
+            owner = dict(name=name, agent_id=registration["agent_id"],
+                         project_key=registration["project_key"], parent=parent)
+            if native == "codex" and captured and captured[0] == generation:
+                samples.append(dict(**owner, generation=_provider_generation(session),
+                                    capture_id=captured[1], evidence=captured[2]))
+            if human and observed and observed[0] == generation:
+                human_samples.append(dict(**owner, generation=_human_wait_generation(session),
+                                          program=program, capture_id=observed[1],
+                                          human_wait=observed[2].get(native)))
         except Exception:
             logging.warning("Provider-stop sample unavailable for %s", name)
     with _parent_env_lock:
@@ -7664,50 +7695,74 @@ def _provider_stall_samples():
     return samples
 
 
-def _provider_stall_send(row: dict, event: dict) -> str:
-    """Use the child's canonical owner material and the existing Mail helper."""
+def _child_observation_mail(row: dict, subject: str, body: str, *, human=False) -> str:
+    """Revalidate lineage and use the child's canonical owner material."""
     name, parent = row["name"], row["parent"]
     if not _valid(name) or not _valid(parent) or parent == name:
         return "parent_unverified"
     session = tmux_state().get(name)
-    if not session or _provider_generation(session) != row["generation"]:
+    generation = _human_wait_generation if human else _provider_generation
+    if not session or generation(session) != row["generation"] or (human and session.get("mail_disabled") == "1"):
         return "parent_unverified"
     env = _tmux(["show-environment", "-t", "=" + name, "PARENT_AGENT"]).strip()
     if env != "PARENT_AGENT=" + parent:
         return "parent_unverified"
-    registration = _codex_registration(name)
+    program = row["program"] if human else "codex"
+    registration = _resume_registration(name, {program}) if human else _codex_registration(name)
     if not registration or registration["agent_id"] != row["agent_id"] or registration["project_key"] != row["project_key"]:
         return "parent_unverified"
-    if not _resume_registration(parent, {"codex", "codex-cli", "claude", "claude-code"}):
+    if not _resume_registration(parent, None if human else {"codex", "codex-cli", "claude", "claude-code"}):
         return "parent_unverified"
     try:
         module = _child_resume_module()
         state = module._load_state(Path(RUNTIME_DIR) / "child-agents" / (name + ".json"))
         module._validate_identity(state, agent_name=name, agent_id=row["agent_id"],
-                                  project_key=row["project_key"], program="codex")
+                                  project_key=row["project_key"], program=program)
         token = _runtime_agent_token(name)
+        if human and state.get("launch_origin") != "child":
+            return "parent_unverified"
         if state.get("parent_agent") != parent or not token or not secrets.compare_digest(token, state.get("registration_token", "")):
             return "parent_unverified"
     except Exception:
         return "parent_unverified"
     result = _mcp_call("send_message", dict(project_key=row["project_key"],
         sender_name=name, sender_token=token, to=[parent], importance="high",
-        subject=f"{name} が model の容量エラーで停止", body_md=provider_stalls.message(event)), timeout=3)
+        subject=subject, body_md=body), timeout=3)
     # An HTTP failure may occur after Mail commits. Never create a second send.
     if result.get("ok"):
         return "sent"
     return "failed" if result.get("rejected") else "delivery_unknown"
 
 
+def _provider_stall_send(row: dict, event: dict) -> str:
+    return _child_observation_mail(row, f"{row['name']} が model の容量エラーで停止",
+                                   provider_stalls.message(event))
+
+
+def _human_wait_send(row, screen):
+    return _child_observation_mail(row, *screen.message(row["name"]), human=True)
+
+
 def _start_provider_stall_monitor():
     global _provider_monitor, _provider_thread
-    if GLOBAL_MODE or os.name == "nt" or _provider_monitor is not None:
+    if FRESH_MODE or GLOBAL_MODE or os.name == "nt" or _provider_monitor is not None:
         return
     _provider_stop.clear()
     _provider_monitor = provider_stalls.Monitor(Path(RUNTIME_DIR) / "provider-stalls.json",
         _provider_stall_send, session_names=mail_signals.session_names)
+    waits = human_wait.Monitor(Path(RUNTIME_DIR) / "human-waits.json", _human_wait_send)
+
+    def observe():
+        humans = []
+        capacity = _provider_stall_samples(humans)
+        try:
+            waits.tick(humans)
+        except (OSError, ValueError):
+            logging.exception("Human-wait observation failed")
+        return capacity
+
     _provider_thread = threading.Thread(target=_provider_monitor.run,
-        args=(_provider_stall_samples, _provider_stop), name="provider-stalls", daemon=True)
+        args=(observe, _provider_stop), name="provider-stalls", daemon=True)
     _provider_thread.start()
 
 
@@ -7718,7 +7773,7 @@ def _stop_provider_stall_monitor():
         _provider_thread.join(timeout=4)
 
 
-def _runtime_activity(text: str) -> tuple[str, str]:
+def _runtime_activity(text: str, *, unknown="wait") -> tuple[str | None, str]:
     """Read the current control block; historical controls never outrank it.
 
     An ordinary composer follows a live spinner too, so it is not by itself
@@ -7745,6 +7800,8 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     def mode_footer(line):
         # Claude's built-in footer also identifies a composer when no custom
         # statusLine is configured. Only recognize the known mode labels.
+        if line.strip() == "⏸ manual mode on · ? for shortcuts · ← for agents":
+            return True
         return re.fullmatch(
             r"\s*⏵⏵\s+(?:auto mode|accept edits) on"
             r"(?:\s+\(shift\+tab to cycle\))?(?:\s+·\s+.*)?\s*",
@@ -7752,7 +7809,7 @@ def _runtime_activity(text: str) -> tuple[str, str]:
 
     def chrome(line):
         row = line.strip()
-        return (not row or rule(row) or bool(_STATUSLINE_HINT_RE.search(row)) or usage_footer(row)
+        return (not row or rule(row) or bool(_STATUSLINE_HINT_RE.search(row)) or usage_footer(row) or mode_footer(row)
                 or row.startswith(("? for shortcuts", "⏵", "←", "→")))
 
     # Only a complete composer suffix can supersede old modal text. Numbered
@@ -7845,59 +7902,10 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     if composer is not None:
         return "wait", ""
 
-    # Claude wraps the permission modal before tmux captures it. Its heading
-    # can be above the 16-line window, while the menu must end the capture.
-    permission = " ".join(" ".join(current[-32:]).split()).replace("❯ ", "")
-    # The menu lists only the permissions still missing, so after one is
-    # granted it shrinks to that setting and "Try again".
-    if ("Computer use needs macOS permissions " in permission
-            and " Open System Settings → " in permission
-            and permission.endswith(" Try again Enter to confirm · Esc to cancel")):
-        return "ask", ""
-
-    # These footer controls must still be current. Looking at the last control
-    # rather than reversing work/ask priority also preserves new work after an
-    # answered modal that remains in the scrollback.
-    rows = [row.strip() for row in current[-16:] if row.strip()]
-    if not rows:
-        return "wait", ""
-    # Codex hook trust has its own footer, not the normal command-approval one.
-    # Require the complete current menu transcribed from the reviewed screen;
-    # the title or a prose explanation of hook trust is not an approval UI.
-    hook = rows[-7:]
-    if (len(hook) == 7 and hook[0] == "Hooks need review"
-            and re.fullmatch(r"[1-9]\d* hooks? (?:is|are) new or changed\.", hook[1])
-            and hook[2] == "Hooks can run outside the sandbox after you trust them."
-            and [re.sub(r"^[›❯>]\s*", "", row) for row in hook[3:6]] == [
-                "1. Review hooks", "2. Trust all and continue",
-                "3. Continue without trusting (hooks won't run)"]
-            and any(re.match(r"[›❯>]\s*[123]\.", row) for row in hook[3:6])
-            and hook[6] == "enter confirm · esc skip"):
-        return "ask", ""
-    # The existing question literal may put its footer before numbered choices.
-    # Only those choices may follow it; arbitrary later output is not current UI.
-    for index, row in enumerate(rows):
-        if (_QUESTION_RE.fullmatch(row)
-                and all(re.fullmatch(r"[❯>›]?\s*\d+\.\s+.+", option)
-                        for option in rows[index + 1:])):
-            return "question", ""
-    if _ASK_CODEX_RE.fullmatch(rows[-1]) or _ASK_YN_RE.search(rows[-1]):
-        return "ask", ""
-    for index, row in enumerate(rows):
-        if _ASK_Q_RE.match(row) and rows[index + 1:]:
-            options = rows[index + 1:]
-            # Claude's edit approval places this control hint after the menu.
-            # Keep the question and numbered choices mandatory; arbitrary later
-            # output must still invalidate an old approval screen.
-            if options[-1] in {"Esc to cancel", "Esc to cancel · Tab to amend"}:
-                options = options[:-1]
-            if (any(_ASK_OPT_RE.match(option) for option in options)
-                    and all(re.fullmatch(r"[❯>›]?\s*\d+\.\s+.+", option) for option in options)):
-                return "ask", ""
-    return "wait", ""
+    return current_modal_activity(current) or unknown, ""
 
 
-def _parse_runtime(text: str) -> dict:
+def _parse_runtime(text: str, *, current_activity=None) -> dict:
     """ペイン文字列 → runtime 値。現在の操作領域から動作状態を読む。"""
     m = _CTX_RE.search(text)
     if m:                                   # Claude: "ctx: N% used"
@@ -7923,7 +7931,8 @@ def _parse_runtime(text: str) -> dict:
     # ペイン由来の実モデル (steruslineから抽出。末尾10行に限定して
     # スクロールバッファ内のコード片やテキスト中の誤マッチを避ける)
     pane_model = _pane_model_from(tail_for_model)
-    act, work_block = _runtime_activity(text)
+    act, work_block = current_activity or _runtime_activity(text)
+    act = act or "wait"
     work_secs = work_disp = last_disp = None
     if act == "work":
         t = _ACTIVE_T_RE.search(work_block)
@@ -7970,6 +7979,9 @@ def _prune_runtime_cache(sessions: dict[str, dict]) -> None:
             if generations.get(name) != generation:
                 _rt_cache.pop(name, None)
                 _provider_captures.pop(name, None)
+        for name, (generation, _, _) in list(_human_wait_captures.items()):
+            if generations.get(name) != generation:
+                _human_wait_captures.pop(name, None)
 
 
 _NATIVE_CONTEXT_CACHE = {}
@@ -7984,6 +7996,7 @@ def _native_context_runtime(session, created, session_id, program):
         if cached and cached[1] == generation and now - cached[0] < _RT_TTL:
             return cached[2]
     result = {'ctx_used': None, 'ctx_window': None, 'act_state': None}
+    evidence = None
     if _valid(session):
         try:
             capture = _tmux_run(['capture-pane', '-p', '-J', '-t', '=' + session, '-S', '-45'],
@@ -7991,6 +8004,7 @@ def _native_context_runtime(session, created, session_id, program):
             if capture.returncode == 0:
                 result = harness_context.parse_context(capture.stdout, program)
                 result['act_state'] = harness_activity.parse_activity(capture.stdout, program)
+                evidence = human_wait.observe(capture.stdout, program, result['act_state'])
                 phase = reader_compaction(capture.stdout, (program,))
                 if phase:
                     result["_reader_compaction"] = phase
@@ -8002,6 +8016,7 @@ def _native_context_runtime(session, created, session_id, program):
         if len(_NATIVE_CONTEXT_CACHE) > 512:
             _NATIVE_CONTEXT_CACHE.clear()
         _NATIVE_CONTEXT_CACHE[session] = (now, generation, result)
+        _human_wait_captures[session] = (generation[1], now, {program: evidence})
     return result
 
 
@@ -8023,11 +8038,15 @@ def _agent_runtime(
     out = {"ctx_used": None, "act_state": None, "ctx_window": None,
            "work_secs": None, "work_disp": None, "last_disp": None,
            "pane_model": None}
+    observed = {}
     if _valid(session):
         try:
             r = _tmux_run(['capture-pane', '-p', '-J', '-t', session, '-S', '-45'], capture_output=True, text=True, timeout=3)
             if r.returncode == 0:
-                out = _parse_runtime(r.stdout)
+                current = _runtime_activity(r.stdout, unknown=None)
+                out = _parse_runtime(r.stdout, current_activity=current)
+                observed = {program: human_wait.observe(r.stdout, program, current[0])
+                            for program in ("codex", "claude", "agy")}
                 with _rt_lock:
                     _provider_captures[session] = (generation, now, provider_stalls.observe(r.stdout))
             else:
@@ -8043,6 +8062,7 @@ def _agent_runtime(
                 if not out.get(key):
                     out[key] = previous[2].get(key)
         _rt_cache[session] = (now, generation, out)
+        _human_wait_captures[session] = (generation, now, observed)
     return out
 
 
@@ -10124,7 +10144,9 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             "project_key": project_key,
             "sender_name": parent,
             "to": [child_name],
-            "cc": [parent],
+            # The parent's audit copy. Mail signals to/cc recipients only, so
+            # bcc keeps the parent from being notified of its own task mail.
+            "bcc": [parent],
             "subject": subject,
             "body_md": "\n".join(body_lines),
             "importance": "high",

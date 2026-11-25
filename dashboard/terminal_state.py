@@ -39,6 +39,16 @@ _ASK_YN_RE = re.compile(r"\?\s*[\[(]y/n[\])]", re.IGNORECASE)
 _ASK_CODEX_RE = re.compile(
     r"Press\s+enter\s+to\s+confirm\s+or\s+esc\s+to\s+cancel", re.IGNORECASE)
 _QUESTION_RE = re.compile(r"Enter to select.{0,80}Esc to cancel")
+_CLAUDE_APPROVAL_SCROLL_RE = re.compile(r"[↑↓] [1-9]\d* more lines?")
+_AGY_COMMAND_APPROVAL_CONTROLS = "↑/↓ Navigate · tab Amend · ctrl+g edit/expand command"
+AGY_MCP_APPROVAL_CONTROLS = "↑/↓ Navigate · tab Amend"
+_AGY_APPROVAL_FOOTER_RE = re.compile(r"esc to cancel(?:\s{2,}[a-z-]+ · [^·]+ · [a-z]+)?")
+_AGY_MCP_STATUS = re.compile(r"(?:auto|plan|accept-edits) · [^·]+ · (?:low|medium|high|xhigh|max)")
+_AGY_COMMAND_OPTION_BREAK_RE = re.compile(r"\n(?=>? ?[1-9]\d*\. )")
+_AGY_COMMAND_ALWAYS_RE = re.compile(
+    r"[1-9]\d*\. Yes, and always allow(?: in this conversation)? "
+    r"for commands that start with '.+'(?: \(Persist to settings\.json\))?"
+)
 
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _STALL_WORK = re.compile(r"(?im)^\s*[•▌●]\s*(?:Working|Thinking)\b[^\n]*\([^\n]*(?:\d+\s*s|esc to interrupt)")
@@ -161,14 +171,107 @@ def context_used(text):
             return (100-value if left else value) if 0<=value<=100 else None
     return None
 
+def current_modal_activity(current):
+    """Classify a modal that ends the current screen, excluding any composer."""
+    # Claude wraps the permission modal before tmux captures it. Its heading
+    # can be above the 16-line window, while the menu must end the capture.
+    permission = " ".join(" ".join(current[-32:]).split()).replace("❯ ", "")
+    # The menu lists only the permissions still missing, so after one is
+    # granted it shrinks to that setting and "Try again".
+    if ("Computer use needs macOS permissions " in permission
+            and " Open System Settings → " in permission
+            and permission.endswith(" Try again Enter to confirm · Esc to cancel")):
+        return "ask"
+
+    # These footer controls must still be current. Looking at the last control
+    # rather than reversing work/ask priority also preserves new work after an
+    # answered modal that remains in the scrollback.
+    rows = [row.strip() for row in current[-16:] if row.strip()]
+    if not rows:
+        return None
+    # MCP has six choices and a model status row without "esc to cancel".
+    # Require the same tool name in the heading and each persistent choice.
+    if (len(rows) >= 10 and rows[-2] == AGY_MCP_APPROVAL_CONTROLS
+            and _AGY_MCP_STATUS.fullmatch(rows[-1])):
+        tool, heading = rows[-10:-8]
+        options = rows[-8:-2]
+        if (heading == "Allow calling this tool?" and re.fullmatch(r"[\w.-]+/[\w.-]+", tool)
+                and sum(option.startswith("> ") for option in options) == 1
+                and [option.removeprefix("> ") for option in options] == [
+                    "1. Yes, allow tool call",
+                    f"2. Yes, and always allow tool '{tool}' in this conversation",
+                    f"3. Yes, and always allow tool '{tool}' (Persist to settings.json)",
+                    "4. No, deny tool call",
+                    f"5. No, and always deny tool '{tool}' in this conversation",
+                    f"6. No, and always deny tool '{tool}' (Persist to settings.json)"]):
+            return "ask"
+    # Antigravity puts the approval controls above its model status bar.
+    if (len(rows) >= 5 and rows[-2] == _AGY_COMMAND_APPROVAL_CONTROLS
+            and _AGY_APPROVAL_FOOTER_RE.fullmatch(rows[-1])):
+        for index, row in enumerate(rows[:-4]):
+            if row != "Run this command?":
+                continue
+            options = _AGY_COMMAND_OPTION_BREAK_RE.split("\n".join(rows[index + 1:-2]))
+            # The persistent allowances wrap at narrower terminal widths.
+            choices = [" ".join(option.removeprefix(">").split()) for option in options]
+            if (len(choices) >= 2 and choices[0] == "1. Yes, run command"
+                    and re.fullmatch(r"[1-9]\d*\. No, cancel", choices[-1])
+                    and any(option.startswith("> ") for option in options)
+                    and all(_AGY_COMMAND_ALWAYS_RE.fullmatch(choice) for choice in choices[1:-1])):
+                return "ask"
+    # Codex hook trust has its own footer, not the normal command-approval one.
+    # Require the complete current menu transcribed from the reviewed screen;
+    # the title or a prose explanation of hook trust is not an approval UI.
+    hook = rows[-7:]
+    if (len(hook) == 7 and hook[0] == "Hooks need review"
+            and re.fullmatch(r"[1-9]\d* hooks? (?:is|are) new or changed\.", hook[1])
+            and hook[2] == "Hooks can run outside the sandbox after you trust them."
+            and [re.sub(r"^[›❯>]\s*", "", row) for row in hook[3:6]] == [
+                "1. Review hooks", "2. Trust all and continue",
+                "3. Continue without trusting (hooks won't run)"]
+            and any(re.match(r"[›❯>]\s*[123]\.", row) for row in hook[3:6])
+            and hook[6] == "enter confirm · esc skip"):
+        return "ask"
+    # The existing question literal may put its footer before numbered choices.
+    # Only those choices may follow it; arbitrary later output is not current UI.
+    for index, row in enumerate(rows):
+        if (_QUESTION_RE.fullmatch(row)
+                and all(re.fullmatch(r"[❯>›]?\s*\d+\.\s+.+", option)
+                        for option in rows[index + 1:])):
+            return "question"
+    if _ASK_CODEX_RE.fullmatch(rows[-1]) or _ASK_YN_RE.search(rows[-1]):
+        return "ask"
+    for index, row in enumerate(rows):
+        if _ASK_Q_RE.match(row) and rows[index + 1:]:
+            options = rows[index + 1:]
+            # Claude's edit approval places this control hint after the menu.
+            # Keep the question and numbered choices mandatory; arbitrary later
+            # output must still invalidate an old approval screen.
+            if options[-1] in {"Esc to cancel", "Esc to cancel · Tab to amend"}:
+                options = options[:-1]
+                if options and _CLAUDE_APPROVAL_SCROLL_RE.fullmatch(options[-1]):
+                    options = options[:-1]
+            if (any(_ASK_OPT_RE.match(option) for option in options)
+                    and all(re.fullmatch(r"[❯>›]?\s*\d+\.\s+.+", option) for option in options)):
+                return "ask"
+    return None
+
+
 def activity(text):
-    # Preserve the existing dashboard windows and priority exactly.
+    # Compact admission refuses even incomplete recent controls. Keep that
+    # conservative evidence separate from asserting a current displayed modal.
     if _WORK_RE.search(text) or _WORK_CODEX_RE.search(text) or _WORK_CLAUDE_TASK_RE.search('\n'.join(text.splitlines()[-25:])):
         return 'work'
-    if _QUESTION_RE.search('\n'.join(text.splitlines()[-12:])):return 'question'
-    tail='\n'.join(text.splitlines()[-16:])
-    if _ASK_CODEX_RE.search(tail) or (_ASK_Q_RE.search(tail) and _ASK_OPT_RE.search(tail)) or _ASK_YN_RE.search(tail):return 'ask'
+    lines = text.splitlines()
+    if modal := current_modal_activity(lines):
+        return modal
+    if _QUESTION_RE.search('\n'.join(lines[-12:])):
+        return 'question'
+    tail = '\n'.join(lines[-16:])
+    if _ASK_CODEX_RE.search(tail) or (_ASK_Q_RE.search(tail) and _ASK_OPT_RE.search(tail)) or _ASK_YN_RE.search(tail):
+        return 'ask'
     return 'wait'
+
 
 def prompt_suffix(text,provider):
     glyph={'claude':'❯','codex':'›'}.get(provider)

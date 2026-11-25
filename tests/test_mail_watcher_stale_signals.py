@@ -107,7 +107,7 @@ import time;time.sleep(30)
 def test_interactive_antigravity_notification_with_model_only_footer(watcher, initial_mode):
     signal, run, runtime, _, tmux = watcher
     hooks = runtime.parent / "hooks"
-    for name in ("gemini_interactive.py", "child_resume.py"):
+    for name in ("gemini_interactive.py", "child_resume.py", "child_tools.py"):
         shutil.copy2(ROOT / "hooks" / name, hooks / name)
     worker = runtime.parent / "antigravity-editor.py"
     received = runtime.parent / "submitted.jsonl"

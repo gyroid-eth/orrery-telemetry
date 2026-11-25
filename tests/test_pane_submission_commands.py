@@ -15,16 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('editor,editor_text,selection,accepted', [
     ('claude', '/log', '/log', True),
     ('claude', '/log', '/login', False),
-    ('claude', '/log', None, False),
+    ('claude', '/log', None, True),
     ('claude', '/log note', None, True),
     ('claude-wrapped', '/compact', '/compact', True),
     ('claude-wrapped', '/compact', '/compact-later', False),
     ('codex', '/compact', '/compact', True),
     ('codex', '/comp', '/compact', False),
-    ('codex', '/compact', None, False),
+    ('codex', '/compact', None, True),
     ('codex', 'A plain notice', None, True),
 ])
-def test_watcher_submits_only_proven_slash_completion(monkeypatch, editor, editor_text, selection, accepted):
+def test_watcher_submits_matching_or_picker_free_slash_draft(monkeypatch, editor, editor_text, selection, accepted):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
     paste = sent = False
@@ -103,3 +103,31 @@ def test_watcher_reads_the_end_of_a_scrolled_claude_draft():
             'Fetch inbox to read the rest.')
     assert submission['ready'](view, text)
     assert not submission['ready'](view, 'A different prompt that ends elsewhere.')
+
+
+def test_expired_submit_after_load_still_deletes_its_buffer(monkeypatch):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    submit = submission['submit']
+    monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
+    now = 0
+    loaded = []
+    deleted = []
+    reasons = []
+
+    def command(*args, input=None):
+        nonlocal now
+        screen = ''
+        if args[0] == 'display-message':
+            screen = '/tmp/fixture.sock\t100\t%1\t200\t0\t0\t2\t1\tclaude\n❯ '
+        elif args[0] == 'load-buffer':
+            loaded.append(args[2])
+            now = 6
+        else:
+            assert args[0] == 'delete-buffer'
+            deleted.append(args[2])
+        return subprocess.CompletedProcess(args, 0, screen, '')
+
+    monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(monotonic=lambda: now))
+    assert submit(command, lambda: True, '%1', 'Fixture notice', on_wait=reasons.append) == 'refused'
+    assert reasons == ['submission_deadline']
+    assert len(loaded) == 1 and loaded == deleted

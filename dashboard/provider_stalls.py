@@ -131,6 +131,62 @@ def _submitted_retry(appended):
                     for index, token in enumerate(appended)))
 
 
+@contextmanager
+def locked_events(path):
+    """Read a private observation journal under its single writer lock."""
+    import fcntl  # Legacy POSIX worker only.
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock = path.with_suffix(".lock")
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            raise ValueError("unsafe observation lock")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            state_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            yield {}, None
+        else:
+            with os.fdopen(state_fd, encoding="utf-8") as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or stat.S_IMODE(info.st_mode) & 0o077 or info.st_size > 2_000_000):
+                    raise ValueError("unsafe observation state")
+                saved = json.load(source)
+            if saved.get("version") != 1 or not isinstance(saved.get("events"), dict):
+                raise ValueError("invalid observation state")
+            yield saved["events"], _journal_text(saved["events"])
+    finally:
+        os.close(fd)
+
+
+def _journal_text(events):
+    return json.dumps({"version": 1, "events": events}, ensure_ascii=False, sort_keys=True)
+
+
+def save_events(path, events, previous):
+    text = _journal_text(events)
+    if text == previous:
+        return text
+    fd, name = tempfile.mkstemp(prefix=f".{path.stem}-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as target:
+            target.write(text)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(name, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+    return text
+
+
 class Monitor:
     """A durable event claim bounds each episode to one Mail send attempt."""
 
@@ -145,61 +201,19 @@ class Monitor:
 
     @contextmanager
     def _transaction(self):
-        import fcntl  # The worker is legacy POSIX-only; keep global/Windows imports safe.
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        lock = self.path.with_suffix(".lock")
-        fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        try:
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
-                raise ValueError("unsafe provider-stall lock")
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            try:
-                state_fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
-            except FileNotFoundError:
-                self._rows = {}
-                self._saved_text = None
-            else:
-                with os.fdopen(state_fd, encoding="utf-8") as source:
-                    info = os.fstat(source.fileno())
-                    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                            or stat.S_IMODE(info.st_mode) & 0o077 or info.st_size > 2_000_000):
-                        raise ValueError("unsafe provider-stall state")
-                    saved = json.load(source)
-                if saved.get("version") != 1 or not isinstance(saved.get("events"), dict):
-                    raise ValueError("invalid provider-stall state")
-                self._rows = saved["events"]
-                self._saved_text = json.dumps(saved, ensure_ascii=False, sort_keys=True)
+        with locked_events(self.path) as (rows, previous):
+            self._rows = rows
+            self._saved_text = previous
             yield
-        finally:
-            os.close(fd)
 
     def _save(self):
-        text = json.dumps({"version": 1, "events": self._rows}, ensure_ascii=False, sort_keys=True)
         # Publish even when another monitor saved the same state in between.
         self._views = {
             (row["name"], row["generation"]): {
                 key: row[key] for key in ("kind", "since", "error", "notification_status")
             } for row in self._rows.values() if row["phase"] == "stalled"
         }
-        if text == self._saved_text:
-            return
-        fd, name = tempfile.mkstemp(prefix=".provider-stalls-", dir=self.path.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as target:
-                target.write(text)
-                target.flush()
-                os.fsync(target.fileno())
-            os.replace(name, self.path)
-            directory = os.open(self.path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-                self._saved_text = text
-            finally:
-                os.close(directory)
-        finally:
-            if os.path.exists(name):
-                os.unlink(name)
+        self._saved_text = save_events(self.path, self._rows, self._saved_text)
 
     def tick(self, samples, *, now=None):
         now = datetime.now(timezone.utc).timestamp() if now is None else now

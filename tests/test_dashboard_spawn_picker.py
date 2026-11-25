@@ -17,7 +17,7 @@ def run(body):
     picker = re.search(r'/\* Catalog-only model choices.*?\n\}\);', HTML, re.S).group()
     functions = ['normalizeSpawnProviders', 'spawnSelectedModel', 'spawnSelectedHarness',
                  'spawnEffortInfo', 'resolveSpawnEffort', 'spawnEffectiveEffort',
-                 'spawnSelectedProviderCapabilities', 'spawnProviderRequirementsMissing',
+                 'spawnSelectedProviderCapabilities', 'spawnProviderStandalone', 'spawnProviderRequirementsMissing',
                  'spawnProviderAcceptsResources', 'buildSpawnPayload']
     script = picker + '\nconst SpawnPicker=module.exports;\n' + '\n'.join(function(n) for n in functions)
     script += """

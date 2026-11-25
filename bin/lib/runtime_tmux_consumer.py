@@ -17,7 +17,8 @@ def main(argv):
             with Path(argv[2]).open(encoding='utf-8') as handle:
                 text=handle.read(262145)
             if not text.strip() or len(text.encode('utf-8'))>262144:return 2
-            return {'accepted':0,'refused':3,'unknown':4}[consumer.submit_text(argv[1],text)]
+            result = consumer.submit_text(argv[1], text, on_wait=lambda reason: print(reason, file=sys.stderr))
+            return {'accepted':0,'refused':3,'unknown':4}[result]
         if argv and (argv[0] in ('attach','attach-session') or (argv[0]=='new-session' and '-A' in argv)):
             if argv[0]=='new-session' and consumer.transport.identity is None:
                 api['private_directory'](consumer.transport.path.parent,create=True)
