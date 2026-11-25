@@ -66,6 +66,20 @@ def test_single_effort_is_the_only_offered_effort():
         "low", "medium", "high"]
 
 
+def test_xhigh_is_offered_only_for_families_with_that_variant():
+    catalog = gemini._catalog_item(FALLBACK + [
+        "gemini-4-neon-xhigh", "gemini-4-neon-low",
+        "gemini-4-carbon-high", "gemini-pro-orchestrator", "xhigh",
+    ])
+    assert catalog["efforts"] == ["low", "medium", "high", "xhigh"]
+    levels = catalog["model_efforts"]
+    assert levels["gemini-4-neon-low"] == levels["gemini-4-neon-xhigh"] == ["low", "xhigh"]
+    assert levels["gemini-4-carbon-high"] == ["high"]
+    assert "xhigh" not in levels["gemini-3.8-flash-high"]
+    assert "xhigh" not in levels["gemini-pro-orchestrator"]
+    assert levels["xhigh"] == ["low", "medium", "high"]
+
+
 def test_cache_coalesces_concurrent_queries_and_override_skips_cli(monkeypatch, tmp_path):
     counter = tmp_path / "calls.txt"
     monkeypatch.setenv("AGY_TEST_COUNTER", str(counter))

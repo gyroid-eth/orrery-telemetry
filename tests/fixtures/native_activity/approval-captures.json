@@ -1,0 +1,68 @@
+{
+  "source": "Installed interactive TUI captures from isolated tmux (macOS). History and pane padding cropped, scratch paths redacted.",
+  "cases": [
+    {
+      "id": "claude-standard",
+      "program": "claude",
+      "version": "2.1.332",
+      "active": "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Create file\n fixture.txt\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n  1 Fixture text\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n Do you want to create fixture.txt?\n ❯ 1. Yes\n   2. Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)\n   3. No\n\n Esc to cancel · Tab to amend\n",
+      "dismissed": "\n\n\n\n\n\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  ⏸ manual mode on · ? for shortcuts · ← for agents\n"
+    },
+    {
+      "id": "claude-hook",
+      "program": "claude",
+      "version": "2.1.332",
+      "active": "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Bash command\n Print fixture text\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n printf fixture\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n │ Hook PreToolUse:Bash requires confirmation for this command:\n │ Fixture hook review [settings]\n settings.json to update hooks\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend\n",
+      "dismissed": "\n\n\n\n\n\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  ⏸ manual mode on · ? for shortcuts · ← for agents\n"
+    },
+    {
+      "id": "claude-long-hook",
+      "program": "claude",
+      "version": "2.1.332",
+      "active": " │ printf fixture68\n │ printf fixture69\n │ printf fixture70\n │ printf fixture71\n │ printf fixture72\n │ printf fixture73\n │ printf fixture74\n │ printf fixture75\n │ printf fixture76\n │ printf fixture77\n │ printf fixture78\n │ printf fixture79\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n │ Hook PreToolUse:Bash requires confirmation for this command:\n │ Fixture hook review [settings]\n settings.json to update hooks\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n ↑ 72 more lines\n Esc to cancel · Tab to amend\n",
+      "dismissed": "  ⎿  $ printf fixture0\n     printf fixture1…\n  ⎿  Interrupted · What should Claude do instead?\n\n\n\n\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  ⏸ manual mode on · ? for shortcuts · ← for agents\n"
+    },
+    {
+      "id": "claude-mcp",
+      "program": "claude",
+      "version": "2.1.332",
+      "active": "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Tool use\n fixture — Probe Tool: (MCP)\n\n About the fixture — Probe Tool:\n │ Fixture tool\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again for fixture — Probe commands in /fixture/workspace\n   3. No\n\n Esc to cancel · Tab to amend\n",
+      "dismissed": "\n\n\n\n\n\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  ⏸ manual mode on · ? for shortcuts · ← for agents\n"
+    },
+    {
+      "id": "codex-command",
+      "program": "codex",
+      "version": "0.167.2",
+      "active": "\n  Would you like to run the following command?\n\n  Reason: Synthetic approval fixture\n\n  $ /usr/bin/printf ORRERY_FIXTURE\n\n\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\n\n  Press enter to confirm or esc to cancel\n",
+      "dismissed": "\n\n› Ask Codex to do anything\n\n  GPT-5.4 medium · /fixture/workspace · ← for agents\n"
+    },
+    {
+      "id": "dsh-command",
+      "program": "dsh",
+      "version": "0.16.1",
+      "active": "\n    ────────────────────────────────────────── Awaiting approval · bash ──────────────────────────────────────────\n\n      printf fixture\n    Allow this operation with danger-full-access permissions: Show fixture approval\n    Allow this operation?\n\n\n    ❯1. Yes, allow once\n     2. No\n\n    ↑/↓ select · Enter confirm · Esc reject\n                                                                                                       60/131k 0.0%\n   deepseek-v4.1-flash · high · cache 0.0% · ≈ unpriced 12 tok · work                            ctx 0.0% (60/131k)\n   esc to interrupt\n",
+      "dismissed": "     instead of working around it\n     ctrl+t for the full trajectory\n\n  ● Cancelled fixture r\n\n  ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n  ⌸ ❯                                                                                                              ⛶\n  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n                                                                                                       25/131k 0.0%\n   deepseek-v4.1-flash · high · cache 0.0% · ≈ unpriced 24 tok · work                            ctx 0.0% (25/131k)\n"
+    },
+    {
+      "id": "hermes-command",
+      "program": "hermes",
+      "version": "0.22.2",
+      "active": "╭────────────────────────────────────────────────╮\n│ ⚠️  Dangerous Command                          │\n│                                                │\n│ chmod 777 ./nonexistent-fixture                │\n│                                                │\n│ ❯ 1. Allow once                                │\n│   2. Allow for this session                    │\n│   3. Add to permanent allowlist                │\n│   4. Deny                                      │\n│                                                │\n│ world/other-writable permissions               │\n╰────────────────────────────────────────────────╯\n\n  💻 chmod 777 ./nonexistent-fixture  (  0.4s · ↓ 2 tok)\n  ↑/↓ to select, Enter to confirm  (299s)\n ☤ gpt-4o │ 12/128K │ [░░░░░░░░░░] 0% │ ◷ 0.3s │ ↑ 8 t/s │ 3s │ ⏱ 1s                   ─ Open the synthetic fixtur...\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n⚠ ❯\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n",
+      "dismissed": "\n⚠ Approval: chmod 777 ./nonexistent-fixture → denied\n  ┊ 💻 $         chmod 777 ./nonexistent-fixture  1.2s [You denied this command — it did not run.]\n ☤ gpt-4o │ ~181/128K │ [░░░░░░░░░░] ~0% │ ◷ 0.3s │ ↑ 8 t/s │ 4s │ ⏲ 2s │ ✓ 0s         ─ Open the synthetic fixtur...\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ Explain this error and how to fix it\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n"
+    },
+    {
+      "id": "agy-command",
+      "program": "agy",
+      "version": "1.5.16",
+      "active": "\nRequesting permission for:\n   /usr/bin/printf ORRERY_FIXTURE\n\nRun this command?\n> 1. Yes, run command\n  2. Yes, and always allow in this conversation for commands that start with '/usr/bin/printf'\n  3. Yes, and always allow for commands that start with '/usr/bin/printf' (Persist to settings.json)\n  4. No, cancel\n\n  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\nesc to cancel                                                                               auto · Gemini 4 Neon · low\n",
+      "dismissed": "● Ran (/usr/bin/printf ORRERY_FIXTURE) (ctrl+o to expand)\n\n  ⎿  Interrupted · What should Antigravity CLI do instead?\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n>\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n? for shortcuts                                                                             auto · Gemini 4 Neon · low\n"
+    },
+    {
+      "id": "agy-narrow-command",
+      "program": "agy",
+      "version": "1.5.16",
+      "active": "\nRequesting permission for:\n   /usr/bin/printf ORRERY_FIXTURE\n\nRun this command?\n> 1. Yes, run command\n  2. Yes, and always allow in this conversation for commands that start\nwith '/usr/bin/printf'\n  3. Yes, and always allow for commands that start with '/usr/bin/printf'\n(Persist to settings.json)\n  4. No, cancel\n\n  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\nesc to cancel                                   auto · Gemini 4 Neon · low\n",
+      "dismissed": "● Ran (/usr/bin/printf ORRERY_FIXTURE) (ctrl+o to expand)\n\n  ⎿  Interrupted · What should Antigravity CLI do instead?\n──────────────────────────────────────────────────────────────────────────\n>\n──────────────────────────────────────────────────────────────────────────\n? for shortcuts                                 auto · Gemini 4 Neon · low\n"
+    }
+  ]
+}

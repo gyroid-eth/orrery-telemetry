@@ -208,6 +208,10 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 
 ## GET `/api/spawn-names`
 
+API 49 は `GET /api/spawn-names` にハーネス別の `browser_modes` を追加します。起動時に `tools.browser_mode` へ `off`、`temporary`、`personal` のいずれかを指定します。従来の Browser 指定との併用はできません。
+
+API 49 は dsh・Hermes の子へ Chrome DevTools を渡せる起動フォルダを、`dirs` と同じ表記の `native_browser_dirs` で返します。スマホは選択したフォルダが含まれる場合に Browser を表示します。起動時にも設定を検証します。
+
 API33では `dynamic_models: true` / `model_source: server` の動的Localを追加します。pickerは設定した各endpointの `/v1/models` を明示取得し、静的検証・spawn POSTではmodel探索しません。各modelは生の `id`、任意の `display_name`、0始まり `url_index`、opaqueな `url_key`、`model_state`（`loaded` / `available` / `unloaded`）、`context` と由来 `context_source`（`server` / `override` / `default`）を持ちます。status欠損・未知の有効IDは許可し、明示unloadedだけ無効です。`Available` はロード済みの証明ではありません。URL別失敗は `endpoints[].reason` へ出し、取得失敗時に旧model行を現在値として返しません。URL・資格参照は公開catalogへ含めません。動的effortは未報告、helperはSame as mainです。実command生成・exact resumeでは選択URLだけを1回照合し、ID消失・明示unloaded・取得失敗を拒否します。server modelの継続lockではありません。
 
 API 27ではnative接続の`id`と`kind`を分けます。`id`は設定した接続先そのもの（例：`strata`と`strata-epyc`）、`kind`は`deepseek`または`strata`です。catalogが返した`id`を`POST /api/spawn`の`provider`へそのまま送り、選んだ`model`と`harness`も送ります。同じmodel IDでも接続IDが異なれば別の接続先です。`label`と`server`は表示用で、経路の判定には使いません。旧`deepseek`/`strata`はそのまま使えます。[複数接続の設定](configuration.md#native-connections)を参照してください。
@@ -775,6 +779,8 @@ taskの上書きだけを外す例（省略したrole・emoji・groupは維持�
 
 ## POST `/api/spawn`
 
+通常起動の Browser を外すには、既定の `base` のまま `tools.browser_off: true`（CLI の `--tools no-browser`）を指定します。ハーネスの標準の道具は使えます。`GET /api/spawn-names` の `supports_browser_off: true` で対応を確認できます。
+
 parent ありの Claude child:
 
 ```bash
@@ -887,7 +893,7 @@ Codex のモデル省略または `sol` で既定を変更した場合、preview
 }
 ```
 
-`standalone: true` では `parent` を空に固定し、`PARENT_AGENT` を subprocess environment から削除します。synthetic self-mail は作らず、task の先頭4000文字を launcher へ直接渡します。通常 child は parent を sender とする inbox message と CC audit trail を作り、登録 summary / launcher prompt は先頭80文字です。
+`standalone: true` では `parent` を空に固定し、`PARENT_AGENT` を subprocess environment から削除します。synthetic self-mail は作らず、task の先頭4000文字を launcher へ直接渡します。通常 child は parent を sender とする inbox message と、parent 自身への BCC の audit trail を作り（BCC には通知が出ないので、parent が自分の依頼で起こされない）、登録 summary / launcher prompt は先頭80文字です。
 
 Claude provider に `effort` を渡すと拒否します。Codex は正式な `gpt-*` IDをcacheにないという理由では拒否せず、明示 `AGENTSTACK_CODEX_MODELS` がある場合だけmembershipを制限します。UI はモデル別 effort 情報を候補表示と無指定時の既定に使い、明示 effort はそのまま Codex CLI へ渡して最終判定を任せます。無指定の model と effort は設定された既定を使い、未設定なら従来規則に従います。系統別の短縮名は新鮮な catalog の候補の最新版に追従し、新鮮な catalog に該当がなければ拒否し、未取得・期限切れでは同梱値を使います。Claude は local catalog の有無や期限とは独立して、正しい形式の正式IDを受け付けます。明示的な `AGENTSTACK_CLAUDE_MODELS` は厳格な許可リストとして扱い、不正な設定ではClaudeの起動を拒否します。Claude の固定既定は `claude-opus-5-5` で、許可リストから除外した状態でモデルを省略すると拒否します。別モデルへは置き換えません。詳細は [Claude model catalog](configuration.md#claude-model-catalog) を参照してください。
 

@@ -1,9 +1,11 @@
 """Current-user-only Windows state; no POSIX chmod approximation."""
 from __future__ import annotations
 
+import csv
 import ctypes
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -29,7 +31,16 @@ def powershell(script: str, **env: str) -> str:
 def current_sid() -> str:
     if sys.platform != 'win32':
         raise RuntimeError('This helper requires native Windows')
-    return powershell('[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
+    whoami = Path(os.environ['SystemRoot']) / 'System32/whoami.exe'
+    result = subprocess.run(
+        [str(whoami), '/user', '/fo', 'csv', '/nh'],
+        capture_output=True, text=True, encoding='mbcs', errors='replace',
+        timeout=15, check=True,
+    )
+    rows = list(csv.reader(result.stdout.splitlines()))
+    if len(rows) != 1 or len(rows[0]) != 2 or not re.fullmatch(r'S-1(?:-[0-9]+)+', rows[0][1]):
+        raise ValueError('Could not determine the SID of the current Windows user')
+    return rows[0][1]
 
 
 def reject_reparse(path: Path) -> None:

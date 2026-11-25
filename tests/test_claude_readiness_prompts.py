@@ -36,6 +36,17 @@ CHROME_PROMPT = """\
     Yes, use my browser
   Enter to confirm · Esc to keep browser tools off
 """
+CHROME_NOTICE = """\
+  Claude in Chrome
+  Claude can use Chrome through its extension: open sites, fill forms, take
+  screenshots, record GIFs, and read console logs and network requests.
+  Requires the Chrome extension. Get started at https://claude.ai/chrome
+  Claude Code asks before Claude browses, clicks, or types on a site, unless
+  your permission mode or a rule in /permissions answers for you. Sites you
+  approved in the extension don't carry over.
+  For more info, use /chrome or visit https://code.claude.com/docs/en/chrome
+  Enter to continue · Esc to close
+"""
 # Claude Code 2.1.289's first-run setup, captured 2026-10-04 in a HOME whose
 # ~/.claude.json has no hasCompletedOnboarding (theme already in settings.json).
 ONBOARDING_THEME = """\
@@ -90,7 +101,7 @@ UNKNOWN_CHOICE = """\
   Something new to decide
   ❯ 1. Option A
     2. Option B
-  Enter to confirm · Esc to cancel
+  Enter to confirm
 """
 LOADING = "Starting Claude Code…\n  loading plugins\n"
 PAD = "\n" * 30  # capture-pane pads to the window height
@@ -234,6 +245,30 @@ def test_chrome_question_also_leaves_a_reason_line(tmp_path):
     assert "[spawn_child] reason: Claude Code is asking a one-time question about Claude in Chrome." in result.stderr
 
 
+@pytest.mark.parametrize("screen,title", [
+    (CHROME_NOTICE, "Claude in Chrome"),
+    (CHROME_NOTICE.replace(" · ", "\u00a0·\u00a0"), "Claude in Chrome"),
+    (UNKNOWN_CHOICE.replace("Enter to confirm", "Enter to confirm · Esc to cancel"),
+     "Something new to decide"),
+], ids=["chrome-notice", "nonbreaking-spaces", "another-confirm-dialog"])
+def test_active_notice_footer_reports_the_heading_without_sending_a_key(tmp_path, screen, title):
+    result, calls, polls, incidents = _launch(tmp_path, [screen])
+    assert result.returncode != 0
+    assert polls == 1
+    assert _keys(calls) == []
+    assert f"one-time question ({title}); not answered by the launcher" in incidents
+    assert (
+        f"[spawn_child] reason: Claude Code is asking a one-time question ({title}). "
+        "Run 'claude' once in a terminal and answer it, then launch the child again."
+    ) in result.stderr
+
+
+def test_old_notice_footer_above_the_ready_prompt_is_not_active(tmp_path):
+    result, _, _, _ = _launch(tmp_path, [CHROME_NOTICE + READY])
+    assert result.returncode == 0, result.stderr
+    assert "one-time question" not in result.stderr
+
+
 def test_the_theme_screen_alone_is_not_mistaken_for_first_run_setup(tmp_path):
     """/theme opened by a user shows the same list but not the first-run
     heading; two cues are required."""
@@ -282,7 +317,7 @@ def test_a_leftover_trust_line_does_not_make_an_unknown_choice_a_trust_dialog(tm
               "  Something new to decide\n"
               "  \u276f No\n"
               "    Yes\n"
-              "  Enter to confirm \u00b7 Esc to cancel\n")
+              "  Enter to confirm\n")
     result, calls, polls, incidents = _launch(tmp_path, [screen])
     assert result.returncode != 0
     assert _keys_with_screens(tmp_path) == []
@@ -510,9 +545,10 @@ ANSWERED_ARGV_PROMPT = """\
 
 
 @pytest.mark.parametrize("glyph", ["●", "⏺"])
-def test_a_question_after_the_child_answered_its_prompt_does_not_remove_it(tmp_path, glyph):
+@pytest.mark.parametrize("notice", [RENDERER_QUESTION, CHROME_NOTICE], ids=["renderer", "chrome"])
+def test_a_question_after_the_child_answered_its_prompt_does_not_remove_it(tmp_path, glyph, notice):
     answered = ANSWERED_ARGV_PROMPT.replace("● ", glyph + " ")
-    result, calls, polls, incidents = _launch(tmp_path, [answered + RENDERER_QUESTION])
+    result, calls, polls, incidents = _launch(tmp_path, [answered + notice])
     assert result.returncode == 0, result.stderr
     assert _keys(calls) == []
     assert not any(c.startswith("kill-session") for c in calls)
@@ -532,7 +568,7 @@ def test_the_renderer_question_before_any_answer_stops_with_a_reason(tmp_path):
     assert result.returncode != 0
     assert _keys(calls) == []
     assert polls == 1
-    assert "about the fullscreen renderer; not answered by the launcher (Probe-Curie)" in incidents
+    assert "one-time question (Try the new fullscreen renderer?); not answered by the launcher (Probe-Curie)" in incidents
     assert ("[spawn_child] reason: Claude Code is asking a one-time question (Try the new "
             "fullscreen renderer?). Run 'claude' once in a terminal and answer it, then "
             "launch the child again.") in result.stderr
@@ -558,4 +594,4 @@ def test_a_bullet_inside_the_echoed_prompt_is_not_an_answer(tmp_path, glyph):
     assert result.returncode != 0
     assert _keys(calls) == []
     assert "has answered its first prompt" not in result.stderr
-    assert "about the fullscreen renderer; not answered by the launcher" in incidents
+    assert "one-time question (Try the new fullscreen renderer?); not answered by the launcher" in incidents

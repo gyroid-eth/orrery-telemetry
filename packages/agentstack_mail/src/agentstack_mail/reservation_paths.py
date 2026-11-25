@@ -411,14 +411,15 @@ def reservation_scopes(
     """Resolve wildcard directory aliases, including future files below links.
 
     A changing/too-wide scope is unknown, never silently nonconflicting. This
-    check reads directory metadata only and bounds both entries and duration.
+    check reads directory metadata only and bounds entries and active CPU
+    time. A scheduler pause cannot exhaust the budget of a small scope.
     """
     if not path.is_glob:
         return [path]
     prefix = Path(path.prefix or "/")
     parts = Path(path.value).relative_to(prefix).parts
     result = [path]
-    deadline = time.monotonic() + 0.25
+    deadline = time.thread_time() + 0.25
     steps = 0
     visited: set[tuple[str, int]] = set()
 
@@ -427,7 +428,7 @@ def reservation_scopes(
         steps += 1
         if step:
             step()
-        if steps > 1000 or time.monotonic() >= deadline:
+        if steps > 1000 or time.thread_time() >= deadline:
             raise ReservationError("GLOB_SCOPE_UNKNOWN")
         canonical = _canonical(directory)
         key = (str(canonical), index)
@@ -450,7 +451,7 @@ def reservation_scopes(
                     steps += 1
                     if step:
                         step()
-                    if steps > 1000 or time.monotonic() >= deadline:
+                    if steps > 1000 or time.thread_time() >= deadline:
                         raise ReservationError("GLOB_SCOPE_UNKNOWN")
                     if segment == "**" or component_matches(
                         entry.name, segment, fold=fold, unicode_rule=unicode_rule
@@ -480,12 +481,12 @@ def paths_overlap(left: ReservationPath, right: ReservationPath) -> bool:
     if left.kind != "filesystem" or right.kind != "filesystem":
         return False
     left_aliases, right_aliases = reservation_scopes(left), reservation_scopes(right)
-    deadline = time.monotonic() + 0.25
+    deadline = time.thread_time() + 0.25
     count = 0
     for a in left_aliases:
         for b in right_aliases:
             count += 1
-            if count > 10000 or time.monotonic() >= deadline:
+            if count > 10000 or time.thread_time() >= deadline:
                 raise ReservationError("GLOB_SCOPE_UNKNOWN")
             if _lexical_overlap(a, b):
                 return True

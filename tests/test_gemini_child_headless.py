@@ -129,7 +129,7 @@ def test_child_mail_treats_missing_final_result_as_unknown(tmp_path) -> None:
 def test_child_prompts_anchor_resources_to_the_worktree() -> None:
     for path in (CHILD, PREREGISTERED):
         text = path.read_text(encoding="utf-8")
-        assert '"$WORKTREE_DIR" "$SOURCE_REPO"' in text
+        assert 'workspace_root = Path(worktree).resolve(strict=False)' in text
         assert "Declared resources (worktree-anchored):" in text
         assert "Do not search the source checkout, $HOME, or parent directories" in text
         assert "If a declared resource is absent from this worktree" in text

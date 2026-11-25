@@ -209,6 +209,10 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 
 ## GET `/api/spawn-names`
 
+API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
+
+API 49 also adds `native_browser_dirs`, a list of launch folders from `dirs` whose Chrome DevTools definition can be copied into a dsh or Hermes child. The phone shows Browser for these harnesses when the selected folder appears in the list. The launcher checks the settings again at launch.
+
 API33 adds dynamic Local providers with `dynamic_models: true` / `model_source: server`. The picker explicitly reads each configured endpoint's `/v1/models`; static validation and spawn POST do not discover models. Each model retains its raw `id`, optional `display_name`, zero-based `url_index`, opaque `url_key`, `model_state` (`loaded`, `available`, `unloaded`), `context` and `context_source` (`server`, `override`, `default`). Missing/unknown status permits a valid ID; only explicit unloaded disables it. `Available` is not a loaded claim. Per-URL failure appears in `endpoints[].reason`; a failed discovery publishes no stale model rows. URLs and credential references are not in the public catalog. Dynamic effort is unreported and helper is Same as main. Actual command generation/exact resume makes one selected-URL lookup and refuses ID absence, explicit unloaded or lookup failure. It does not continuously lock the server model.
 
 API 27 separates a native connection's `id` from its `kind`. The `id` identifies the configured connection (for example, `strata` and `strata-epyc`); `kind` is `deepseek` or `strata`. Send the catalog's exact `id` as `provider` in `POST /api/spawn`, together with the selected `model` and `harness`. Equal model IDs on different connections still select different servers. `label` and `server` are display metadata, never routing selectors. Existing `deepseek`/`strata` IDs remain valid. See [multiple connections](configuration.en.md#native-connections).
@@ -772,6 +776,8 @@ Clear only the task override (omitted role, emoji, and group retain their values
 
 ## POST `/api/spawn`
 
+To start a standard child with the browser integration off, keep the default `base` and send `tools.browser_off: true` (`--tools no-browser` on the CLI). Built-in harness tools remain available. `GET /api/spawn-names` advertises this option with `supports_browser_off: true`.
+
 Claude child with a parent:
 
 ```bash
@@ -883,7 +889,7 @@ Success:
 }
 ```
 
-With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a CC audit trail; the registration summary / launcher prompt uses the first 80 characters.
+With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a BCC audit copy for the parent (BCC raises no notification, so the parent is not woken by its own task); the registration summary / launcher prompt uses the first 80 characters.
 
 Claude rejects `effort`. Codex accepts formal `gpt-*` IDs even when absent from cache; only an explicit `AGENTSTACK_CODEX_MODELS` restricts membership. The UI uses per-model effort metadata for choices and omitted defaults; explicit effort is passed through to Codex CLI for final validation. Omitted model and effort use the configured defaults, or the built-in policy when unset. Family aliases follow the newest eligible version in the fresh catalog, rejecting an absent family in a fresh catalog and using bundled fallback for unavailable or stale catalogs. Claude accepts well-formed formal IDs independently of local catalog membership or expiry; an explicit `AGENTSTACK_CLAUDE_MODELS` remains a strict allow-list, and invalid configuration blocks Claude launch. The fixed Claude default is `claude-opus-5-5`; it is rejected if an override excludes it and the request omits a model. Orrery never substitutes another model. See [Claude model catalog](configuration.en.md#claude-model-catalog).
 

@@ -133,6 +133,7 @@ FILES=(
   "bin/agentstack-gemini-stream"
   "hooks/spawn_gemini_child.sh"
   "hooks/spawn_gemini_preregistered.sh"
+  "hooks/gemini_interactive.py"
   "dashboard/provider_server.py"
   "dashboard/gemini_provider_runtime.py"
   "dashboard/assets/google.svg"

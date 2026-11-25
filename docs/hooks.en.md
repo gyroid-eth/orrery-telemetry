@@ -184,7 +184,7 @@ It uses event watching when `fswatch` is available and two-second polling otherw
 
 When updating the guard scheme, stop the old watcher and its delivery workers through their usual manager before starting the new watcher. Old guard files are not removed automatically; do not delete locks while old workers still run.
 
-The delivery target is only the tmux session whose name exactly matches the agent. After sending notification text literally, it submits with a separate `C-m` call, avoiding bare shells and unrelated sessions. tmux calls run in timeout-controlled workers so a server stall cannot stop the entire watcher.
+The delivery target is only the tmux session whose name exactly matches the agent. After sending notification text literally, it submits with a separate `C-m` call, avoiding bare shells and unrelated sessions. tmux calls run in timeout-controlled workers so a server stall cannot stop the entire watcher. On the third deferred attempt for the same notification, the watcher logs the recipient, message ID and reason. It logs changes in reason on subsequent attempts.
 
 ## Differences for Codex
 
