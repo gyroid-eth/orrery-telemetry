@@ -87,9 +87,8 @@ def test_preflight_aggregates_commands_os_and_install_target(tmp_path):
     result = _run(env, "--dry-run")
 
     assert result.returncode != 0
-    assert "preflight failed with 4 problem(s)" in result.stderr
-    assert "git is required" in result.stderr
-    assert "tmux is required" in result.stderr
+    assert "preflight failed with 3 problem(s)" in result.stderr
+    assert "Missing required tools: curl git tmux" in result.stderr
     assert "operating system 'FreeBSD' is unsupported" in result.stderr
     assert "exists but is not a directory" in result.stderr
     assert "Tier1 will show" not in result.stdout
@@ -99,6 +98,8 @@ def test_preflight_reports_incompatible_python_with_install_hint(tmp_path):
     fake_bin = _minimal_path(tmp_path, os_name="Linux")
     _write_command(fake_bin, "git", "#!/bin/sh\nexit 0\n")
     _write_command(fake_bin, "tmux", "#!/bin/sh\nexit 0\n")
+    _write_command(fake_bin, "curl", "#!/bin/sh\nexit 0\n")
+    _write_command(fake_bin, "xz", "#!/bin/sh\nexit 0\n")
     old_python = _write_command(
         fake_bin,
         "python-old",
@@ -120,6 +121,7 @@ esac
     assert "AGENTSTACK_PYTHON must be Python 3.11 or newer" in result.stderr
     assert "found 3.9.18" in result.stderr
     assert "Install a current Python" in result.stderr
+    assert "sudo apt install -y python3" in result.stderr
 
 
 def test_preflight_os_escape_hatch_is_individual(tmp_path):
@@ -132,8 +134,7 @@ def test_preflight_os_escape_hatch_is_individual(tmp_path):
     assert result.returncode != 0
     assert "OS check skipped by AGENTSTACK_PREFLIGHT_SKIP_OS=1" in result.stdout
     assert "unsupported" not in result.stderr
-    assert "git is required" in result.stderr
-    assert "tmux is required" in result.stderr
+    assert "Missing required tools: curl git tmux" in result.stderr
 
 
 class _OccupiedPort(http.server.BaseHTTPRequestHandler):
@@ -224,8 +225,8 @@ def _python_with_broken_loopback(
 
 def _env_with_working_deps(tmp_path: pathlib.Path) -> dict[str, str]:
     fake_bin = _minimal_path(tmp_path, os_name="Linux")
-    _write_command(fake_bin, "git", "#!/bin/sh\nexit 0\n")
-    _write_command(fake_bin, "tmux", "#!/bin/sh\nexit 0\n")
+    for name in ("curl", "git", "tmux"):
+        _write_command(fake_bin, name, "#!/bin/sh\nexit 0\n")
     return _base_env(tmp_path, fake_bin)
 
 

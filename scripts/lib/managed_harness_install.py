@@ -87,9 +87,10 @@ def save(path, value):
     path.chmod(0o600)
 
 
-def run(argv, *, cwd, env):
-    return subprocess.run(argv, cwd=cwd, env=env, check=True, capture_output=True,
-                          text=True, timeout=1800).stdout.strip()
+def run(argv, *, cwd, env, progress=False):
+    result = subprocess.run(argv, cwd=cwd, env=env, check=True, capture_output=not progress,
+                            text=True, timeout=1800)
+    return result.stdout.strip() if result.stdout is not None else ''
 
 
 def environment(root):
@@ -246,21 +247,28 @@ def _hermes_local_source(root, env):
 
 def install_hermes(repo, root, python, cache=None):
     env = environment(root)
+    env['PYTHONUNBUFFERED'] = '1'
     save(root / 'config.yaml', {'auth': {'adopt_external_logins': False}, 'updates': {'check': False},
          'telemetry': {'shared_metrics': {'enabled': False, 'send': False}}})
     source = root / 'source'
     if cache:
         # Explicit cache failures remain failures; do not search or fetch.
+        print('Hermes: copying the pinned source from the local cache.', flush=True)
         run(['git', 'clone', '--no-checkout', str(Path(cache) / 'hermes-agent'), str(source)], cwd=root, env=env)
     else:
         local = _hermes_local_source(root, env)
         if local:
             # Preserve release tags/history for upstream version gates, without
             # copying dirty worktree files or sharing the donor's object files.
+            print('Hermes: copying an existing managed source.', flush=True)
             run(['git', 'clone', '--no-checkout', '--no-hardlinks', str(local), str(source)], cwd=root, env=env)
             run(['git', 'remote', 'set-url', 'origin', HERMES_URL], cwd=source, env=env)
         else:
-            run(['git', 'clone', '--no-checkout', HERMES_URL, str(source)], cwd=root, env=env)
+            print(f'Hermes: fetching only the pinned commit {HERMES_COMMIT[:12]} from GitHub.', flush=True)
+            run(['git', 'init', '--quiet', str(source)], cwd=root, env=env)
+            run(['git', 'remote', 'add', 'origin', HERMES_URL], cwd=source, env=env)
+            run(['git', 'fetch', '--depth=1', '--no-tags', '--progress', 'origin', HERMES_COMMIT],
+                cwd=source, env=env, progress=True)
     run(['git', 'checkout', '--detach', HERMES_COMMIT], cwd=source, env=env)
     if run(['git', 'rev-parse', 'HEAD'], cwd=source, env=env) != HERMES_COMMIT:
         raise ValueError('Hermes commit mismatch')
@@ -279,9 +287,10 @@ def install_hermes(repo, root, python, cache=None):
     # PM rejects --without combined with --extra. First prepare its default
     # closure and persist the optional-tool opt-outs, then add the provider SDKs
     # before publishing the fixed environment used by every child.
+    print('Hermes: installing the managed runtime and provider dependencies.', flush=True)
     for arguments in (['--without', 'agent-browser', '--without', 'cua-driver'], ['--extra', 'anthropic', '--extra', 'exa']):
         ca.verify_inputs(source, policy, 'after')
-        run([python, '-m', 'pm.cli', 'install', *arguments], cwd=source, env=env)
+        run([python, '-m', 'pm.cli', 'install', *arguments], cwd=source, env=env, progress=True)
         ca.verify_inputs(source, policy, 'after')
     key = hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
     install = root / 'installs' / key
@@ -291,6 +300,7 @@ def install_hermes(repo, root, python, cache=None):
         raise ValueError('Hermes PM did not publish a committed runtime')
     paths = json.loads(run([str(generation / 'bin/python'), '-I', '-B', '-c', HERMES_CA_PROBE_SCRIPT], cwd=source, env=env))
     proof = ca.runtime_evidence(repo, root, source, generation, target, paths)
+    print('Hermes: building the terminal UI.', flush=True)
     tui = hermes_tui().build(root, source, target, env, run)
     print('Hermes: existing manual homes/logins are untouched; no credentials were installed.')
     return {'hermes_source': str(source), 'managed_root': str(root), 'hermes_executable': str(executable),
@@ -393,7 +403,7 @@ def provision(repo, install, harness, choice='keep', node='', python=sys.executa
                        'hermes_commit': HERMES_COMMIT if harness == 'hermes' else None}
             validate(repo, harness, receipt)
             save(root / OWNER, receipt)
-        except Exception:
+        except (Exception, KeyboardInterrupt):
             shutil.rmtree(root)
             raise
     destination = install / 'integrations' / harness
@@ -410,7 +420,8 @@ def provision(repo, install, harness, choice='keep', node='', python=sys.executa
             print('Managed dsh effort capabilities unknown; runtime defaults remain available.')
     save(base / 'current.json', {'generation': root.name, **receipt['details']})
     save(setting, {'enabled': True})
-    print(f'Managed {harness} installed; configure backend and Keychain service/account separately (no key installed).')
+    key_store = 'Keychain' if sys.platform == 'darwin' else 'Secret Service'
+    print(f'Managed {harness} installed; configure the backend and {key_store} reference separately (no key installed).')
 
 
 def main():

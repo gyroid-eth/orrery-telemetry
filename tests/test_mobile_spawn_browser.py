@@ -1,4 +1,5 @@
 """Mobile launch form and failure copy against a private browser fixture."""
+import json
 import pytest
 
 from dashboard.mobile_spawn import MobileSpawn
@@ -67,3 +68,70 @@ def test_browser_icon_opens_three_modes_and_posts_the_choice(phone):
     wait("document.querySelector('#spawn-notice').textContent.includes('is ready')")
     posted = [body for operation, body in state['calls'] if operation == 'spawn']
     assert posted[0]['browser_mode'] == 'temporary' and 'browser' not in posted[0]
+
+
+def test_switching_to_antigravity_hides_tools_and_clears_the_launch_selection(phone):
+    _, js, wait, state = phone
+    catalog = local_catalog()
+    catalog['browser_modes'] = {'hermes':['off','temporary','personal']}
+    catalog['providers'].append({
+        'id':'gemini', 'label':'Antigravity', 'efforts':['low','high'],
+        'capabilities':{'standalone':True, 'effort_required':True},
+        'models':[{'id':'gemini-fixture'}],
+        'harnesses':[{'id':'antigravity', 'available':True, 'default':True}],
+    })
+    open_local_editor(phone, lambda: catalog)
+    js("""document.querySelector('#spawn-browser').click();
+        document.querySelectorAll('#spawn-browser-menu button')[1].click();
+        document.querySelector('#spawn-model-chip').click();
+        document.querySelector('#spawn-provider-tabs [aria-label=Antigravity]').click();""")
+    assert js("document.querySelector('#spawn-tools').hidden")
+    assert not js("document.querySelector('#spawn-browser-menu').matches(':popover-open')")
+    js("""const effort=document.querySelector('#spawn-effort');
+        effort.value='low';effort.dispatchEvent(new Event('change'));
+        document.querySelector('#spawn-settings-close').click();
+        document.querySelector('#spawn-editor').requestSubmit();""")
+    assert not js("Boolean(document.querySelector('#spawn-summary [aria-label^=Browser],#spawn-summary [aria-label^=Computer]'))")
+    state['spawn_receipt'] = {'state':'ready','name':'FixtureCurie'}
+    js("document.querySelector('#spawn-confirm').click()")
+    wait("document.querySelector('#spawn-notice').textContent.includes('is ready')")
+    [posted] = [body for operation, body in state['calls'] if operation == 'spawn']
+    assert posted['harness'] == 'antigravity' and posted['computer'] is False
+    assert 'browser' not in posted and 'browser_mode' not in posted
+
+
+@pytest.mark.parametrize('provider,harness', [
+    ('claude','claude-code'), ('codex','codex-cli'), ('deepseek','dsh'),
+    ('deepseek','hermes'), ('gemini','antigravity'),
+])
+def test_five_harnesses_offer_the_three_computer_use_modes(phone, provider, harness):
+    _, js, wait, state = phone
+    source = {
+        'dirs':[{'path':'/workspace','label':'Workspace'}],
+        'computer_modes':['off','view','control'],
+        'browser_modes':{'codex' if harness=='codex-cli' else harness:['off','temporary','personal']},
+        'providers':[{'id':provider,'label':provider,'capabilities':{'standalone':True},
+                      'models':[{'id':'fixture-model','default':True}],
+                      'harnesses':[{'id':harness,'available':True,'default':True}]}],
+    }
+    state['spawn_catalog'] = MobileSpawn(lambda:source, None, None).catalog('fixture', configurable=True)
+    js("OrreryMobileTerminal.close();document.querySelector('#mobile-new-agent').click()")
+    wait("!document.querySelector('#spawn-editor').hidden")
+    assert js("document.querySelector('#spawn-harness').value") == harness
+    for mode, label in [('off','Off'), ('control','Control'), ('view','View')]:
+        js("document.querySelector('#spawn-computer').click()")
+        wait("document.querySelector('#spawn-computer-menu').matches(':popover-open')")
+        assert js("[...document.querySelectorAll('#spawn-computer-menu button:not([hidden])')].map(b=>b.textContent)") == [
+            'Off','View','Control']
+        js("([...document.querySelectorAll('#spawn-computer-menu button')].find(b=>b.textContent==="+json.dumps(label)+")).click()")
+        assert js("document.querySelector('#spawn-computer').dataset.computerMode") == mode
+    js("""document.querySelector('#spawn-browser').click();
+        document.querySelectorAll('#spawn-browser-menu button')[1].click();
+        const task=document.querySelector('#spawn-task');task.value='Review the workspace.';
+        task.dispatchEvent(new Event('input'));document.querySelector('#spawn-editor').requestSubmit();""")
+    assert js("document.querySelector('#spawn-summary').textContent.includes('View')")
+    state['spawn_receipt'] = {'state':'ready','name':'FixtureCurie'}
+    js("document.querySelector('#spawn-confirm').click()")
+    wait("document.querySelector('#spawn-notice').textContent.includes('is ready')")
+    [posted] = [body for operation, body in state['calls'] if operation == 'spawn']
+    assert posted['computer'] == 'view' and posted['browser_mode'] == 'temporary'

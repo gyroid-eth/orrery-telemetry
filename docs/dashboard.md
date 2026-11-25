@@ -29,6 +29,12 @@ NETWORK は選択中の time window 外にある node を表示しないこと�
 
 ## DECK
 
+### 人の操作待ちを親へ通知（legacy）
+
+Claude、Codex CLI、dsh、Hermes、Antigravity の tmux 子が、対応する承認、フォルダー信頼、ログイン・初期設定、利用統計の同意、モデル選択、更新の確認画面で20秒以上待っていると、dashboard からその子の親へ ORRERY Mail が届きます。子の既存の Mail 資格を使い、本文には自動通知であることと画面種別を記します。引用は画面の固定文言に限ります。ブラウザを閉じていても動作します。
+
+同じ画面の通知は1回です。通常の作業や入力欄に戻ったことを確認すると、次の停止を通知できます。`AGENTSTACK_RUNTIME_DIR/human-waits.json` に送信の試行を記録するため、dashboard の再起動時や Mail の応答が不明なときも再送を避けます。親子関係と子の Mail 資格を確認してから送信します。
+
 ### Provider 停止の自動通知（legacy）
 
 稼働中の Codex CLI が `Selected model is at capacity. Please try a different model.` で入力待ちになったら、DECK に `MODEL CAPACITY`、NETWORK に `CAPACITY` を表示します。dashboard server はブラウザが閉じていても約5秒ごとに確認し、別の pane capture で2回確認した停止を親の `PARENT_AGENT` へ ORRERY Mail で通知します。差出人は停止した子の既存 identity、本文冒頭は「telemetry の自動検知」で、JST の検知時刻とエラー行を載せます。自動再開・モデル変更・pane へのキー送信はしません。

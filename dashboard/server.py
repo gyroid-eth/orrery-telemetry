@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 49
+API_GENERATION = 53
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -70,11 +70,12 @@ if __name__ == '__main__':
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
-    from dashboard import codex_models, mail_signals, provider_stalls, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
+    from dashboard import codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import codex_models
     import mail_signals
     import provider_stalls
+    import human_wait
     import harness_runtime
     import harness_helpers
     import harness_context
@@ -114,9 +115,10 @@ except ModuleNotFoundError:  # direct script execution
 
 
 try:
-    from dashboard import agent_card, legacy_http_admission, claude_history, agy_history
+    from dashboard import agent_card, agent_process, legacy_http_admission, claude_history, agy_history
 except ModuleNotFoundError:  # direct script execution
     import agent_card
+    import agent_process
     import legacy_http_admission
     import claude_history
     import agy_history
@@ -2124,7 +2126,41 @@ def _card_claude_screen_mode(screen_launch, definition, project):
     return None
 
 
-def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None):
+def _card_process_permissions(session, process_tree, program, kind):
+    @functools.cache
+    def read(pid):
+        return agent_process.argv(pid)
+
+    pid = _agent_process_pid(
+        session.get("pane_pid"), process_tree, program,
+        match=lambda pid, _name, _program: agent_process.matches_harness(read(pid), kind),
+    )
+    return agent_process.observe(pid, process_tree, kind, read=read)
+
+
+def _card_antigravity_permissions(plan, screen_launch, project, identity):
+    supplied = plan.get("tools")
+    spec = None
+    if isinstance(supplied, list) and all(isinstance(arg, str) for arg in supplied):
+        tools = _child_tools_module()
+        try:
+            spec = tools.normalize(tools=tools.parse_cli(supplied), platform="darwin")
+            tools.check_provider(spec, "gemini")
+        except tools.ToolsError:
+            spec = None
+    if spec is None:
+        return agent_card.antigravity_tool_permissions(None)
+    if (screen_launch and plan.get("screen_tmux") == identity
+            and screen_launch["project"] == project
+            and screen_launch["generation"] == plan.get("screen_generation")):
+        return agent_card.antigravity_tool_permissions(spec, screen_launch["computer_use"], screen_live=True)
+    mode = plan.get("screen_launch_mode")
+    if mode not in ("off", "view", "control"):
+        mode = tools.screen_mode(spec) or "off"
+    return agent_card.antigravity_tool_permissions(spec, mode)
+
+
+def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None, process_tree=None):
     name, program = row["name"], row.get("program")
     if program == "antigravity" and registration and _valid(name):
         children = Path(RUNTIME_DIR) / "child-agents"
@@ -2139,8 +2175,10 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                     "model_id": agent_card.native_model_id(status.get("model_id")) or plan.get("model"),
                     "effort": status.get("effort") or plan.get("effort"),
                     "act_state": status.get("activity"),
-                    "parent_state": "child", "parent_agent": state.get("parent_agent"),
-                    "harness_kind": "antigravity", "computer_use": None, "browser_use": None,
+                    "parent_state": "top" if plan.get("standalone") is True else "child",
+                    "parent_agent": state.get("parent_agent"),
+                    "harness_kind": "antigravity", **_card_antigravity_permissions(
+                        plan, screen_launch if row.get("running") else None, registration["project_key"], identity),
                     "ctx_window_tokens": None}
     kind = agent_card.HARNESS_KIND.get(program)
     cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
@@ -2234,13 +2272,14 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                         parent_state = "top"
                     elif state_parent == launch["parent_agent"] and state_parent:
                         parent, parent_state = state_parent, "child"
-                plan = launch.get("mcp_selection")
-                if isinstance(plan, dict):
+                selection = launch.get("tools")
+                if isinstance(selection, dict):
                     try:
-                        selection = launch["tools"]
                         spec = _child_tools_module().normalize(selection.get("base"), selection.get("tools"))
                     except (AttributeError, KeyError, ValueError, RuntimeError):
                         pass
+                plan = launch.get("mcp_selection")
+                if isinstance(plan, dict):
                     servers = plan.get("servers", {})
                     isolated = plan.get("inherit") is False and bool(spec and spec["base"] == "mail-only")
         computer, browser = agent_card.tool_permissions(
@@ -2263,6 +2302,11 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
             # An older conversation-only launch has no evidence for its tools.
             computer = browser = None
 
+    observed = agent_card.antigravity_tool_permissions(None) if kind == "antigravity" else {}
+    if (permission_reason == _PERMISSION_SETTINGS_MISSING and computer is None and browser is None
+            and row.get("running") is True and session.get("mail_disabled") != "1"):
+        observed = _card_process_permissions(session, process_tree, program, kind)
+
     if row.get("lifecycle") == "persistent":
         permission_reason = "Persistent agents cannot change permissions on resume"
     elif row.get("surface") == "codex-app" or program == "codex-app":
@@ -2275,7 +2319,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
            if permission_reason != _PERMISSION_UNSUPPORTED else {}),
         "cwd": cwd, "model_id": model, "effort": effort, "harness_kind": kind,
         "ctx_window_tokens": harness_context.window_tokens(row.get("ctx_window")) if kind else None,
-        "computer_use": computer, "browser_use": browser,
+        "computer_use": computer, "browser_use": browser, **observed,
         "parent_state": parent_state, "parent_agent": parent,
     }
 
@@ -2448,7 +2492,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 con.close()
 
     screen_launches = (_card_screen_launches() if any(
-        row["running"] and row.get("program") in ("", "claude", "claude-code") for row in rows) else {})
+        row["running"] and row.get("program") in ("", "claude", "claude-code", "antigravity") for row in rows) else {})
     annotations = _annotations()
     observed_now = time.time()
     claude_history_index = None
@@ -2479,7 +2523,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 registration = {"agent_id": registered["id"], "project_key": project_key,
                                 "program": registered["program"], "model": registered["model"]}
         row.update(_agent_card_fields(row, sessions.get(name, {}), runtime_by_name.get(name, {}),
-                                      registration, codex_catalog, screen_launch=screen_launches.get(name)))
+                                      registration, codex_catalog, screen_launch=screen_launches.get(name),
+                                      process_tree=process_tree))
         row.setdefault("permission_resume_supported", False)
         row.setdefault("permission_resume_reason", _PERMISSION_UNSUPPORTED)
         row["resume_capability"] = _resume_capability_for_row(
@@ -5498,7 +5543,8 @@ def _do_resume_native(session, program, *, open_terminal=None, replace_husk=Fals
 
 @functools.lru_cache(maxsize=4)
 def _gemini_interactive_module(path):
-    return _runtime_runpy.run_path(path, init_globals={"child_resume": _child_resume_module()})
+    return _runtime_runpy.run_path(path, init_globals={
+        "child_resume": _child_resume_module(), "child_tools": _child_tools_module()})
 
 
 def _gemini_resume_material(session):
@@ -5515,12 +5561,18 @@ def _gemini_resume_material(session):
         state = module.inspect_retained(runtime, session, agent_id=registration["agent_id"],
                                         project_key=registration["project_key"], program="antigravity")
         interactive = _gemini_interactive_module(str(helper))
+        interactive["launch_parent"](state)
         cwd = interactive["validate_plan"](state["gemini_launch"])
         sid = interactive["saved_conversation"](runtime, session, registration)
     except module.ResumeStateError as exc:
         raise _ResumeCapabilityError(exc.code, str(exc)) from None
     except (OSError, ValueError, KeyError, TypeError):
         raise _ResumeCapabilityError("config_unrestorable", "Antigravity launch settings are unavailable") from None
+    if state["gemini_launch"].get("standalone"):
+        try:
+            interactive["validate_standalone_config"](state["gemini_launch"])
+        except ValueError as exc:
+            raise _ResumeCapabilityError("config_unrestorable", str(exc)) from None
     if not isinstance(sid, str) or not re.fullmatch(
             r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", sid):
         raise _ResumeCapabilityError("no_history", "Antigravity conversation could not be verified")
@@ -5552,10 +5604,12 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False):
         mail_changed = True
         environment = {
             "AGENTSTACK_HOME": str(Path(HOOKS_DIR).parent), "AGENTSTACK_HOOKS_DIR": HOOKS_DIR,
+            "AGENTSTACK_WORKTREE_ROOT": _worktree_root(),
             "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": project,
+            **({"AGENTSTACK_PORT": str(PORT)} if state["gemini_launch"].get("standalone") is True else {}),
             "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
             "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
-            "AGENT_NAME": session, "PARENT_AGENT": state["parent_agent"],
+            "AGENT_NAME": session, "PARENT_AGENT": state.get("parent_agent", ""),
             "AGENTSTACK_RESERVED_IDENTITY": "1", "AGENTSTACK_GEMINI_INTERACTIVE": "1",
         }
         context = Path(HOOKS_DIR) / "project-context.sh"
@@ -6166,17 +6220,17 @@ def _block_text(content) -> list[tuple[str, str]]:
     return rows
 
 
-def _resume_registration(session: str, programs: set[str]) -> dict | None:
-    """Return the exact project registration, never an alias or another provider."""
+def _resume_registration(session: str, programs: set[str] | None) -> dict | None:
+    """Return the exact project registration, optionally restricted by program."""
 
-    include_profile = "claude" in programs or bool(programs.intersection(harness_runtime.HARNESSES))
+    include_profile = programs is not None and ("claude" in programs or bool(programs.intersection(harness_runtime.HARNESSES)))
     project_key = _project_key()
     if not project_key or not os.path.isfile(DB_PATH):
         return None
     if (index := _batched_registrations()) is not None:
         row = index.by_project.get((project_key, session))
         program = (row["program"] or "") if row else ""
-        if not row or program not in programs:
+        if not row or (programs is not None and program not in programs):
             return None
         claude = include_profile
         return {
@@ -6201,7 +6255,7 @@ def _resume_registration(session: str, programs: set[str]) -> dict | None:
     except sqlite3.Error:
         return None
     program = (row["program"] or "") if row else ""
-    if not row or program not in programs:
+    if not row or (programs is not None and program not in programs):
         return None
     return {
         "agent_id": int(row["id"]),
@@ -7550,6 +7604,7 @@ _rt_cache: dict[str, tuple[float, str, dict]] = {}
 _rt_lock = threading.Lock()
 # Kept separately so provider-specific evidence does not change runtime parsing.
 _provider_captures: dict[str, tuple[str, float, dict]] = {}
+_human_wait_captures: dict[str, tuple[str, float, dict]] = {}
 _provider_monitor = None
 _provider_thread = None
 _provider_stop = threading.Event()
@@ -7557,6 +7612,10 @@ _provider_stop = threading.Event()
 
 def _provider_generation(session: dict) -> str:
     return _runtime_generation(session.get("created"), session.get("session_id")) + ":" + str(session.get("pane_pid", 0))
+
+
+def _human_wait_generation(session: dict) -> str:
+    return _provider_generation(session) + ":" + str(session.get("server_pid", ""))
 
 
 def _provider_stall_view(name: str, session: dict):
@@ -7588,31 +7647,46 @@ def _stall_parent(name: str, generation: str) -> str:
 
 
 @_with_registration_batch
-def _provider_stall_samples():
+def _provider_stall_samples(human_samples=None):
     samples = []
     sessions = tmux_state()
     agents, _ = agentmail_state()
     tree = _process_tree_snapshot() if agents else None
     for name, session in sessions.items():
         agent = agents.get(name)
-        if not agent or agent.get("program") not in {"codex", "codex-cli"}:
+        program = agent.get("program") if agent else None
+        native = human_wait.PROGRAMS.get(program)
+        if not native or (native != "codex" and human_samples is None):
             continue
         try:
             if not _tmux_row_state(name, session, agent, tree)[2]:
                 continue
-            registration = _codex_registration(name)
+            parent = _stall_parent(name, _provider_generation(session))
+            human = human_samples is not None and parent and session.get("mail_disabled") != "1"
+            if not human and native != "codex":
+                continue
+            registration = (_codex_registration(name) if native == "codex"
+                            else _resume_registration(name, {program}))
             if not registration:
                 continue
-            _agent_runtime(name, session.get("created"), session.get("session_id"))
+            args = (name, session.get("created"), session.get("session_id"))
+            if program in harness_runtime.HARNESSES:
+                _native_context_runtime(*args, program)
+            else:
+                _agent_runtime(*args)
             with _rt_lock:
                 captured = _provider_captures.get(name)
+                observed = _human_wait_captures.get(name)
             generation = _runtime_generation(session.get("created"), session.get("session_id"))
-            if not captured or captured[0] != generation:
-                continue
-            parent = _stall_parent(name, _provider_generation(session))
-            samples.append(dict(name=name, agent_id=registration["agent_id"],
-                project_key=registration["project_key"], generation=_provider_generation(session),
-                parent=parent, capture_id=captured[1], evidence=captured[2]))
+            owner = dict(name=name, agent_id=registration["agent_id"],
+                         project_key=registration["project_key"], parent=parent)
+            if native == "codex" and captured and captured[0] == generation:
+                samples.append(dict(**owner, generation=_provider_generation(session),
+                                    capture_id=captured[1], evidence=captured[2]))
+            if human and observed and observed[0] == generation:
+                human_samples.append(dict(**owner, generation=_human_wait_generation(session),
+                                          program=program, capture_id=observed[1],
+                                          human_wait=observed[2].get(native)))
         except Exception:
             logging.warning("Provider-stop sample unavailable for %s", name)
     with _parent_env_lock:
@@ -7621,50 +7695,74 @@ def _provider_stall_samples():
     return samples
 
 
-def _provider_stall_send(row: dict, event: dict) -> str:
-    """Use the child's canonical owner material and the existing Mail helper."""
+def _child_observation_mail(row: dict, subject: str, body: str, *, human=False) -> str:
+    """Revalidate lineage and use the child's canonical owner material."""
     name, parent = row["name"], row["parent"]
     if not _valid(name) or not _valid(parent) or parent == name:
         return "parent_unverified"
     session = tmux_state().get(name)
-    if not session or _provider_generation(session) != row["generation"]:
+    generation = _human_wait_generation if human else _provider_generation
+    if not session or generation(session) != row["generation"] or (human and session.get("mail_disabled") == "1"):
         return "parent_unverified"
     env = _tmux(["show-environment", "-t", "=" + name, "PARENT_AGENT"]).strip()
     if env != "PARENT_AGENT=" + parent:
         return "parent_unverified"
-    registration = _codex_registration(name)
+    program = row["program"] if human else "codex"
+    registration = _resume_registration(name, {program}) if human else _codex_registration(name)
     if not registration or registration["agent_id"] != row["agent_id"] or registration["project_key"] != row["project_key"]:
         return "parent_unverified"
-    if not _resume_registration(parent, {"codex", "codex-cli", "claude", "claude-code"}):
+    if not _resume_registration(parent, None if human else {"codex", "codex-cli", "claude", "claude-code"}):
         return "parent_unverified"
     try:
         module = _child_resume_module()
         state = module._load_state(Path(RUNTIME_DIR) / "child-agents" / (name + ".json"))
         module._validate_identity(state, agent_name=name, agent_id=row["agent_id"],
-                                  project_key=row["project_key"], program="codex")
+                                  project_key=row["project_key"], program=program)
         token = _runtime_agent_token(name)
+        if human and state.get("launch_origin") != "child":
+            return "parent_unverified"
         if state.get("parent_agent") != parent or not token or not secrets.compare_digest(token, state.get("registration_token", "")):
             return "parent_unverified"
     except Exception:
         return "parent_unverified"
     result = _mcp_call("send_message", dict(project_key=row["project_key"],
         sender_name=name, sender_token=token, to=[parent], importance="high",
-        subject=f"{name} が model の容量エラーで停止", body_md=provider_stalls.message(event)), timeout=3)
+        subject=subject, body_md=body), timeout=3)
     # An HTTP failure may occur after Mail commits. Never create a second send.
     if result.get("ok"):
         return "sent"
     return "failed" if result.get("rejected") else "delivery_unknown"
 
 
+def _provider_stall_send(row: dict, event: dict) -> str:
+    return _child_observation_mail(row, f"{row['name']} が model の容量エラーで停止",
+                                   provider_stalls.message(event))
+
+
+def _human_wait_send(row, screen):
+    return _child_observation_mail(row, *screen.message(row["name"]), human=True)
+
+
 def _start_provider_stall_monitor():
     global _provider_monitor, _provider_thread
-    if GLOBAL_MODE or os.name == "nt" or _provider_monitor is not None:
+    if FRESH_MODE or GLOBAL_MODE or os.name == "nt" or _provider_monitor is not None:
         return
     _provider_stop.clear()
     _provider_monitor = provider_stalls.Monitor(Path(RUNTIME_DIR) / "provider-stalls.json",
         _provider_stall_send, session_names=mail_signals.session_names)
+    waits = human_wait.Monitor(Path(RUNTIME_DIR) / "human-waits.json", _human_wait_send)
+
+    def observe():
+        humans = []
+        capacity = _provider_stall_samples(humans)
+        try:
+            waits.tick(humans)
+        except (OSError, ValueError):
+            logging.exception("Human-wait observation failed")
+        return capacity
+
     _provider_thread = threading.Thread(target=_provider_monitor.run,
-        args=(_provider_stall_samples, _provider_stop), name="provider-stalls", daemon=True)
+        args=(observe, _provider_stop), name="provider-stalls", daemon=True)
     _provider_thread.start()
 
 
@@ -7675,7 +7773,7 @@ def _stop_provider_stall_monitor():
         _provider_thread.join(timeout=4)
 
 
-def _runtime_activity(text: str) -> tuple[str, str]:
+def _runtime_activity(text: str, *, unknown="wait") -> tuple[str | None, str]:
     """Read the current control block; historical controls never outrank it.
 
     An ordinary composer follows a live spinner too, so it is not by itself
@@ -7702,6 +7800,8 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     def mode_footer(line):
         # Claude's built-in footer also identifies a composer when no custom
         # statusLine is configured. Only recognize the known mode labels.
+        if line.strip() == "⏸ manual mode on · ? for shortcuts · ← for agents":
+            return True
         return re.fullmatch(
             r"\s*⏵⏵\s+(?:auto mode|accept edits) on"
             r"(?:\s+\(shift\+tab to cycle\))?(?:\s+·\s+.*)?\s*",
@@ -7709,7 +7809,7 @@ def _runtime_activity(text: str) -> tuple[str, str]:
 
     def chrome(line):
         row = line.strip()
-        return (not row or rule(row) or bool(_STATUSLINE_HINT_RE.search(row)) or usage_footer(row)
+        return (not row or rule(row) or bool(_STATUSLINE_HINT_RE.search(row)) or usage_footer(row) or mode_footer(row)
                 or row.startswith(("? for shortcuts", "⏵", "←", "→")))
 
     # Only a complete composer suffix can supersede old modal text. Numbered
@@ -7802,10 +7902,10 @@ def _runtime_activity(text: str) -> tuple[str, str]:
     if composer is not None:
         return "wait", ""
 
-    return current_modal_activity(current) or "wait", ""
+    return current_modal_activity(current) or unknown, ""
 
 
-def _parse_runtime(text: str) -> dict:
+def _parse_runtime(text: str, *, current_activity=None) -> dict:
     """ペイン文字列 → runtime 値。現在の操作領域から動作状態を読む。"""
     m = _CTX_RE.search(text)
     if m:                                   # Claude: "ctx: N% used"
@@ -7831,7 +7931,8 @@ def _parse_runtime(text: str) -> dict:
     # ペイン由来の実モデル (steruslineから抽出。末尾10行に限定して
     # スクロールバッファ内のコード片やテキスト中の誤マッチを避ける)
     pane_model = _pane_model_from(tail_for_model)
-    act, work_block = _runtime_activity(text)
+    act, work_block = current_activity or _runtime_activity(text)
+    act = act or "wait"
     work_secs = work_disp = last_disp = None
     if act == "work":
         t = _ACTIVE_T_RE.search(work_block)
@@ -7878,6 +7979,9 @@ def _prune_runtime_cache(sessions: dict[str, dict]) -> None:
             if generations.get(name) != generation:
                 _rt_cache.pop(name, None)
                 _provider_captures.pop(name, None)
+        for name, (generation, _, _) in list(_human_wait_captures.items()):
+            if generations.get(name) != generation:
+                _human_wait_captures.pop(name, None)
 
 
 _NATIVE_CONTEXT_CACHE = {}
@@ -7892,6 +7996,7 @@ def _native_context_runtime(session, created, session_id, program):
         if cached and cached[1] == generation and now - cached[0] < _RT_TTL:
             return cached[2]
     result = {'ctx_used': None, 'ctx_window': None, 'act_state': None}
+    evidence = None
     if _valid(session):
         try:
             capture = _tmux_run(['capture-pane', '-p', '-J', '-t', '=' + session, '-S', '-45'],
@@ -7899,6 +8004,7 @@ def _native_context_runtime(session, created, session_id, program):
             if capture.returncode == 0:
                 result = harness_context.parse_context(capture.stdout, program)
                 result['act_state'] = harness_activity.parse_activity(capture.stdout, program)
+                evidence = human_wait.observe(capture.stdout, program, result['act_state'])
                 phase = reader_compaction(capture.stdout, (program,))
                 if phase:
                     result["_reader_compaction"] = phase
@@ -7910,6 +8016,7 @@ def _native_context_runtime(session, created, session_id, program):
         if len(_NATIVE_CONTEXT_CACHE) > 512:
             _NATIVE_CONTEXT_CACHE.clear()
         _NATIVE_CONTEXT_CACHE[session] = (now, generation, result)
+        _human_wait_captures[session] = (generation[1], now, {program: evidence})
     return result
 
 
@@ -7931,11 +8038,15 @@ def _agent_runtime(
     out = {"ctx_used": None, "act_state": None, "ctx_window": None,
            "work_secs": None, "work_disp": None, "last_disp": None,
            "pane_model": None}
+    observed = {}
     if _valid(session):
         try:
             r = _tmux_run(['capture-pane', '-p', '-J', '-t', session, '-S', '-45'], capture_output=True, text=True, timeout=3)
             if r.returncode == 0:
-                out = _parse_runtime(r.stdout)
+                current = _runtime_activity(r.stdout, unknown=None)
+                out = _parse_runtime(r.stdout, current_activity=current)
+                observed = {program: human_wait.observe(r.stdout, program, current[0])
+                            for program in ("codex", "claude", "agy")}
                 with _rt_lock:
                     _provider_captures[session] = (generation, now, provider_stalls.observe(r.stdout))
             else:
@@ -7951,6 +8062,7 @@ def _agent_runtime(
                 if not out.get(key):
                     out[key] = previous[2].get(key)
         _rt_cache[session] = (now, generation, out)
+        _human_wait_captures[session] = (generation, now, observed)
     return out
 
 
@@ -8907,6 +9019,7 @@ def spawn_names_payload() -> dict:
         os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
     return {
         "computer_use": sys.platform == "darwin",
+        **({"computer_modes": ["off", "view", "control"]} if sys.platform == "darwin" and not FRESH_MODE else {}),
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
@@ -9493,15 +9606,19 @@ def _child_tools_module():
         os.path.join(HOOKS_DIR, "child_tools.py"),
         os.path.join(os.path.dirname(HERE), "hooks", "child_tools.py"),
     ):
-        if not os.path.isfile(path):
-            continue
-        spec = importlib.util.spec_from_file_location("agentstack_child_tools", path)
-        if spec is None or spec.loader is None:
-            continue
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        if os.path.isfile(path):
+            return _load_child_tools(path)
     raise RuntimeError("child_tools.py is unavailable")
+
+
+@functools.lru_cache(maxsize=4)
+def _load_child_tools(path):
+    spec = importlib.util.spec_from_file_location("agentstack_child_tools", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("child_tools.py is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _spawn_tools_args(payload: dict, provider: str, chrome: bool,
@@ -9797,6 +9914,8 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
 
 def _spawn_env_overrides(payload: dict, spec: SpawnLaunchSpec) -> dict[str, str]:
     env = dict(spec.launcher_env)
+    if spec.program == "antigravity":
+        env["AGENTSTACK_PORT"] = str(PORT)
     if "headless" in payload:
         env["AGENTSTACK_AUTO_OPEN_CHILD"] = "0" if payload["headless"] else "1"
     return env

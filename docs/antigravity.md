@@ -29,8 +29,8 @@ scripts/install-gemini-provider.sh --dry-run
 
 導入方法は使う経路で選びます。`--dry-run` は `agy` のない環境でも使えます。
 
-- Dashboard の **NEW AGENT** または委任する子だけで使う場合は
-  `scripts/install-gemini-provider.sh` を実行します。子の Mail MCP は作業用 worktree に用意されます。
+- Dashboard の [**NEW AGENT**](#dashboard-new-agent) または委任する子で使う場合は
+  `scripts/install-gemini-provider.sh` を実行します。Mail MCP は親なし起動では専用の起動設定に、委任起動では作業用 worktree に用意されます。
 - **`agent-start-gemini` で立てる親なし agent から Mail を送る場合**は、
   `scripts/install-gemini-provider.sh --dry-run --configure-mcp` で追加先を確認します。
   `~/.gemini/config/mcp_config.json` に `orrery-mail` を設定する変更を利用者に示し、
@@ -131,7 +131,17 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 ## Dashboard NEW AGENT
 
-追加 provider を導入して dashboard を再起動すると、NEW AGENT に Antigravity が出ます。macOS でカタログが standalone 対応を返す場合（API 50 以降）は、親を選ばず対話型で起動できます。親なし起動では作業フォルダーに Git 管理外の場所も選べます。旧世代のカタログと Linux／WSL では、Dashboard からは親を選んで委任起動します。
+[追加 provider を導入](#install-the-optional-provider-payload)して Dashboard を再起動すると、**NEW AGENT** に Antigravity が出ます。
+macOS でカタログが親なし起動に対応している場合（API 50 以降）は、親を選ばず、
+指定したフォルダで対話型 agent を起動できます。Git を使っていないフォルダも選べます。
+最初の task は CLI に一度だけ渡り、Mail、Reader、履歴からの Resume を使えます。
+ORRERY の Mail と hook の設定は起動ごとの専用ディレクトリに置き、終了時に削除します。
+選んだフォルダと個人設定には起動用の設定を書き込みません。
+Linux／WSL や、カタログが親なし起動に対応していない場合は、親を選んで委任起動します。
+
+API 53 では macOS の **Computer use** で Off／View／Control を選べます。
+**Browser** はカタログが示す利用可能なモードから選べます。
+[画面操作の前提と設定](computer-use.md)と[起動 API](api.md#get-apispawn-names)を参照してください。
 
 ![NEW AGENT with the Antigravity tab selected: the resources row sits under the task, and the footer explains what is still required](images/new_agent_capabilities_dark.png)
 
@@ -139,9 +149,10 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 起動条件は ORRERY Mail の登録前に確認します。
 
-- 委任起動では親のローカルの owner 資格が必要です。
-- 委任起動と、親なしで Isolation を選んだ場合は Git repository と有効な worktree base（既定は `HEAD`）が必要です。
-- `agy`、`tmux`、選択した Python、adapter hook、provider helper を利用できるようにします。
+- 委任起動には、親の agent とそのローカルの owner 資格が必要です。
+- 委任起動と、親なしで Isolation を選んだ場合は、Git リポジトリ内のフォルダと
+  コミットに解決できる worktree base（既定は `HEAD`）が必要です。
+- `agy`、`tmux`、選択された Python、adapter hook、Gemini provider の helper が必要です。
 - `AGENTSTACK_GEMINI_MODELS` を明示した場合、モデルはその許可リストに限定されます。
   未設定なら、同梱の `gemini-3.8-flash-{high,medium,low}` と `agy models` が返した有効な
   Gemini ID を表示します。モデルの取得は起動前の検査と同じ方法で `agy` を探すため、
@@ -173,20 +184,21 @@ Engine and isolation rules:
   or `xhigh` where the catalog lists that variant), and the server
   rejects a request without one (`effort required for provider gemini`). The
   CLI launchers' `high` fallback is not applied to Dashboard launches.
+- **委任起動は isolated worktree を使います。** macOS の親なし起動で worktree を作るには、
+  Isolation を選びます。
+- **委任起動は予約対象（resources）が必要です。** 親なし起動では resources を空欄にします。
+  委任時はリポジトリの root からの相対パスを `src/**,tests/**` のようにカンマ区切りで指定します。
+  絶対パス、`..`、`~`、制御文字、先頭の `-`、バックスラッシュ、`.git`、
+  リポジトリの外を指す既存のシンボリックリンクを含むパスは拒否します。
+  予約前に空白や `./`、連続するスラッシュ、重複を正規化し、`./-rf` のように
+  正規化後に `-` で始まるパスも拒否します。既定の APFS のように大文字小文字を区別しない
+  ファイルシステムに合わせ、`.GI?/config` や `SR?/**` は `.git` や `src` にも照合します。
+  adapter は予約前に新しい worktree 内でも検査を行います。
 
-委任起動では isolated worktree と resources が必須です。macOS の親なし起動では Isolation を選んだ場合だけ worktree を作り、resources の指定は不要です。
-
-委任時の resources は repository root からの相対パスをカンマ区切りで指定します。例は `src/**,tests/**`. Absolute paths, `..`, `~`,
-  control characters, a leading `-`, backslashes, and `.git` are rejected, as
-  is any existing symlink component that resolves outside the repository. The
-  adapter repeats the check inside the new worktree before reserving anything.
-  Declarations are normalized (whitespace, `./`, duplicate slashes, repeats)
-  before they are reserved, and a leading `-` is rejected in the normalized
-  form too (`./-rf`). Wildcards are matched the way a case-insensitive
-  filesystem such as default APFS resolves names, so `.GI?/config` or `SR?/**`
-  is judged against `.git` or `src` in any letter case.
-
-専用 launcher が最初の task を Antigravity の CLI に渡します。委任でも dashboard から別の task Mail は作りません。macOS の対話型では Mail で追加依頼を受け取れます。起動状態と `/api/spawn-status` には `provider=gemini` を記録します。
+専用 launcher が最初の task を Antigravity の CLI へ直接渡すため、Dashboard は別の
+task Mail を作りません。Linux／WSL の委任は終了時に自動で親へ報告します。
+macOS の対話型 agent は、起動後に Mail から追加の依頼を受け取れます。
+`/api/spawn-status` と `dashboard/logs/spawn.log` は `provider=gemini` を記録します。
 
 The core Dashboard modal interprets the provider `capabilities` contract. The
 optional payload only adds the Antigravity catalog item and its `/api/spawn`
@@ -248,6 +260,20 @@ are gone; ORRERY does not migrate or delete them.
 ORRERY does not add `read_file(*)`, does not enable
 `--dangerously-skip-permissions`, and does not otherwise broaden user-owned
 Antigravity permissions.
+
+macOS の管理された対話セッションでは、起動時に選んだ画面の段に応じて
+`--settings` で `orrery-screen` の個々の道具をそのセッションだけ許可します。
+View は読み取り系、Control は読み取りと操作系を許可します。
+利用者の既存の Ask と Deny が優先され、グローバル設定は書き換えません。
+この対話型の起動では、Dashboard の親なし agent と委任した子に、管理された
+`orrery-mail` の道具も起動時にそのセッションだけ許可します。対象は `whois` を含む、
+Codex の子と同じ Mail proxy の道具です。グローバル設定や作業フォルダで同名の別定義の
+サーバーが有効な場合は、自動許可を追加しません。
+親なしの Resume は初回の選択と前世代の relay の状態を照合し、低い方から新しい relay と
+CLI の自動許可を作ります。親ありの Resume は作業ツリーの MCP 設定をそのまま使います。
+無効化、ツールの制限、relay の接続先を引き継ぎ、画面ツールは既存の CLI の承認ルールに従います。
+親なしで選んだ作業フォルダに競合する画面・ブラウザ用 MCP が有効な場合は、
+競合の理由を返して起動を止めます。
 
 ## Credential boundary
 

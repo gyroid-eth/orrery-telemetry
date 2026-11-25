@@ -439,12 +439,10 @@ SOFTWARE.
   if(typeof module!=='undefined')module.exports=api;
 })(typeof window==='undefined'?globalThis:window);
 
-/* Opt-in, read-only conversation history. Text enters the DOM through
-   textContent only; inert Markdown uses the bundled renderer. A file preview is text through
-   textContent or a PNG the relay checked, shown from a data:image/png URL that
-   this file builds from validated base64; nothing else sets a source. Save
-   writes exactly what the preview shows to the device through one object URL,
-   revoked on close. Nothing is kept in storage or URLs; unmount clears the
+/* Opt-in, read-only conversation history. File previews show plain text,
+   inert Markdown from the bundled renderer, or a PNG the relay checked.
+   Save downloads the previewed content, including local Markdown source edits,
+   through one object URL revoked on close. Nothing is kept in storage or URLs; unmount clears the
    DOM, the preview, requests, timers and pending rows. */
 (()=>{'use strict';
 const make=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!==undefined)e.textContent=txt;return e;};
@@ -1000,6 +998,41 @@ function saveButton(head,close,label,blob){
  };
  head.insertBefore(b,close);
 }
+function markdownPreview(text,head,close,view){
+ const source=make('textarea','conversation-preview-text conversation-preview-source');
+ source.setAttribute('aria-label','Markdown source');
+ source.autocapitalize='off';source.spellcheck=false;source.value=text;
+ // A textarea normalizes line endings. Keep the original bytes for an unchanged download.
+ const original=source.value,read=()=>source.value===original?text:source.value;
+ function draw(value){
+  const doc=body(value,true);doc.classList.add('conversation-preview-markdown');return doc;
+ }
+ let rendered=text,doc=draw(text);
+ view.append(doc);
+ const toggle=make('button','icon-button conversation-preview-toggle');toggle.type='button';
+ const namespace='http://www.w3.org/2000/svg';
+ const svg=document.createElementNS(namespace,'svg'),path=document.createElementNS(namespace,'path');
+ svg.setAttribute('class','mobile-icon');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');
+ path.setAttribute('d','m8 6-6 6 6 6m8-12 6 6-6 6');
+ svg.append(path);toggle.append(svg);
+ function label(editing){
+  toggle.title=editing?'Show rendered Markdown':'Edit Markdown source';
+  toggle.setAttribute('aria-label',toggle.title);
+  toggle.classList.toggle('active',editing);
+ }
+ label(false);
+ toggle.onclick=()=>{
+  const editing=!source.isConnected;
+  const value=read();
+  if(!editing&&rendered!==value){rendered=value;doc=draw(value);}
+  view.replaceChildren(editing?source:doc);
+  view.scrollTop=0;
+  label(editing);
+  if(editing)source.focus({preventScroll:true});
+ };
+ head.insertBefore(toggle,close);
+ return read;
+}
 function pngBytes(data){const raw=atob(data),out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out;}
 async function openPreview(x){
  closePreview();if(!root)return;
@@ -1024,8 +1057,11 @@ async function openPreview(x){
  if(status===410)v={ok:false,error:'preview_expired'};
  if(v?.ok===true&&v.kind==='text'&&typeof v.text==='string'&&!x.markdown){
   state.textContent=v.truncated===true?'Showing the start of the file.':'';
-  view.append(make('pre','conversation-preview-text',v.text));
-  const text=v.text;saveButton(head,close,x.label,()=>new Blob([text],{type:'text/plain;charset=utf-8'}));
+  const text=v.text;
+  let read=()=>text;
+  if(/\.(?:md|markdown)$/i.test(x.label)&&markdown())read=markdownPreview(text,head,close,view);
+  else view.append(make('pre','conversation-preview-text',text));
+  saveButton(head,close,x.label,()=>new Blob([read()],{type:'text/plain;charset=utf-8'}));
  }else if(v?.ok===true&&pngSource(v)){
   const img=make('img','conversation-preview-image');img.alt=x.label;img.width=v.width;img.height=v.height;
   paintImage(img,v);state.textContent='';view.append(img);

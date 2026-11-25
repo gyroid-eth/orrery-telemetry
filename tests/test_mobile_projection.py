@@ -15,6 +15,42 @@ def test_only_the_bounded_display_role_is_projected():
     assert row['role']=='R'*40 and 'annot' not in row and 'task' not in row and 'group' not in row
 
 
+def test_running_tool_permissions_and_unknown_reasons_are_closed_values():
+    from dashboard.agent_process import PROCESS_INCOMPLETE
+    from dashboard.mobile_projection import project_agent
+
+    row = dict(name='Alpha', running=True, computer_use='off', browser_use=None,
+               browser_use_reason=PROCESS_INCOMPLETE, permission_source='process')
+    projected = project_agent(row)
+    assert projected['computer_use'] == 'off'
+    assert 'browser_use' not in projected
+    assert projected['browser_use_reason'] == PROCESS_INCOMPLETE
+    assert 'permission_source' not in projected
+    assert 'computer_use' not in project_agent(dict(row, running=False))
+    assert 'browser_use_reason' not in project_agent(dict(row, browser_use=True))
+    assert 'browser_use_reason' not in project_agent(dict(row, browser_use_reason='untrusted argv'))
+    assert 'browser_use_reason' not in project_agent(dict(row, permission_source=None))
+    for invalid in (None, 'Control', 1, {'mode': 'control'}):
+        assert 'computer_use' not in project_agent(dict(row, computer_use=invalid))
+
+
+def test_mobile_exposes_only_fixed_antigravity_launch_reasons():
+    from dashboard.agent_card import AGY_BROWSER_UNRECORDED
+    from dashboard.mobile_projection import project_agent
+
+    row = dict(name='Alpha', running=True, computer_use='view', computer_use_source='relay', browser_use=None,
+               browser_use_reason=AGY_BROWSER_UNRECORDED, permission_source='launch')
+    projected = project_agent(row)
+    assert projected['computer_use'] == 'view'
+    assert projected['computer_use_source'] == 'relay'
+    assert projected['browser_use_reason'] == AGY_BROWSER_UNRECORDED
+    assert 'browser_use_reason' not in project_agent(dict(row, browser_use_reason='private argv'))
+    assert 'browser_use_reason' not in project_agent(dict(row, running=False))
+    assert 'computer_use_source' not in project_agent(dict(row, computer_use_source='fixture string'))
+    assert 'computer_use_source' not in project_agent(dict(row, running=False))
+    assert project_agent(dict(row, browser_use=False, browser_use_source='launch'))['browser_use_source'] == 'launch'
+    assert 'browser_use_source' not in project_agent(dict(row, browser_use_source='launch'))
+
 def test_working_duration_is_only_the_current_upstream_display():
     from dashboard.mobile_projection import project_agent
     raw = dict(name='SampleAgent', running=True, state='run', act_state='work', work_disp='2m05s')

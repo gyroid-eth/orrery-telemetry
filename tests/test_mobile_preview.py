@@ -247,8 +247,8 @@ def test_phone_shows_a_text_preview_as_text_and_closes_it():
     phone(r'''
       const evil='<img src=x onerror=alert(1)><script>alert(2)</script>';
       reply=async url=>url.startsWith('/view/conversation/preview?')
-        ?{body:{ok:true,kind:'text',label:'notes.md',text:evil,truncated:true,notice:'Current file · may differ from the recorded edit'}}
-        :withFile([{label:'notes.md',kind:'file',ref:REF},{label:'plain.md',kind:'file'}]);
+        ?{body:{ok:true,kind:'text',label:'notes.txt',text:evil,truncated:true,notice:'Current file · may differ from the recorded edit'}}
+        :withFile([{label:'notes.txt',kind:'file',ref:REF},{label:'plain.txt',kind:'file'}]);
       const root=C.mount('Vega');body.append(root);await settle();
       const chips=root.all().filter(e=>e.className.startsWith('conversation-chip'));
       assert.equal(chips[0].tagName,'BUTTON');assert.equal(chips[1].tagName,'SPAN','no ID, no preview');

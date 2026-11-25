@@ -222,8 +222,10 @@ def verify_claude_mcp_registration(env: dict[str, str], report: Reporter) -> Non
             f"which does not reach the installed endpoint {expected_url!r}"
         )
     bearer = read_token(env)
-    authorization = (entry.get("headers") or {}).get("Authorization")
-    if bearer and authorization != f"Bearer {bearer}":
+    headers = entry.get("headers") or {}
+    if not isinstance(headers, dict) or headers.get("Authorization") != (
+        f"Bearer {bearer}" if bearer else None
+    ):
         raise Fail(
             "Claude MCP entry 'orrery-mail' has unexpected authorization; "
             "run agentstack-doctor for the safe registration command"
@@ -592,6 +594,7 @@ def main() -> int:
     report = Reporter()
     pair: list[str] = []
     mail = None
+    env = None
     project_key = ""
     try:
         env = load_env(pathlib.Path(args.install_dir).expanduser())
@@ -601,8 +604,6 @@ def main() -> int:
         if not project_key:
             raise Fail("AGENTSTACK_PROJECT_KEY is not set in the installed env.sh")
         report.ok(f"read the installed environment from {args.install_dir}")
-        verify_claude_mcp_registration(env, report)
-
         mail = AgentMail(mcp_url, read_token(env))
         health = mail.call("health_check", {})
         if not isinstance(health, dict) or health.get("status") not in ("ok", "healthy"):
@@ -627,6 +628,12 @@ def main() -> int:
         elif pair and args.keep:
             report.note(f"left {', '.join(pair)} registered as requested")
 
+    if env is not None:
+        try:
+            verify_claude_mcp_registration(env, report)
+        except Fail as exc:
+            print(f"Claude MCP setup needed if you use Claude Code: {exc}")
+
     report.note(
         "scope: this self-test does not exercise Codex lifecycle hooks or "
         "history-binding receipts; use agentstack-doctor and Codex /hooks "
@@ -646,6 +653,7 @@ def main() -> int:
         return 1
     print("self-test passed: two agents registered, exchanged messages, "
           "held a reservation, and appeared on the dashboard.")
+    print("shared-services: OK (Mail round trip, reservation and dashboard)")
     return 0
 
 

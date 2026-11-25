@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":49}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":53}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -210,6 +210,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 ## GET `/api/spawn-names`
 
 API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
+
+On macOS, the API 53 catalog lists `off`, `view`, and `control` in `computer_modes`. View uses `tools.screen.access: "read"` and Control uses `tools.screen.access: "operate"`. For Off, omit the screen selection from the explicit `tools` object. Mobile `/view/spawn` sends one of the modes as `computer` and still accepts the boolean from older clients. See `browser_modes.antigravity` for the available Antigravity browser modes.
 
 API 49 also adds `native_browser_dirs`, a list of launch folders from `dirs` whose Chrome DevTools definition can be copied into a dsh or Hermes child. The phone shows Browser for these harnesses when the selected folder appears in the list. The launcher checks the settings again at launch.
 
@@ -375,6 +377,10 @@ Legacy agent rows include these display fields in both the full roster and `scop
 | `parent_agent` | Parent name or `null` | Populated for a child with a verified parent name. |
 
 The next roster refresh reports permission changes for `orrery-screen`. Other permissions describe launch configuration. Connection status and OS grants are outside this check.
+
+In API 52, a running legacy Claude Code or Codex CLI agent without a launch record can report its current observation in `GET /api/agents` with `permission_source: "process"`. The reader checks the agent's arguments and descendant processes for local Cua Driver and Codex Chrome DevTools, and reads an explicit Claude `--chrome` or `--no-chrome` flag. A `null` in `computer_use` or `browser_use` carries a short English `computer_use_reason` or `browser_use_reason` when the process, its arguments, the screen relay's mode, or the Claude Chrome flag cannot be verified. The mobile Reader receives the current values and those reasons. This describes recognized local tools and launch flags. Connection status, OS access grants, and other MCP servers are outside the observation.
+
+In API 53, Antigravity reports permissions with `permission_source: "launch"`. For a running session with a verified launch generation, computer use reports the current relay mode with `computer_use_source: "relay"`. A saved ORRERY selection carries `computer_use_source: "launch"` or `browser_use_source: "launch"` for the corresponding tool. Unknown values are `null` and carry a reason.
 
 ### Project-scope read metadata (legacy, API 37)
 
@@ -825,12 +831,13 @@ Request:
 | `task` | yes | Task body. The UI accepts up to 4,000 characters |
 | `name` | no | Remove hyphens when specified; must be `available` |
 | `dir` | no | Existing working directory. Defaults to the source repository |
-| `provider` | no | `claude` (default), `codex`, `gemini` for the optional Antigravity provider, or an exact native connection ID from the catalog (legacy `deepseek`/`strata`, or an added ID such as `strata-epyc`). Do not replace it with its label or `kind` |
+| `provider` | no | `claude` (default), `codex`, `gemini` for the optional Antigravity provider, or a native connection ID from the catalog (legacy `deepseek` / `strata`, or an added ID such as `strata-epyc`). Send the exact catalog ID |
 | `harness` | DeepSeek / Local required | `dsh` or `hermes`. Claude optionally accepts `claude-code` (legacy alias `claudecode`), Codex `codex-cli` (legacy alias `codex`) |
 | `helper_model` | no | Omitted or `same` inherits the main model. DeepSeek / Local also accepts same-backend formal IDs in the selected model/harness `helper_models`; undeclared or foreign IDs are rejected |
+| `web_search` | no | Native dsh / Hermes only. Set `exa` or `searxng` to override the search provider for this launch. The shared `web_search` setting in the managed spawn manifest supplies the URL and credential reference. Omission uses the shared settings if present, or keeps the existing behavior |
 | `model` | DeepSeek / Local required | Formal ID matching an available provider/model/harness catalog entry. Existing Claude/Codex omitted-model defaults are unchanged |
 | `url_index`, `url_key` | dynamic Local required | Copy both from the selected model row. Index is a nonnegative integer; key binds the configured URL. A changed/reordered URL is refused and requires refreshed selection. These fields are not accepted for fixed-model or other providers |
-| `effort` | Required for Antigravity | Send a value offered for the selected Antigravity model. For other providers, send only explicit choices. Codex uses model-specific metadata. DeepSeek/Local validate the selected model and harness capability. Claude rejects `effort`. Where omission is allowed, the CLI or harness default applies |
+| `effort` | Required only for Antigravity | For Antigravity, send a value offered for the selected model (`low`, `medium`, `high`, or `xhigh` where supported). Claude / Codex use `model_efforts` / `model_effort_defaults`. DeepSeek / Local use the selected model and harness capabilities. Send known values. Where omission is allowed, the CLI or harness default applies |
 | `role` | no | At most 40 characters |
 | `group` | no | At most 24 characters |
 | `worktree` | no | Isolated worktree |
@@ -848,7 +855,7 @@ Since API 41, the standard `/api/spawn` applies the installer's `AGENTSTACK_CHIL
 
 Since API 44, `{"tools":{"chrome_extension":true}}` enables the configured `chrome@openai-bundled` plugin for a Codex child in `/api/spawn` and tool-changing `/api/jump`. macOS supports combining it with `orrery-screen`.
 
-A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. On macOS, Antigravity accepts a managed screen selection. The rest of these options apply to the providers listed in the table.
+A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. In API 53, Antigravity on macOS accepts a managed relay through `tools.screen` and the catalog's browser modes through `tools.browser_mode`. See the [Antigravity launch requirements](antigravity.en.md#dashboard-new-agent).
 
 Unknown request fields return HTTP 400 before model resolution or launch. When the optional Gemini provider is installed, it also accepts `resources` (see [Gemini delegation](delegation.en.md)); other providers reject that field.
 
@@ -892,6 +899,8 @@ Success:
 ```
 
 With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a BCC audit copy for the parent (BCC raises no notification, so the parent is not woken by its own task); the registration summary / launcher prompt uses the first 80 characters. The Antigravity launcher passes the task directly to its CLI without separate task Mail.
+
+In API 50, the `gemini` entry from `/api/spawn-names` on macOS advertises `capabilities.standalone: true`. A standalone launch uses `dir` as its working folder. Git is required only when `worktree: true` is selected. Delegated launches still require a worktree and `resources`.
 
 Claude rejects `effort`. Codex accepts formal `gpt-*` IDs even when absent from cache; only an explicit `AGENTSTACK_CODEX_MODELS` restricts membership. The UI uses per-model effort metadata for choices and omitted defaults; explicit effort is passed through to Codex CLI for final validation. Omitted model and effort use the configured defaults, or the built-in policy when unset. Family aliases follow the newest eligible version in the fresh catalog, rejecting an absent family in a fresh catalog and using bundled fallback for unavailable or stale catalogs. Claude accepts well-formed formal IDs independently of local catalog membership or expiry; an explicit `AGENTSTACK_CLAUDE_MODELS` remains a strict allow-list, and invalid configuration blocks Claude launch. The fixed Claude default is `claude-opus-5-5`; it is rejected if an override excludes it and the request omits a model. Orrery never substitutes another model. See [Claude model catalog](configuration.en.md#claude-model-catalog).
 

@@ -45,7 +45,7 @@ class InstallStamp(unittest.TestCase):
                      'pm/__init__.py', 'pm/paths.py', 'pm/environments.py', 'scripts/write_install_stamp.py']
             pm = []
             paths = {}
-            def acquire(argv, *, cwd, env):
+            def acquire(argv, *, cwd, env, progress=False):
                 nonlocal paths
                 cwd = Path(cwd)
                 if '-p' in argv:
@@ -55,7 +55,7 @@ class InstallStamp(unittest.TestCase):
                 if len(argv) > 1 and argv[1].endswith('/scripts/build/tui.mjs'):
                     make_product(root, ca.target)
                     return ''
-                if argv[:2] == ['git', 'clone']:
+                if argv[:2] == ['git', 'init']:
                     target = Path(argv[-1])
                     for relative in files:
                         dest = target / relative
@@ -63,6 +63,8 @@ class InstallStamp(unittest.TestCase):
                         shutil.copyfile(Path(source) / relative, dest)
                     (target / '.git').mkdir()  # Any fallback would try forbidden git.
                     ca.source(target)
+                elif argv[:2] in (['git', 'remote'], ['git', 'fetch']):
+                    pass
                 elif argv[:2] == ['git', 'checkout']:
                     self.assertEqual(argv[-1], installer.HERMES_COMMIT)
                 elif argv[:2] == ['git', 'rev-parse']:

@@ -19,6 +19,11 @@ if "child_resume" not in globals():
         from . import child_resume
     else:
         import child_resume
+if "child_tools" not in globals():
+    if __package__:
+        from . import child_tools
+    else:
+        import child_tools
 
 
 PROGRAM = "antigravity"
@@ -27,8 +32,10 @@ WRITE_TOOLS = {"write_to_file": "Write", "replace_file_content": "Edit",
                "multi_replace_file_content": "Edit"}
 ACTIVITY = {"idle": "wait", "working": "work", "tool_use": "work",
             "reviewing": "ask"}
-MAIL_TOOLS = ("send_message", "fetch_inbox", "acknowledge_message", "reserve_files",
-              "release_reservations", "renew_reservations", "show_files")
+# Keep in step with the session-bound proxy exposed to Codex children.
+MAIL_TOOLS = ("bootstrap", "fetch_inbox", "send_message", "acknowledge_message",
+              "reserve_files", "renew_reservations", "release_reservations",
+              "runtime_status", "show_files", "whois")
 
 
 def _home():
@@ -68,14 +75,14 @@ def read_status(runtime, name, identity):
     return record if record.get("tmux") == identity else {}
 
 
-def _configured_hooks(python):
+def _configured_hooks(python, *, suffix=""):
     command = shlex.join([python, str(Path(__file__).resolve()), "guard"])
     history = _history()
     reader = {"type": "command", "command": shlex.join([python, str(history_helper()), "hook"]),
               "timeout": 2}
     return {
-        history["GROUP"]: {event: [reader] for event in history["HOOKS"]},
-        "orrery-child": {"PreToolUse": [{
+        history["GROUP"] + suffix: {event: [reader] for event in history["HOOKS"]},
+        "orrery-child" + suffix: {"PreToolUse": [{
             "matcher": "view_file|write_to_file|replace_file_content|multi_replace_file_content|run_command",
             "hooks": [{"type": "command", "command": command, "timeout": 12}],
         }]},
@@ -97,27 +104,46 @@ def validate_plan(plan):
     if (not cwd.is_absolute() or cwd.resolve() != cwd or not cwd.is_dir()
             or [info.st_dev, info.st_ino] != plan["workspace_file_id"]):
         raise ValueError("Antigravity child worktree was replaced or moved")
-    path = _guard_config(cwd)
-    if (path.is_symlink() or child_resume._load_state(path) != _configured_hooks(plan["python"])):
-        raise ValueError("Antigravity child reservation hook is unavailable")
+    if not plan.get("standalone"):
+        path = _guard_config(cwd)
+        if (path.is_symlink() or child_resume._load_state(path) != _configured_hooks(plan["python"])):
+            raise ValueError("Antigravity child reservation hook is unavailable")
     if not all(os.path.isfile(plan[field]) and os.access(plan[field], os.X_OK)
                for field in ("binary", "python")):
         raise ValueError("The saved Antigravity CLI is unavailable")
     return cwd
 
 
-def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effort):
+def launch_parent(state):
+    parent = state.get("parent_agent")
+    if state["gemini_launch"].get("standalone") is True and parent is None:
+        return ""
+    if (not state["gemini_launch"].get("standalone") and isinstance(parent, str)
+            and child_resume.PROXY_AGENT_NAME.fullmatch(parent)):
+        return parent
+    raise ValueError("Antigravity launch parent does not match its saved settings")
+
+
+def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effort,
+            standalone=False, tools=()):
     cwd = cwd.resolve(strict=True)
     binary = shutil.which(binary)
     if not binary or not history_helper().is_file():
         raise ValueError("Antigravity CLI and Reader are required for a managed interactive child")
-    path = _guard_config(cwd)
-    if path.exists() or path.is_symlink():
+    if standalone == bool(parent):
+        raise ValueError("Antigravity launch requires exactly one of standalone or a parent")
+    path = None if standalone else _guard_config(cwd)
+    if path is not None and (path.exists() or path.is_symlink()):
         raise ValueError("The worktree already has .agents/hooks.json")
     info = cwd.stat()
     plan = {"cwd": str(cwd), "workspace_file_id": [info.st_dev, info.st_ino],
-            "binary": os.path.abspath(binary), "python": sys.executable, "model": model, "effort": effort}
-    hooks = _configured_hooks(plan["python"])
+            "binary": os.path.abspath(binary), "python": sys.executable,
+            "model": model, "effort": effort, "tools": list(tools)}
+    if standalone:
+        plan["standalone"] = True
+        validate_standalone_config(plan)
+    else:
+        hooks = _configured_hooks(plan["python"])
     generation = uuid.uuid4().hex
     child_resume.stage_registration(runtime, name, project_key=project, program=PROGRAM,
                                     generation=generation, source=source,
@@ -126,15 +152,68 @@ def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effor
         child_resume.prepare_active_state(runtime, name, project_key=project, program=PROGRAM,
                                           parent_agent=parent, generation=generation,
                                           gemini_launch=plan)
-        child_resume._atomic_json(path, hooks)
+        if path is not None:
+            child_resume._atomic_json(path, hooks)
         child_resume.finish_registration(runtime, name, generation=generation, rollback=False)
     except Exception:
         child_resume.finish_registration(runtime, name, generation=generation, rollback=True)
-        path.unlink(missing_ok=True)
+        if path is not None:
+            path.unlink(missing_ok=True)
         raise
 
 
-def command(plan, cwd, *, prompt=None, conversation=None):
+def _tool_selection(plan):
+    return child_tools.normalize(tools=child_tools.parse_cli(plan.get("tools", [])))
+
+
+def validate_standalone_config(plan):
+    child_tools.agy_validate_selection(_tool_selection(plan), cwd=plan["cwd"])
+
+
+def _configure_standalone(directory, plan, mcp):
+    directory.mkdir(mode=0o700)
+    try:
+        child_resume._atomic_json(directory / ".agents" / "mcp_config.json", mcp)
+        hooks = _configured_hooks(plan["python"], suffix=f"-{uuid.uuid4().hex}")
+        child_resume._atomic_json(directory / ".agents" / "hooks.json", hooks)
+    except BaseException:
+        shutil.rmtree(directory)
+        raise
+
+
+def _delegated_mcp_path(cwd):
+    path = _guard_config(cwd).with_name("mcp_config.json")
+    if path.exists() or path.is_symlink():
+        raise ValueError("The worktree already has .agents/mcp_config.json")
+    return path
+
+
+def _managed_mail_approval_rules(home, cwd, config_dir):
+    """Grant by tool name only when that name resolves to the child Mail wrapper."""
+    configs = [("global", home / ".gemini" / "config" / "mcp_config.json"),
+               ("workspace", Path(cwd) / ".agents" / "mcp_config.json")]
+    if config_dir is not None:
+        configs.append(("launch", config_dir / ".agents" / "mcp_config.json"))
+    managed = {"command": str(_home() / "bin" / "agentstack-gemini-mcp"), "args": []}
+    found = False
+    for scope, path in configs:
+        try:
+            servers = child_tools._agy_inherited_servers(path, scope)
+        except (OSError, child_tools.ToolsError):
+            return []
+        if "orrery-mail" not in servers:
+            continue
+        entry = servers["orrery-mail"]
+        if isinstance(entry, dict) and entry.get("disabled") is True:
+            continue
+        # A same-named inherited server can take precedence in Antigravity.
+        if entry != managed:
+            return []
+        found = True
+    return [f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS] if found else []
+
+
+def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None):
     if (prompt is None) == (conversation is None):
         raise ValueError("Provide the first task or an existing conversation")
     settings = {"trustedWorkspaces": [str(cwd)], "enableTerminalSandbox": True,
@@ -142,15 +221,28 @@ def command(plan, cwd, *, prompt=None, conversation=None):
                     "type": "command",
                     "command": shlex.join([plan["python"], str(Path(__file__).resolve()), "status"]),
                 }}
+    home = Path.home()
     try:
-        configured = json.loads((Path.home() / ".gemini/antigravity-cli/settings.json").read_text())
+        configured = json.loads((home / ".gemini/antigravity-cli/settings.json").read_text())
     except FileNotFoundError:
         configured = {}
     permissions = configured.get("permissions") or {}
+    if screen_mode is None:
+        screen_mode = child_tools.screen_mode(_tool_selection(plan))
+    screen_permissions = []
+    if screen_mode in ("view", "control"):
+        screen_policy = child_tools._screen_state()
+        screen_tools = screen_policy["VIEW_TOOLS"] if screen_mode == "view" else screen_policy["TOOLS"]
+        screen_permissions = [f"mcp({child_tools.SCREEN_SERVER}/{tool})" for tool in screen_tools]
     settings["permissions"] = {**permissions, "allow": list(dict.fromkeys(
-        [*permissions.get("allow", ()), *(f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS)]
+        [*permissions.get("allow", ()), *_managed_mail_approval_rules(home, cwd, config_dir),
+         *screen_permissions]
     ))}
-    return [plan["binary"], "--mode", "auto", "--sandbox", "--settings",
+    extra = []
+    if config_dir is not None:
+        settings["trustedWorkspaces"].append(str(config_dir))
+        extra = ["--add-dir", str(config_dir)]
+    return [plan["binary"], "--mode", "auto", "--sandbox", *extra, "--settings",
             json.dumps(settings, separators=(",", ":")), "--model", plan["model"],
             "--effort", plan["effort"],
             *(["--conversation", conversation] if conversation else ["-i", prompt])]
@@ -184,8 +276,14 @@ def run(runtime, name, task_file=None, conversation=None):
             raise ValueError("Antigravity resume was not prepared")
 
     env = dict(os.environ, AGENT_NAME=name, AGENTSTACK_RESERVED_IDENTITY="1",
-               PARENT_AGENT=state["parent_agent"], AGENTSTACK_GEMINI_TMUX_IDENTITY=identity)
-    if conversation:
+               AGENTSTACK_GEMINI_TMUX_IDENTITY=identity)
+    parent = launch_parent(state)
+    if parent:
+        env["PARENT_AGENT"] = parent
+    else:
+        env.pop("PARENT_AGENT", None)
+        env.pop("AGENTSTACK_PROXY_PARENT_AGENT", None)
+    if conversation and not plan.get("standalone"):
         count = env.get("GIT_CONFIG_COUNT", "0")
         index = int(count) if count.isdecimal() else 0
         env[f"GIT_CONFIG_KEY_{index}"] = "core.excludesFile"
@@ -195,15 +293,42 @@ def run(runtime, name, task_file=None, conversation=None):
     os.chdir(cwd)
     status_path = _status_path(runtime, name)
     status_path.unlink(missing_ok=True)
+    config_dir = None
     try:
-        if conversation:
-            child_resume.prepare_active_state(runtime, name, project_key=project, program=PROGRAM)
+        standalone = plan.get("standalone") is True
+        # Delegated resumes defer to the existing workspace and user MCP policy.
+        screen_mode = "off"
+        if standalone or conversation is None:
+            mail_command = str(_home() / "bin" / "agentstack-gemini-mcp")
+            mcp_path = None if standalone else _delegated_mcp_path(cwd)
+            generation = uuid.uuid4().hex
+            mcp, screen_mode = child_tools.agy_launch_config(
+                mail_command, _tool_selection(plan), runtime=str(runtime), project=project, child=name,
+                mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
+                generation=generation, cwd=cwd if standalone else None,
+                resume_from=(plan.get("screen_generation") or "") if conversation else None,
+            )
+            if standalone:
+                directory = path.with_suffix(".agy-config")
+                _configure_standalone(directory, plan, mcp)
+                config_dir = directory
+            else:
+                child_resume._atomic_json(mcp_path, mcp)
+            if screen_mode is not None or conversation:
+                plan = {**plan, "screen_generation": generation if screen_mode is not None else None,
+                        "screen_launch_mode": screen_mode or "off", "screen_tmux": identity}
+        if screen_mode is not None or conversation:
+            child_resume.prepare_active_state(runtime, name, project_key=project, program=PROGRAM,
+                                              gemini_launch=plan)
         env["AGENTSTACK_AGY_HISTORY_LAUNCH"] = subprocess.check_output(
             [sys.executable, str(history_helper()), "prepare", str(state["agent_id"]), identity],
             env=env, text=True, timeout=5).strip()
-        return subprocess.run(command(plan, cwd, prompt=prompt, conversation=conversation),
+        return subprocess.run(command(plan, cwd, prompt=prompt, conversation=conversation,
+                                      config_dir=config_dir, screen_mode=screen_mode),
                               env=env).returncode
     finally:
+        if config_dir is not None:
+            shutil.rmtree(config_dir, ignore_errors=True)
         status_path.unlink(missing_ok=True)
         subprocess.run(["/bin/bash", str(_home() / "hooks" / "cleanup-child-agent.sh"), name],
                        env=env, check=False)
@@ -241,23 +366,36 @@ def status(runtime, name, payload):
     print(" · ".join(details))
 
 
-def guard(event, cwd):
+def _workspace_protected_roots(cwd, runtime):
+    install = Path(os.environ.get("AGENTSTACK_HOME") or _home()).resolve()
+    worktrees = Path(os.environ.get("AGENTSTACK_WORKTREE_ROOT") or install / "worktrees").resolve()
+    # An explicitly selected managed worktree can live under the installation.
+    if cwd != worktrees and cwd.is_relative_to(worktrees) and not install.is_relative_to(worktrees):
+        return (runtime.resolve(),)
+    return runtime.resolve(), install
+
+
+def guard(event, cwd, *, runtime):
     tool = event["toolCall"]
     name, args = tool["name"], tool["args"]
     inputs = {}
     overwrite = None
+    protected = _workspace_protected_roots(cwd, runtime)
     if name in WRITE_TOOLS:
         target = Path(args["TargetFile"])
         target = (cwd / target).resolve()
         if (args.get("IsArtifact") or not target.is_relative_to(cwd)
+                or any(target.is_relative_to(root) for root in protected)
                 or any(part.casefold() == ".git" for part in target.relative_to(cwd).parts)
-                or target in {_guard_config(cwd), cwd / ".agents" / "mcp_config.json"}):
+                or target in {(cwd / ".agents" / filename).resolve()
+                              for filename in ("hooks.json", "mcp_config.json")}):
             return {"decision": "deny", "reason": "Edit files only in the child worktree"}
         inputs["file_path"] = str(target)
         mode = WRITE_TOOLS[name]
     elif name == "run_command":
         workdir = (cwd / Path(args.get("Cwd") or cwd)).resolve()
-        if args.get("BypassSandbox") or not workdir.is_relative_to(cwd):
+        if (args.get("BypassSandbox") or not workdir.is_relative_to(cwd)
+                or any(workdir.is_relative_to(root) for root in protected)):
             return {"decision": "deny", "reason": "Use a sandboxed command inside the child worktree"}
         inputs["command"] = args["CommandLine"]
         cwd = workdir
@@ -291,6 +429,8 @@ def main():
     setup.add_argument("binary")
     setup.add_argument("model")
     setup.add_argument("effort")
+    setup.add_argument("--standalone", action="store_true")
+    setup.add_argument("--tools", action="append", default=[])
     launch = actions.add_parser("run")
     group = launch.add_mutually_exclusive_group(required=True)
     group.add_argument("--task-file", type=Path)
@@ -308,8 +448,9 @@ def main():
         return 0 if activity == "wait" or (args.action == "ready" and activity) else 1
     name = os.environ["AGENT_NAME"]
     if args.action == "prepare":
-        prepare(runtime, name, os.environ["AGENTSTACK_PROJECT_KEY"], os.environ["PARENT_AGENT"],
-                source=args.source, cwd=args.cwd, binary=args.binary, model=args.model, effort=args.effort)
+        prepare(runtime, name, os.environ["AGENTSTACK_PROJECT_KEY"], os.environ.get("PARENT_AGENT", ""),
+                source=args.source, cwd=args.cwd, binary=args.binary, model=args.model, effort=args.effort,
+                standalone=args.standalone, tools=args.tools)
     elif args.action == "run":
         return run(runtime, name, args.task_file, args.conversation)
     elif args.action == "status":
@@ -320,7 +461,7 @@ def main():
             child_resume._validate_identity(state, agent_name=name, program=PROGRAM,
                                             project_key=os.environ["AGENTSTACK_PROJECT_KEY"])
             decision = guard(json.loads(sys.stdin.buffer.read(1024 * 1024)),
-                             Path(state["gemini_launch"]["cwd"]))
+                             Path(state["gemini_launch"]["cwd"]), runtime=runtime)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError):
             decision = {"decision": "deny", "reason": "ORRERY could not check the child worktree"}
         print(json.dumps(decision))
@@ -330,5 +471,7 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except child_tools.ToolsError as error:
+        sys.exit(f"Error: {error}")
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         sys.exit(f"Antigravity child: {error}")

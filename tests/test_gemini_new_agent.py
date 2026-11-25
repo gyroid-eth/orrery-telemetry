@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -220,18 +221,23 @@ def test_gemini_dry_run_does_not_create_handoffs_or_launch(monkeypatch, gemini_e
 def test_gemini_mac_spawn_passes_managed_screen_to_the_adapter(monkeypatch, gemini_env):
     monkeypatch.setattr(server.sys, "platform", "darwin")
     monkeypatch.setattr(server, "_child_tools_module", lambda: child_tools)
+    monkeypatch.setattr(server, "PORT", 53162)
+    monkeypatch.setenv("AGENTSTACK_PORT", "+9999")
     result = server.do_spawn(_gemini_payload(gemini_env, dry_run=True,
                                             tools={"screen": "read"}))
     assert result["ok"], result
     argv = result["argv"]
     assert argv[argv.index("--tools") + 1] == "screen:read:orrery-screen"
+    assert result["launcher_env"]["AGENTSTACK_PORT"] == "53162"
     assert gemini_env.launches.launched == []
 
 
 # --------------------------------------------------------------------------- #
 # Catalog and the single explicit-effort policy owner
 # --------------------------------------------------------------------------- #
-def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform=platform))
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
     monkeypatch.setattr(
         server,
@@ -258,7 +264,7 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch):
             "resume": False,
             "runtime": True,
             "transcript": False,
-            "standalone": False,
+            "standalone": platform == "darwin",
             "worktree_required": True,
             "resources_required": True,
         },
@@ -325,6 +331,44 @@ def test_direct_cli_launchers_keep_historical_high_effort_fallback():
         assert 'EFFORT="${AGENTSTACK_GEMINI_EFFORT:-high}"' in path.read_text(encoding="utf-8")
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS interactive Antigravity launcher")
+def test_direct_gemini_delegation_passes_tools_to_the_mac_adapter(tmp_path):
+    repo = _make_repo(tmp_path)
+    home = tmp_path / "install"
+    fake_bin = tmp_path / "bin"
+    _executable(fake_bin / "agy", "#!/bin/sh\n")
+    _executable(fake_bin / "tmux", "#!/bin/sh\n")
+    hooks = home / "hooks"
+    hooks.mkdir(parents=True)
+    shutil.copy2(ROOT / "hooks" / "child_tools.py", hooks / "child_tools.py")
+    for helper in ("agentstack-gemini-child-mail", "agentstack-gemini-stream", "agentstack-gemini-mcp"):
+        _executable(home / "bin" / helper, "#!/bin/sh\n")
+    _executable(home / "bin/agentstack-preregister-child", "#!/bin/sh\nprintf '%s\\n' FixtureAgent\n")
+    adapter = hooks / "spawn_gemini_preregistered.sh"
+    _executable(adapter, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FIXTURE_ADAPTER_ARGS\"\n")
+    out = tmp_path / "adapter-args"
+    env = {
+        **{key: value for key, value in os.environ.items() if not key.startswith("AGENTSTACK_")},
+        "HOME": str(tmp_path),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PARENT_AGENT": "FixtureParent",
+        "AGENTSTACK_HOME": str(home),
+        "AGENTSTACK_LABEL_PREFIX": "org.agentstack.test.gemini-adapter",
+        "AGENTSTACK_HOOKS_DIR": str(hooks),
+        "AGENTSTACK_RUNTIME_DIR": str(tmp_path / "runtime"),
+        "AGENTSTACK_PROJECT_KEY": "/fixture-project",
+        "AGENTSTACK_PYTHON": sys.executable,
+        "FIXTURE_ADAPTER_ARGS": str(out),
+    }
+    result = _REAL_RUN(["/bin/bash", str(ROOT / "hooks/spawn_gemini_child.sh"),
+                        "--resources", "src/**", "--tools", "screen:read", "Fixture task", str(repo)],
+                       env=env, text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    argv = out.read_text().splitlines()
+    assert argv[argv.index("--tools") + 1] == "screen:read"
+    assert argv[-2:] == ["", str(repo.resolve())]
+
+
 def test_gemini_spawn_requires_declared_resources(tmp_path):
     result = server.do_spawn({
         "parent": "Parent-Curie",
@@ -349,7 +393,8 @@ def test_gemini_spawn_requires_explicit_effort(tmp_path):
     assert result == {"ok": False, "error": "effort required for provider gemini"}
 
 
-def test_gemini_spawn_rejects_standalone_and_invalid_engine_options(tmp_path):
+def test_gemini_spawn_rejects_standalone_on_linux_and_invalid_engine_options(tmp_path, monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="linux"))
     common = {
         "parent": "Parent-Curie",
         "task": "inspect the dashboard",
@@ -830,6 +875,34 @@ def test_gemini_spawn_dispatches_existing_preregistered_adapter(gemini_env):
     assert not list(gemini_env.runtime.glob("provider-gemini-*"))
 
 
+def test_gemini_standalone_dispatches_without_git_parent_or_reservations(gemini_env, monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="darwin"))
+    monkeypatch.setenv("PARENT_AGENT", "Unrelated")
+    picked = gemini_env.tmp / "picked folder"
+    picked.mkdir()
+    payload = _gemini_payload(gemini_env, dir=str(picked), standalone=True)
+    del payload["parent"], payload["resources"]
+
+    preview = server.do_spawn(dict(payload, dry_run=True))
+    assert preview["ok"] and preview["standalone"] and not preview["worktree"]
+    assert "--standalone" in preview["argv"] and "--worktree" not in preview["argv"]
+    assert preview["argv"][-1] == str(picked)
+    assert not gemini_env.launches.mcp_calls
+
+    result = server.do_spawn(payload)
+    assert result["ok"] and result["standalone"] and not result["worktree"]
+    assert [method for method, _ in gemini_env.launches.mcp_calls] == [
+        "register_agent", "set_contact_policy"]
+    [(args, kwargs)] = gemini_env.launches.launched
+    assert args[5:] == ["--standalone", "--model", "gemini-3.8-flash-medium",
+                        payload["task"], str(picked)]
+    assert "PARENT_AGENT" not in kwargs["env"]
+    assert kwargs["env"]["AGENTSTACK_GEMINI_RESOURCES"] == ""
+    assert not list(picked.iterdir())
+    assert server.do_spawn(dict(payload, worktree=True))["error"] == "provider gemini requires a git repository"
+    assert server.do_spawn(dict(payload, resources="notes.md"))["error"] == "resources require a parent for provider gemini"
+
+
 def test_native_spawn_still_sends_task_mail(gemini_env):
     result = server.do_spawn({"parent": "Parent", "name": "Zesty-Bohr", "task": "work",
                               "dir": str(gemini_env.repo)})
@@ -1134,6 +1207,12 @@ SPM('spm-parent').value='Parent';SPM('spm-task').value='work';SPM('spm-dir').val
 resetSpawnProviderCapabilities();
 renderSpawnProviders(normalizeSpawnProviders(CATALOG));
 out.initialClaude=state();
+SPM('spm-parent').value='';
+selectSpawnProvider('gemini');
+chooseEffort('medium');
+out.geminiStandalone=state();
+selectSpawnProvider('claude');
+SPM('spm-parent').value='Parent';
 selectSpawnProvider('gemini');
 out.geminiSelected=state();
 SPM('spm-resources').value='src/**';SPM('spm-resources').oninput();
@@ -1185,6 +1264,7 @@ def _extract_ui_script(rendered: str) -> str:
 
 def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="darwin"))
     catalog = {"providers": [
         {"id": "claude", "label": "Claude", "program": "claude-code",
          "models": ["claude-sonnet-5"], "default_model": "claude-sonnet-5", "efforts": None},
@@ -1203,6 +1283,13 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     base_payload = {"task": "work", "dir": "/repo", "role": "", "group": "", "parent": "Parent"}
     assert out["initialClaude"]["payload"] == {**base_payload, "provider": "claude",
                                                "model": "claude-sonnet-5"}
+    standalone = out["geminiStandalone"]
+    assert not standalone["worktree"] and not standalone["resourcesShown"]
+    assert not standalone["locked"] and not standalone["launchDisabled"]
+    assert standalone["payload"] == {
+        "task": "work", "dir": "/repo", "role": "", "group": "", "standalone": True,
+        "provider": "gemini", "model": "gemini-3.8-flash-high", "effort": "medium",
+    }
     assert out["geminiSelected"] | {"payload": None} == {
         "worktree": True, "locked": True, "resourcesShown": True, "resources": "",
         "effort": "", "launchDisabled": True,
@@ -1377,6 +1464,94 @@ def _mail_calls(run) -> list[str]:
         return run.mail_log.read_text(encoding="utf-8").split()
     except FileNotFoundError:
         return []
+
+
+@pytest.mark.parametrize("isolation", [False, True])
+def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, isolation):
+    selected = _make_repo(tmp_path) if isolation else tmp_path / "vault"
+    selected.mkdir(exist_ok=True)
+    home = tmp_path / "install"
+    hooks = home / "hooks"
+    hooks.mkdir(parents=True)
+    for filename in ("gemini_interactive.py", "child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / filename, hooks / filename)
+    (home / "dashboard").mkdir()
+    (home / "dashboard/agy_history.py").write_text(
+        "GROUP='fixture-reader'\nHOOKS=('SessionStart',)\n"
+        "if __name__=='__main__': print('fixture-launch')\n")
+    _executable(hooks / "cleanup-child-agent.sh", "#!/bin/sh\nexit 0\n")
+    for helper in ("agentstack-gemini-child-mail", "agentstack-gemini-stream", "agentstack-gemini-mcp"):
+        _executable(home / "bin" / helper, "#!/bin/sh\nexit 99\n")
+    fake_bin = tmp_path / "commands"
+    _executable(fake_bin / "uname", "#!/bin/sh\nprintf 'Darwin\\n'\n")
+    capture = tmp_path / "launch.json"
+    _executable(fake_bin / "agy", f"#!{sys.executable}\n" + """
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+added = Path(args[args.index("--add-dir") + 1])
+assert (added / ".agents/hooks.json").is_file()
+assert (added / ".agents/mcp_config.json").is_file()
+Path(os.environ["FIXTURE_CAPTURE"]).write_text(json.dumps(
+    {"cwd": os.getcwd(), "args": args, "parent": os.getenv("PARENT_AGENT")}))
+""")
+    _executable(fake_bin / "tmux", f"#!{sys.executable}\n" + """
+import json, os, subprocess, sys
+from pathlib import Path
+args = sys.argv[1:]
+identity = "FixtureAgy|$1|1000|123"
+if args[0] == "display-message":
+    print(identity)
+elif args[0] == "new-session":
+    workdir = args[args.index("-c") + 1]
+    runner = args.index("/bin/bash")
+    assert args[runner-2:runner] == ["-e", "AGENTSTACK_GEMINI_INTERACTIVE=1"]
+    result = subprocess.run(args[runner:], cwd=workdir, env={**os.environ, "TMUX_PANE": "%1"})
+    assert result.returncode == 0
+    status = Path(os.environ["AGENTSTACK_RUNTIME_DIR"]) / "child-agents/FixtureAgy.agy-status.json"
+    status.write_text(json.dumps({"tmux": identity, "activity": "wait"}))
+    status.chmod(0o600)
+else:
+    sys.exit(1)
+""")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    token = tmp_path / "handoff.token"
+    token.write_text("synthetic-token")
+    token.chmod(0o600)
+    binding = pathlib.Path(str(token) + ".binding.json")
+    binding.write_text(json.dumps({"agent_id":72, "agent_name":"FixtureAgy",
+                                   "project_key":"/fixture", "program":"antigravity"}))
+    binding.chmod(0o600)
+    task = tmp_path / "task.txt"
+    task.write_text("One canonical task.")
+    result = _REAL_RUN(
+        ["/bin/bash", str(ADAPTER), "--pre-registered", "FixtureAgy", "--child-token-file", str(token),
+         "--standalone", *(["--worktree"] if isolation else []), "--model", "gemini-fixture",
+         "preview", str(selected)],
+        env={**os.environ, "HOME":str(tmp_path), "PATH":f"{fake_bin}:{os.environ['PATH']}",
+             "PARENT_AGENT":"Unrelated", "AGENTSTACK_HOME":str(home), "AGENTSTACK_HOOKS_DIR":str(hooks),
+             "AGENTSTACK_LABEL_PREFIX":"org.agentstack.test.gemini-adapter",
+             "AGENTSTACK_PYTHON":sys.executable, "AGENTSTACK_RUNTIME_DIR":str(runtime),
+             "AGENTSTACK_WORKTREE_ROOT":str(tmp_path / "worktrees"), "AGENTSTACK_PROJECT_KEY":"/fixture",
+             "AGENTSTACK_GEMINI_TASK_FILE":str(task), "FIXTURE_CAPTURE":str(capture)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(capture.read_text())
+    launched_folder = tmp_path / "worktrees/FixtureAgy" if isolation else selected
+    assert observed["cwd"] == str(launched_folder)
+    assert observed["parent"] is None
+    assert observed["args"][-2] == "-i"
+    assert observed["args"][-1].count("One canonical task.") == 1
+    assert "independent Antigravity agent" in observed["args"][-1]
+    assert not any((directory / ".agents").exists() for directory in (selected, launched_folder))
+    assert not list((runtime / "child-agents").glob("*.agy-config"))
+    assert not token.exists() and not binding.exists() and not task.exists()
+
+
+def test_adapter_rejects_absolute_resource_before_worktree(tmp_path):
+    run = _adapter_run(tmp_path, "src/**,/etc/**")
 
 
 @pytest.mark.parametrize("effort", ["medium", "xhigh"])

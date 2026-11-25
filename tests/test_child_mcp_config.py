@@ -56,14 +56,16 @@ def _assert_proxy_tool_approvals(config: str, server_names: tuple[str, ...]) -> 
     assert "default_tools_approval_mode" not in config
 
 
-def test_codex_child_approval_allowlist_matches_proxy_surface_exactly():
+def test_child_approval_allowlists_match_proxy_surface_exactly():
+    from hooks.gemini_interactive import MAIL_TOOLS
+
     source = _ROOT / "integrations" / "codex_app" / "src"
     sys.path.insert(0, str(source))
     try:
         from agentstack_codex_app.mcp_server import TOOL_DEFINITIONS
     finally:
         sys.path.pop(0)
-    assert _CODEX_PROXY_TOOLS == tuple(item["name"] for item in TOOL_DEFINITIONS)
+    assert MAIL_TOOLS == _CODEX_PROXY_TOOLS == tuple(item["name"] for item in TOOL_DEFINITIONS)
 
 
 def test_windows_launcher_approval_list_matches_proxy_surface_exactly():
