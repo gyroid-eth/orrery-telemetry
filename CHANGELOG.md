@@ -10,6 +10,266 @@
 
 ---
 
+## 2026.11.26
+
+### スマホの Reader 上部で agent 名と権限を読みやすく
+
+操作ボタンの表示を小さくして押せる範囲を確保し、DEMO の表示を上部の帯の下に移しました。狭い画面でも agent 名と権限表示に使える幅が広がります。
+
+### スマホの Reader で Markdown ファイルをプレビュー
+
+会話のファイルから開いた `.md` と `.markdown` を、見出し、リスト、コード、リンク、表を整形して表示します。幅の広い表は横にスクロールできます。原文表示に切り替え、編集した内容を手元にダウンロードできます。
+
+### 初回導入で詰まる所を直す
+
+Hermes を使うときは、始める前に xz と libatomic を調べ、足りなければ入れる command を 1 行で示して止まるようにしました。
+lsof が無い環境でも、自分の dashboard が持つ port を「使用中」と取り違えなくなりました。
+Hermes の初回取得は固定 commit だけを浅く取り、進み具合を逐次表示します。
+selftest と doctor は、共通部分の合否と Claude の MCP 登録の未承認を分けて示します。
+ChatGPT MCP の既定 port を 8792 にして、cockpit の 8791 と分けました。
+`--dry-run` が HOME に .pyc を書かなくなりました。
+
+### README と導入ガイドから初回設定をたどりやすく
+
+OS ごとの前提、共通部分の導入が完了したと判断する条件、使う追加機能の入口を日英の README と導入ガイドにまとめました。権限の表示、画面操作の3段階、親なしの Antigravity、ChatGPT MCP の既定ポートなど、利用ガイドを現在の動作にそろえました。
+
+### Antigravity で ORRERY Mail の道具を起動時から利用
+
+管理された対話型の Antigravity は、親なし起動でも委任起動でも、`whois` を含む Codex の子と同じ Mail の道具を起動時にそのセッションだけ許可します。対象は ORRERY が設定した Mail proxy です。利用者の Ask・Deny の設定が優先されます。
+
+### 人の操作を待っている子を親に知らせる
+
+- Claude、Codex CLI、dsh、Hermes、Antigravity の tmux 子が承認・ログイン・同意・モデル選択などの対応画面で20秒以上待つと、legacy dashboard が ORRERY Mail で親に1回知らせます。Codex のフォルダー信頼と更新の確認、Antigravity の MCP 承認も対象です。
+
+### 画面を切り替える slash command の受領を確認
+
+- Mail の通知係と対応する cockpit は、Enter の後に `/help` や `/model` などの対応画面が開いたことを確認すると、command を受領済みとして扱います。
+- 対応する cockpit の Esc と ■ はハーネスに合った中断キーを使います。作業中の Hermes には Ctrl+C を送り、待機中はキーを送りません。ほかのハーネスには Esc を送ります。
+- 作業中の Hermes に人が cockpit から送った通常文は、Hermes の作業中の入力設定に従って処理されます。Mail の通知係は、作業中の Hermes への通常文の自動送信を待ちます。
+
+### Claude Code の引数案内を slash command の入力と区別
+
+末尾に空白を付けた slash command で Claude Code が表示する引数の案内を、送信を確かめるときの入力本文から外します。Mail の通知係も同じ読み取りを使います。
+
+### すべての harness で、通知と slash command を確かめて送る
+
+Claude Code・Codex・dsh・Hermes・Antigravity のそれぞれの入力欄と候補欄を読み、選ばれた候補が送った command と一致したときだけ Enter を送ります。これまで dsh と Hermes では `/log` を送ると `/login` が、Antigravity では `/logout` が選ばれたまま Enter を送ることがありました。
+dsh の入力欄は長い文の先頭を隠すため、通知を貼っても Enter を送らず入力欄に残っていました。見えている末尾が貼った通知と一致すれば送ります。Hermes が送信の直後に描く表示も読み、受領を確かめます。
+
+### slash command の候補欄が出ないときは、そのまま送る
+
+Claude Code が作業中などで `/` の候補欄を出さないと、選ばれた候補を確かめられないとして Enter を送らず、入力欄に command が残っていました。候補欄が出ないままで、入力欄の文が送った command と完全に一致すれば送ります。候補が違うとき・読めないときは、これまでどおり送りません。
+
+### Antigravity とほかのハーネスの道具選択を共通化
+
+- macOS の NEW AGENT で Claude Code、Codex CLI、dsh、Hermes、Antigravity の画面を Off／View／Control から選べます。親なしの Antigravity でも利用できるブラウザのモードを選べます。
+- Cockpit とスマホで Antigravity に渡した画面・ブラウザの設定を表示します。設定を確認できないときは Unknown と理由が出ます。
+- Antigravity の管理された対話セッションでは、選んだ画面の段に含まれる道具を起動時に許可します。
+- Dashboard API 53 は `computer_modes` と Antigravity の権限表示を追加します。
+
+### macOS の NEW AGENT から親なしで Antigravity を起動
+
+Cockpit とスマホから、Git を使っていないフォルダでも親なしの Antigravity を開けます。最初の入力は一度だけ CLI に渡り、起動後は Mail、Reader、Resume が使えます。ORRERY の Mail と hook の設定は起動ごとの専用ディレクトリに置き、終了時に片付けます。Telemetry API 50 は macOS の Antigravity に `capabilities.standalone: true` を返します。
+
+### 起動記録のないエージェントの画面操作・ブラウザーの状態を表示
+
+稼働中の Claude Code／Codex CLI は、起動記録がなくても認識できたローカルの道具と起動フラグを Cockpit とスマホの Reader に表示します。プロセスの引数や画面 relay のモードを確認できない場合は、Unknown とその理由を表示します。
+
+API 52 の `/api/agents` に `permission_source`、`computer_use_reason`、`browser_use_reason` を追加しました。詳しくは [API の権限表示](docs/api.md#get-apiagents) を参照してください。
+
+### 承認待ちの agent に「!」を出す（長い確認でも）
+
+Claude Code の承認の画面が長く、選択肢の下に「↑ N more lines」が出ると、dashboard が承認待ちと判定できず、ORRERY に「!」が出ていませんでした。dashboard の判定を `terminal_state` の判定と共有し、スクロールの印があっても承認待ちとして扱います。通常の権限の確認・hook の確認・MCP の確認で確かめています。
+
+### DeepSeek・Local の dsh の子も Claude の子と同じ利用者の skill を使う
+
+dsh の子は、Claude の子が読む利用者の skill（`$CLAUDE_CONFIG_DIR/skills`、未設定なら `~/.claude/skills`）も読むようになった。dsh が有効と認めた同名の利用者 skill が製品 skill より優先される。利用者の skill の directory が無い環境は従来どおり。Hermes の子は従来どおり製品の skill を使う。詳しくは [launcher の追加 harness](docs/launchers.md#標準-spawn-の追加-harnessopt-in) を参照。
+
+- dsh-tui では skill の探索を agent preset が持つので、起動計画の環境に `DSH_AGENTS_HOME`（Claude の設定 dir）を渡す。dsh が認識する frontmatter の名前で一致した製品 skill の link だけを外す。利用者の設定や skill は書き換えない。
+- 起動と再開のたびに読み直すので、`CLAUDE_CONFIG_DIR` の変更や利用者の skill の追加・削除が次の起動に反映される。
+- 利用者の skill の directory が解決できないか、検査中に消失・変更したり読み取りに失敗したりしたときは、製品の skill だけで起動し、理由を子の `personal-skills.json` に残す。dsh は一つでも読めない skill があると、製品の skill ごと一覧を失うため。
+- `DSH_AGENTS_HOME` を変えるので、dsh 既定の `~/.agents` は読まれなくなる。
+- 製品の `/log` は、Obsidian モードの条件を満たさないとき、どの条件が欠けているかを確かめて名指すようにした。
+
+### NEW AGENT の task Mail の写しで、親自身に通知を出さない
+
+dashboard から Claude・Codex の子を起こすとき、親への task Mail の写しを CC から BCC に変えた。写しは親の inbox に残るが、ORRERY Mail は BCC に通知を出さないので、親が自分の依頼の通知で起こされない。これまでは、子の完了報告より先にこの長い通知が親の入力欄に入っていた。
+
+### Mail の通知が待機している理由をログに表示
+
+同じ通知を3回待ったときと、その後に待機理由が変わったときに、宛先、メッセージ ID、待機理由を通知係のログに記録します。入力欄が空でないときや slash command の候補が違うときなどに、何を待っているかを確認できます。
+
+### Antigravity の NEW AGENT で xhigh を選べるように
+
+カタログに `-xhigh` のモデル ID がある系統では、effort の選択肢に `xhigh` が加わります。選んだ段に対応するモデル ID と effort で Antigravity を起動します。effort の付かないモデル ID は従来どおり `low`、`medium`、`high` だけを受け付けます。CLI の launcher（`spawn_gemini_child.sh`、`agent-start-gemini`）は `low`、`medium`、`high` のままです。
+
+### 長い通知で Claude Code の入力欄がスクロールしても送る
+
+Mail の通知が長く、Claude Code の入力欄が中でスクロールして上の枠が「↑ N more」になったときも、見えている末尾が送った文の末尾と一致すれば Enter を送ります。これまでは入力欄を見つけられず、通知が入力欄に残っていました。
+
+### 端末のスラッシュコマンドを確認して送信
+
+Claude Code と Codex の入力欄で候補が開いたときは、選択中の名前と貼り付けたコマンドが一致した場合に Enter を送るようにしました。幅の狭い画面で候補の説明が折り返されても、選択中の名前を読み取ります。
+Claude Code が作業中に通常の入力を受け付けたときも、名前付きの入力枠とキューの案内を読み取り、受領を確認します。
+作業を終えた Claude Code が次の入力の候補を薄い字で出しているときは、入力欄を空として扱います。
+Antigravity の待機画面で、下段にモードが無くモデル名と effort だけが出ているときも、入力待ちと判定します。
+
+### CI の試験とファイル予約を安定化
+
+- macOS の CI で、daemon の相手確認、退役済みエージェントの名簿、Hermes の終了を確認する試験を安定化しました。
+- Windows の子ランチャーは、非公開ディレクトリを作る際のユーザー SID を `whoami.exe` で取得します。
+- glob 予約は、件数と処理スレッドの CPU 時間で探索量を制限します。OS による実行待ちだけで `GLOB_SCOPE_UNKNOWN` にならなくなりました。
+
+### PR の試験の待ちを短くしました
+
+- PR では macOS の試験を Python 3.12 だけで回します。3.11 と 3.14 は、master に入った後に回します。macOS の試験は同時に少ししか回せず、1 本に約 1 時間かかるため、PR ごとに 3 本回すと待ちが数時間になっていました。
+
+### スマホの Reader で、長い返事もおよそ 1 秒で出しきります
+
+1 語ずつ読む順に出す動きが、1 コマに 1 語ずつしか出さず、長い日本語の返事では数秒かかっていました。その時点で出すべき語をまとめて出し、長い返事でもおよそ 1 秒で出しきります。
+
+### スマホの Reader で返事に書かれた画像パスを開く
+
+agent の返事に画像の絶対パスが単独の行で書かれていると、その行をタップしてプレビューを開けます。更新した cockpit が画像の参照を発行し、スマホはタップしたときにその参照で画像を取得します。
+
+### スマホの New agent で Local の起動設定と失敗理由を表示
+
+スマホで dsh・Hermes を選ぶと、選択したフォルダで利用できる場合に Browser が表示されます。起動に失敗すると次の操作を英語で案内します。API 49 の `GET /api/spawn-names` に `native_browser_dirs` を追加しました。
+
+dsh・Hermes で Chrome DevTools を明示して選ぶと、Codex と同じブラウザ設定を使えます。
+
+Browser を Off にしても標準の起動設定とハーネス内蔵の道具を保ちます。API 49 の `tools.browser_off` でブラウザ連携だけを外し、`supports_browser_off` で対応を確認できます。
+
+### New Agent のブラウザモード
+
+Browser アイコンから Off、Temporary Chrome、My Chrome を選べます。対応する場合の既定は My Chrome です。Temporary Chrome は子専用の一時プロファイルを使います。Chrome が接続許可を求める場合は Mac で応答するとブラウザ操作が進みます。API 49 で `browser_modes` と `tools.browser_mode` を追加しました。
+
+### スマホの Reader で Bash・Shell の記録を開く
+
+Claude Code の Bash と Codex の Shell を押すと、記録されたコマンドと出力が段のすぐ下に開きます。失敗したコマンドは分かっている終了コードを一覧に出します。コマンドと出力は押した操作分だけ取得し、Demo mode では既存の伏せ方を適用します。
+
+### スマホの Graph で親子線と重なる Mail 線をタップできる
+
+親子線が同じ場所にあっても、Mail の線をタップするとその 2 体間の一覧が開きます。
+
+### スマホの入力欄の送り先表示を簡素化
+
+送り先は Reader の見出しの肖像と名前で確認できます。legacy 接続で同じ agent に複数の tmux pane がある場合は、引き続き宛先の pane を選べます。
+
+### スマホの端末プレビューの再接続
+
+端末プレビューが一度途切れても、最後に確認した表示を残し、入力を続けられます。失敗が続いたときは自動で再接続し、同じ pane を確認してから入力を再開します。
+
+### スマホの Reader で編集の差分を表示
+
+Claude Code と Codex の作業の段に追加・削除の行数を表示します。Edit や Write を押すと、その操作の記録だけを取得し、直下に差分を開きます。Demo mode では差分も既存の規則で伏せます。
+
+### スマホの ORRERY をコンピューター名で見分けられるようにした
+
+Tailscale Serve のアドレスからコンピューター名を取り、インストール時のアプリ名とブラウザーのタイトルに `ORRERY · コンピューター名` と表示します。ホーム画面用の短い名前には、コンピューター名を最大 12 文字で表示します。
+
+### WSL2でスマホのReaderを使う
+
+CockpitのPhone accessでWSL2のリレーをsystemd user unitとして管理できます。WSL内にTailscaleがない場合はWindows側を使います。TelemetryのSettingsでHTTPS 9443のServeを追加・削除する前に対象を表示し、確認ボタンで確定します。
+
+### スマホの NEW AGENT にデスクトップと同じモデル選択
+
+プロバイダーのアイコンを選び、そのモデル一覧を検索できます。Local のモデルは接続先を見分けられます。モデルを選ぶと、使えるハーネスと Effort が更新されます。
+
+### スマホの Reader に送信・Mail・返信の動き
+
+送信した発言は引用付きでもすぐ Reader に表示し、同じ発言が履歴に届くと引き継ぎます。新着 Mail は差出人から宛先へ、長い返信は段落・箇条書き・表も画面上の読む順に一語ずつ表示します。視差効果を減らす設定では静止表示になります。
+
+### スマホから送った参照付き返信をカードで表示
+
+スマホの1行形式で記録された参照付き返信を Reader の参照カードで表示します。新しい返信では、引用の改行や空白を選択どおりに保ちます。
+
+### スマホの NEW AGENT に Antigravity のモデルを表示
+
+スマホのモデル一覧に、デスクトップのカタログから届いた Antigravity（Gemini）を表示します。モデルを選ぶと、起動に親エージェントと予約対象の指定が必要だと分かります。
+
+### スマホの Reader が送信した添付を表示
+
+会話に記録された添付を縮小図とファイルの札で表示します。送信直後の控えにも、選んだ画像の縮小図とファイル名が出ます。対応する Cockpit では、スマホで選んだ元のファイル名も保存します。
+
+### スマホの Reader で作業の段をインライン表示
+
+作業中はツール呼び出しを `Working…` の段の中で数えます。完了後は `N tool calls` と所要時間になり、タップで内訳を開けます。作業の段はデスクトップと同じ枠のない表示です。
+
+### Codex の子が起動元の ORRERY 設定を使う
+
+新規起動と再開では、ログインシェルの初期化後に子の runtime・project key・ORRERY Mail の URL を再設定します。別 install の設定を `~/.zshenv` で読み込む環境でも、子は起動元の ORRERY に接続します。
+
+### NEW AGENT の起動通知と後片付けを修正
+
+- Claude Code が「Claude in Chrome」などの起動時の通知を表示すると、NEW AGENT は Enter／Esc の案内から通知を検出し、見出しと端末での再起動手順を表示します。キー操作は利用者が行います。
+- 起動失敗の後片付け中に tmux セッションが消えた場合も、dashboard は起動の結果を返します。セッションの不在を確認できた場合は、残りの後片付けを続けます。
+
+### Antigravity の子が対話画面で動き、報告の後も Mail で次の仕事を受けられます
+
+- macOS の Antigravity の子が対話画面で動き、報告後も Mail で追加の指示を受けられます。
+- 子の worktree だけを起動時に信頼し、編集前に予約を確認します。履歴を照合できる子は同じ会話に戻れます。
+
+### Mail 通知と Cockpit の発言の混在を防止
+
+Mail watcher と Cockpit は pane ごとのロックを共有し、貼り付けた文が入力欄に表示されてから Enter を送ります。入力欄が埋まっている場合は自動送信を見送ります。
+
+### Antigravity の対話型 Reader
+
+管理された対話型 Antigravity の発言とツール記録を Desktop・スマホの Reader で読めます。compact の記録を **Context compacted** として表示します。公式フックによる会話の対応付けは API 48 です。
+
+### スマホの Reader にコンテキスト圧縮の進行と完了を表示
+
+- Claude Code・Codex CLI・dsh・Hermes の圧縮中は **Compacting context…** と観測できた経過時間を表示し、完了記録は **Context compacted** の 1 行で表示します。Claude Code の重複する圧縮コマンドと完了出力は畳み、ローカルコマンド出力の色制御文字は取り除きます。
+- API 47 の旧運用の `/api/agents` とスマホ用 snapshot に任意の `reader_phase` と `reader_phase_elapsed` を追加しました。
+
+### Mac の子の Computer use を Cua Driver に統一
+
+- NEW AGENT、`/api/spawn`、`--tools` の macOS の画面操作で、Claude Code、Codex CLI、dsh、Hermes、Antigravity CLI は既存の `orrery-screen` を使います。起動ごとの Off／View／Control と呼び出し履歴を引き継ぎます。
+- 生成する Codex CLI のホームでは、同梱の GUI 操作経路を外します。Hermes の子は組み込みの Cua Driver toolset と relay の同時読み込みを避けます。
+
+### Antigravity のモデル検出と導入手順を修正
+
+Dashboard のサービス PATH に `~/.local/bin` がなくても、標準の場所に入れた `agy` からモデル一覧を取得します。`agent-start-gemini` は管理された Mail MCP 定義が見つからないときに設定手順を案内します。導入ガイドには、利用枠の有効化、権限モード、公式インストーラーが行うシェル設定の変更を追記しました。
+
+### スマホの Reader から返信の引用元へ移動
+
+返信の上に肖像と引用の書き出しを1行で表示します。押すと同じ会話の引用元へ移動し、必要に応じて古い履歴も読み込みます。人の発言は デスクトップの Reader と同じ右寄せのアンバーの帯と Plex Sans で表示します。
+
+### 親なしで生成した agent の権限を切り替えて再開
+
+- API 46 では、起動時に道具の選択を保存した親なしの Claude Code／Codex CLI でも、元の会話で Computer use または Browser use を変更できます。
+- 稼働中は停止前に会話・登録・起動経路と変更後の構成を確かめます。保存設定がない場合などは、一覧に切り替えができない理由を返します。
+
+### 中継で起動した Cua Driver を名簿の詳細に表示
+
+中継コマンドの末尾が標準の `cua-driver mcp` で、ツールのフィルターや `CUA_DRIVER_` の環境変数がない場合も、名簿の詳細の Computer use に `Control` を表示します。
+
+### スマホの Reader で Markdown 画像を表示
+
+発言や記録された Mail の本文に貼られたローカル画像は、cockpit が付けた参照でプレビューし、タップで拡大できます。画像を取得できない場合は説明とパスを表示します。外部の画像はリンクで開けます。
+
+### Mail 本文の Markdown 表示
+
+スマホの Reader と Mail 詳細、PC の二者間 Mail で、本文の表、箇条書き、見出し、強調、コード、リンクを表示します。横長の表は本文の中で横スクロールでき、HTML は文字として表示します。
+
+### 停止済みの子の権限を一つずつ変更して再開できます
+
+Dashboard API 世代 45 の `/api/jump` に `permission` を追加しました。停止と会話の一致を確認できた Claude／Codex CLI の子について、元の `base` と他の道具・承認を維持したまま、Computer use または Browser use を切り替えます。起動に必要な構成を用意できない場合は理由を返します。[再開 API](docs/api.md#post-apijump)
+
+### agent の詳細の role に、設定した役目を出す
+
+- agent の詳細とグラフの説明の role の行は、設定した役目ではなく依頼の関係の中での位置（parent／child）を出していて、役目を変えても更新されないように見えました。role には NETWORK と同じく設定した役目を出し、位置は lineage の行に分けました。
+
+### WSL を agent の作業中に自動で保持する
+
+WSL の従来モードでは、agent が稼働・起動している間や dashboard のページを表示している間、隠れた `wsl.exe` で WSL を保持する。無活動が60秒続くと保持を手放す。状態は dashboard と `agentstack-doctor` で確認でき、`--no-wsl-anchor` で無効にできる。詳しくは [WSL2 のトラブルシューティング](docs/troubleshooting.md#wsl2-で-ubuntu-の窓を閉じたとき) を参照。
+
+- PowerShell の初回起動が遅い場合や進行表示が混じる場合にも `wsl.exe` の PID を取得する。PowerShell の終了待ちが時間切れになっても、出力済みの PID は利用する。
+- 起動の完了時に状態の更新時刻を記録し、保持用プロセスが解放を終えるまで `releasing` と表示する。
+- Windows の WMI で保持用プロセスを元の接続から独立させ、同じ起動で Windows PID と Linux 側の準備を確認してから保持成功を表示する。保持を確認できないときは NEW AGENT の通知にも理由と対処を出す。
+- systemd user manager と linger が使える WSL では dashboard を user service として登録し、Ubuntu の起動時に dashboard が立ち上がる。linger を確認できない場合は supervised background を使う。
+
 ## 2026.11.23
 
 ### Hermes の常駐 bot が Telegram の入力を TUI に渡せるように修正
