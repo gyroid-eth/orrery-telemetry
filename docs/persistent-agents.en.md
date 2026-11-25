@@ -454,23 +454,6 @@ exec "$HOME/.agentstack/bin/agentstack-persistent" run \
 
 A startup service or tmux script should make this its final `exec`. Do not hide the interactive process behind another child if the interactive surface must be retained.
 
-### Computer and browser use
-
-A persistent agent has no launch record like a child, so Claude Code's computer and browser use follow the user's settings (MCP servers and the Claude in Chrome default in `~/.claude.json`). Choosing this agent's permissions in DECK saves them in the runtime's `agent-permissions/<name>.json`, and `agentstack-persistent run` uses them at the next start. The running process does not change; a restart-pending mark stays until it restarts.
-
-- Browser use: adds `--chrome` or `--no-chrome`. A flag already in the profile command wins.
-- Computer use: adds the same gated `orrery-screen` server as children and denies the user's own Cua Driver server and the built-in computer use for that launch. View and Control can then be switched while it runs with the [computer use API](computer-use.md#起動中に権限を変える).
-- An unreadable record (for example, not 0600) stops the start with `saved-permissions-unavailable`. Choosing again in DECK replaces the record.
-
-If another script starts Claude without a profile, put the wrapper in front of its command. The command runs unchanged with only the saved arguments appended; without a saved record nothing is added.
-
-```bash
-exec "$HOME/.agentstack/bin/agentstack-agent-permissions" exec ChannelsBot -- \
-  claude --model sample-model --channels plugin:sample@sample-marketplace
-```
-
-`agentstack-agent-permissions show ChannelsBot` prints the saved values. A conversation that the dashboard's Resume started is restarted in the same conversation when you choose in DECK.
-
 ### credential-unavailable
 
 Only when restart reports `local-credential-unavailable` or the exact diagnostic `stage=local-token reason=credential-unavailable` should an operator stop the bot, begin again with `$HOME/.agentstack/bin/agentstack-enroll inspect`, and choose `recover` if the state is `server-token` plus a missing local credential. Do not have the model run it. Do not infer credential loss from a generic registration failure, HTTP 401/403, or a stopped Mail service.

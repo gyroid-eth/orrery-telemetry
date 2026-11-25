@@ -1095,37 +1095,12 @@ def _claude_overlay_names(
     return aliases or {"orrery-mail"}
 
 
-def _saved_claude_permissions(
-    profile: dict[str, Any], command: Sequence[str], runtime_dir: Path,
-    environment: dict[str, str], connection: dict[str, Any],
-) -> tuple[dict[str, Any], list[str]]:
-    """Computer and browser use saved from the UI for this agent, as launch input."""
-    home = Path(os.environ.get("AGENTSTACK_HOME", str(Path(__file__).resolve().parent.parent)))
-    source = Path(os.environ.get("AGENTSTACK_HOOKS_DIR") or home / "hooks") / "agent_permissions.py"
-    if not source.is_file():
-        return {}, []  # An install without the module launches as before.
-    module = runpy.run_path(str(source))
-    try:
-        record = module["read"](runtime_dir, profile["name"], agent_id=profile["agent_id"],
-                                project_key=profile["project_key"])
-        if record is None:
-            return {}, []
-        arguments, servers, generation = module["claude_launch"](
-            runtime_dir, record, command, cwd=profile["working_directory"],
-            claude_json=str(_claude_config_paths(environment)[1]), mail_env=connection["mail_env"])
-        module["mark_applied"](runtime_dir, profile["name"], record, "persistent", generation)
-    except module["AgentPermissionsError"] as exc:
-        raise PersistentError("saved-permissions-unavailable") from exc
-    return servers, arguments
-
-
 def _write_claude_proxy(
-    state_dir: Path, runner: Path, proxy_env: dict[str, str], names: set[str],
-    extra: dict[str, Any] | None = None,
+    state_dir: Path, runner: Path, proxy_env: dict[str, str], names: set[str]
 ) -> Path:
     server = {"command": str(runner), "args": [], "env": proxy_env}
     path = state_dir / "proxy" / "claude-mcp.json"
-    _atomic_json(path, {"mcpServers": {**(extra or {}), **{name: server for name in sorted(names)}}})
+    _atomic_json(path, {"mcpServers": {name: server for name in sorted(names)}})
     return path
 
 
@@ -1471,17 +1446,13 @@ def _run(profile_path: Path) -> NoReturn:
             mail_names = _claude_overlay_names(
                 command, Path(profile["working_directory"]), environment, connection
             )
-            saved_servers, saved_arguments = _saved_claude_permissions(
-                profile, command, runtime_dir, environment, connection
-            )
         else:
             mail_names = {"orrery-mail", "agentstack"}
-            saved_servers, saved_arguments = {}, []
-        mcp_config = _write_claude_proxy(state_dir, runner, proxy_env, mail_names, saved_servers)
+        mcp_config = _write_claude_proxy(state_dir, runner, proxy_env, mail_names)
         environment["AGENTSTACK_PERSISTENT_MCP_CONFIG"] = str(mcp_config)
         environment["AGENTSTACK_PERSISTENT_MAIL_MCP_NAMES"] = ",".join(sorted(mail_names))
         if profile["interaction"] == "interactive":
-            command.extend(["--mcp-config", str(mcp_config), *saved_arguments])
+            command.extend(["--mcp-config", str(mcp_config)])
     else:
         codex_home = _write_codex_home(profile, state_dir, runner, proxy_env)
         environment["CODEX_HOME"] = str(codex_home)

@@ -1,6 +1,5 @@
 """Tools of agents without saved launch settings, read from fake processes."""
 
-import json
 import os
 import subprocess
 import sys
@@ -26,12 +25,6 @@ def _tree(processes):
     return (names, children), lambda pid: processes[pid][1] if pid in processes else None
 
 
-def _claude_json(tmp_path, **data):
-    path = tmp_path / "claude.json"
-    path.write_text(json.dumps(data))
-    return str(path)
-
-
 def test_matchers_use_exact_arguments_only():
     assert agent_process.is_cua(["cua-driver", "mcp"])
     assert agent_process.is_cua(_RELAY)
@@ -47,68 +40,51 @@ def test_matchers_use_exact_arguments_only():
     assert agent_process.chrome_flag(["claude", "--chrome"]) is True
 
 
-def test_claude_with_a_relay_child_is_control(tmp_path):
-    tree, read = _tree({10: (1, ["claude", "--resume", "sid", "-n", "Worker"]), 11: (10, _RELAY),
-                        12: (10, _SHELL)})
-    settings = _claude_json(tmp_path, claudeInChromeDefaultEnabled=True,
-                            mcpServers={"screen": {"command": _RELAY[0], "args": _RELAY[1:]}})
-    assert agent_process.observe(10, tree, "claude", claude_json=settings, read=read) == {
-        "computer_use": "control", "browser_use": True,
-        "computer_use_next": "control", "browser_use_next": True}
+def test_claude_observes_the_relay_under_a_wrapper():
+    tree, read = _tree({10: (1, ["claude", "--chrome"]), 11: (10, ["supervisor"]),
+                        12: (11, _RELAY), 13: (10, _SHELL)})
+    assert agent_process.observe(10, tree, "claude", read=read) == {
+        "permission_source": "process", "computer_use": "control", "browser_use": True}
 
 
-def test_claude_started_before_the_user_setting_waits_for_a_restart(tmp_path):
-    tree, read = _tree({10: (1, ["claude", "--channels", "plugin:example"]), 12: (10, _SHELL)})
-    settings = _claude_json(tmp_path, mcpServers={"screen": {"command": "cua-driver", "args": ["mcp"]}})
-    assert agent_process.observe(10, tree, "claude", claude_json=settings, read=read) == {
-        "computer_use": "off", "browser_use": False,
-        "computer_use_next": "control", "browser_use_next": False}
+def test_unknown_flags_and_unbound_screen_relay_stay_unknown():
+    tree, read = _tree({10: (1, ["claude", "--", "--chrome"]), 11: (10, _SCREEN), 12: (11, _RELAY)})
+    assert agent_process.observe(10, tree, "claude", read=read) == {
+        "permission_source": "process", "computer_use": None, "browser_use": None,
+        "computer_use_reason": agent_process.RELAY_UNVERIFIED,
+        "browser_use_reason": agent_process.BROWSER_UNVERIFIED}
 
 
-def test_claude_project_settings_and_explicit_flags(tmp_path):
-    work = str(tmp_path / "work")
-    settings = _claude_json(tmp_path, claudeInChromeDefaultEnabled=True, projects={
-        work: {"mcpServers": {"screen": {"command": "cua-driver", "args": ["mcp"]}}},
-        str(tmp_path / "off"): {"mcpServers": {"screen": {"command": "cua-driver", "args": ["mcp"]}},
-                                "disabledMcpServers": ["screen"]},
-    })
-    tree, read = _tree({10: (1, ["claude", "--no-chrome"])})
-    assert agent_process.observe(10, tree, "claude", cwd=work, claude_json=settings, read=read) == {
-        "computer_use": "off", "browser_use": False,
-        "computer_use_next": "control", "browser_use_next": False}
-    off = agent_process.observe(10, tree, "claude", cwd=str(tmp_path / "off"), claude_json=settings, read=read)
-    assert off["computer_use_next"] == "off"
-    # A strict launch does not read the user's settings on its next start either.
-    tree, read = _tree({10: (1, ["claude", "--strict-mcp-config", "--mcp-config", "x.json"])})
-    strict = agent_process.observe(10, tree, "claude", cwd=work, claude_json=settings, read=read)
-    assert (strict["computer_use"], strict["computer_use_next"], strict["browser_use"]) == ("off", "off", True)
+def test_unreadable_grandchild_is_not_off():
+    tree, read = _tree({10: (1, ["codex"]), 11: (10, ["supervisor"]), 12: (11, _RELAY)})
+    def without_grandchild(pid):
+        return None if pid == 12 else read(pid)
+
+    assert agent_process.observe(10, tree, "codex", read=without_grandchild) == {
+        "permission_source": "process", "computer_use": None, "browser_use": None,
+        "computer_use_reason": agent_process.PROCESS_INCOMPLETE,
+        "browser_use_reason": agent_process.PROCESS_INCOMPLETE}
+    assert agent_process.observe(10, tree, "codex", read=read)["computer_use"] == "control"
 
 
-def test_claude_screen_relay_uses_the_launch_permission(tmp_path):
-    tree, read = _tree({10: (1, ["claude"]), 11: (10, _SCREEN)})
-    settings = _claude_json(tmp_path)
-    assert agent_process.observe(10, tree, "claude", claude_json=settings, screen_mode="view", read=read)[
-        "computer_use"] == "view"
-    unknown = agent_process.observe(10, tree, "claude", claude_json=settings, read=read)
-    assert unknown["computer_use"] is unknown["computer_use_next"] is None
+@pytest.mark.parametrize("tree,pid", [(None, 10), (({10: "node"}, {}), 10), (({}, {}), None)])
+def test_unverified_root_has_a_reason(tree, pid):
+    result = agent_process.observe(pid, tree, "claude", read=lambda _pid: ["node", "unrelated.js"])
+    assert result["computer_use"] is result["browser_use"] is None
+    assert result["computer_use_reason"] == result["browser_use_reason"] == agent_process.PROCESS_UNVERIFIED
 
 
-def test_unreadable_process_or_settings_stay_unknown(tmp_path):
-    tree, read = _tree({11: (10, _RELAY)})
-    assert agent_process.observe(10, tree, "claude", read=read) == {}
-    tree, read = _tree({10: (1, ["claude"])})
-    assert agent_process.observe(10, tree, "claude", claude_json=str(tmp_path / "absent.json"), read=read) == {
-        "computer_use": "off", "browser_use": None, "computer_use_next": None, "browser_use_next": None}
-    assert agent_process.observe(10, None, "claude", read=read) == {}
-    assert agent_process.observe(10, tree, "dsh", read=read) == {}
+def test_complete_observation_and_explicit_chrome_off():
+    tree, read = _tree({10: (1, ["claude", "--no-chrome"]), 11: (10, _SHELL)})
+    assert agent_process.observe(10, tree, "claude", read=read) == {
+        "permission_source": "process", "computer_use": "off", "browser_use": False}
 
 
-def test_codex_reads_devtools_and_screen_children():
-    tree, read = _tree({20: (1, ["codex", "resume", "sid"]), 21: (20, _DEVTOOLS), 22: (20, _RELAY)})
+def test_codex_reads_devtools_under_a_wrapper():
+    tree, read = _tree({20: (1, ["codex", "resume", "sid"]), 21: (20, ["supervisor"]),
+                        22: (21, _DEVTOOLS), 23: (20, _RELAY)})
     assert agent_process.observe(20, tree, "codex", read=read) == {
-        "computer_use": "control", "browser_use": True, "computer_use_next": None, "browser_use_next": None}
-    tree, read = _tree({20: (1, ["codex"]), 23: (20, _SHELL)})
-    assert agent_process.observe(20, tree, "codex", read=read)["browser_use"] is False
+        "permission_source": "process", "computer_use": "control", "browser_use": True}
 
 
 @pytest.mark.skipif(not (sys.platform == "darwin" or sys.platform.startswith("linux")),
@@ -130,21 +106,17 @@ def test_reads_the_exact_argv_of_a_real_process():
     assert agent_process.argv(True) is None
 
 
-def test_card_reads_the_process_only_without_saved_settings(tmp_path, monkeypatch):
-    processes = {10: (1, ["zsh", "-c", "claude"]), 11: (10, ["claude", "--channels", "plugin:example"]),
+def test_card_observes_only_running_cli_without_launch_settings(monkeypatch):
+    processes = {10: (1, ["node", "unrelated.js"]), 11: (10, ["claude", "--chrome"]),
                  12: (11, _RELAY)}
     tree, read = _tree(processes)
-    tree[0][11] = "claude"
     monkeypatch.setattr(agent_process, "argv", read)
-    monkeypatch.setenv("AGENTSTACK_CLAUDE_JSON", _claude_json(tmp_path, claudeInChromeDefaultEnabled=True))
     row = {"name": "Worker", "program": "claude-code", "running": True}
     card = server._agent_card_fields(row, {"pane_pid": 10}, {}, None, (), process_tree=tree)
-    assert {key: card.get(key) for key in (
-        "computer_use", "browser_use", "computer_use_next", "browser_use_next", "permission_source",
-        "permission_resume_supported", "permission_resume_reason")} == {
-        "computer_use": "control", "browser_use": True, "computer_use_next": "off",
-        "browser_use_next": True, "permission_source": "process",
-        "permission_resume_supported": False, "permission_resume_reason": "No saved launch settings; use Resume"}
+    assert {key: card[key] for key in (
+        "computer_use", "browser_use", "permission_source", "permission_resume_supported")} == {
+        "computer_use": "control", "browser_use": True, "permission_source": "process",
+        "permission_resume_supported": False}
     stopped = server._agent_card_fields(dict(row, running=False), {"pane_pid": 10}, {}, None, (), process_tree=tree)
     assert stopped["computer_use"] is stopped["browser_use"] is None
     assert "permission_source" not in stopped

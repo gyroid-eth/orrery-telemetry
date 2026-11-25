@@ -15,17 +15,23 @@ def test_only_the_bounded_display_role_is_projected():
     assert row['role']=='R'*40 and 'annot' not in row and 'task' not in row and 'group' not in row
 
 
-def test_tool_permissions_are_closed_values_only():
+def test_running_tool_permissions_and_unknown_reasons_are_closed_values():
+    from dashboard.agent_process import PROCESS_INCOMPLETE
     from dashboard.mobile_projection import project_agent
-    row = project_agent(dict(name='Alpha', computer_use='off', computer_use_next='control',
-                             browser_use=True, browser_use_next=False, permission_source='process'))
-    assert {key: row.get(key) for key in ('computer_use', 'computer_use_next', 'browser_use', 'browser_use_next')} == {
-        'computer_use': 'off', 'computer_use_next': 'control', 'browser_use': True, 'browser_use_next': False}
-    assert 'permission_source' not in row
-    for invalid in (None, 'Control', 1, {'mode': 'control'}):
-        unknown = project_agent(dict(name='Alpha', computer_use=invalid, browser_use=invalid))
-        assert 'computer_use' not in unknown and 'browser_use' not in unknown
 
+    row = dict(name='Alpha', running=True, computer_use='off', browser_use=None,
+               browser_use_reason=PROCESS_INCOMPLETE, permission_source='process')
+    projected = project_agent(row)
+    assert projected['computer_use'] == 'off'
+    assert 'browser_use' not in projected
+    assert projected['browser_use_reason'] == PROCESS_INCOMPLETE
+    assert 'permission_source' not in projected
+    assert 'computer_use' not in project_agent(dict(row, running=False))
+    assert 'browser_use_reason' not in project_agent(dict(row, browser_use=True))
+    assert 'browser_use_reason' not in project_agent(dict(row, browser_use_reason='untrusted argv'))
+    assert 'browser_use_reason' not in project_agent(dict(row, permission_source=None))
+    for invalid in (None, 'Control', 1, {'mode': 'control'}):
+        assert 'computer_use' not in project_agent(dict(row, computer_use=invalid))
 
 def test_working_duration_is_only_the_current_upstream_display():
     from dashboard.mobile_projection import project_agent

@@ -372,22 +372,7 @@ Legacy agent rows include these display fields in both the full roster and `scop
 
 The next roster refresh reports permission changes for `orrery-screen`. Other permissions describe launch configuration. Connection status and OS grants are outside this check.
 
-### Permissions of agents without a launch record (legacy, API 52)
-
-Claude Code agents that were not spawned as children (persistent agents, resumed sessions, other launch scripts) and Codex CLI sessions have no launch record. While such an agent runs, `computer_use` and `browser_use` are read from the actual process.
-
-- Computer use: a Cua Driver child process (direct, or a relay whose last arguments are `cua-driver mcp`) means `control`; an `orrery-screen` relay reports its launch permission; neither means `off`.
-- Browser use: for Claude, `--chrome` or `--no-chrome`, otherwise the Claude in Chrome default in `~/.claude.json`. A default changed after launch cannot be told apart. For Codex, whether a `chrome-devtools-mcp` child process runs.
-- Arguments are only matched, never returned. Environment values of MCP definitions are not read. Anything unreadable stays `null` as before.
-
-| Field | Value | Meaning |
-|---|---|---|
-| `permission_source` | `process` | Present only on rows whose values were read from the process. |
-| `computer_use_next` / `browser_use_next` | Value or `null` | What the next start uses: the saved choice, or what the same launcher takes from the user's settings. A value different from the current one waits for a restart. |
-| `permission_save_supported` | Boolean | A Claude Code agent without a launch record whose choice can be saved. |
-| `permission_apply` | `restart`, `resume`, `next_start` | How a saved choice is used: `restart` for a running conversation started by the dashboard's Resume, `resume` when stopped, `next_start` when the agent's own launcher (a persistent profile or another script) next starts it. |
-
-Choices are kept in the runtime's `agent-permissions/<name>.json` (0600) and matched to the registration's `agent_id` and `project_key`. The dashboard's Resume, the [persistent launcher](persistent-agents.en.md), and `agentstack-agent-permissions exec` turn the same record into launch arguments. Computer use goes through the same `orrery-screen` gate as children; the user's own Cua Driver server and the built-in computer use are denied for that launch. [Steps](persistent-agents.en.md#computer-and-browser-use)
+In API 52, a running legacy Claude Code or Codex CLI agent without a launch record can report its current observation in `GET /api/agents` with `permission_source: "process"`. The reader checks the agent's arguments and descendant processes for local Cua Driver and Codex Chrome DevTools, and reads an explicit Claude `--chrome` or `--no-chrome` flag. A `null` in `computer_use` or `browser_use` carries a short English `computer_use_reason` or `browser_use_reason` when the process, its arguments, the screen relay's mode, or the Claude Chrome flag cannot be verified. The mobile Reader receives the current values and those reasons. This describes recognized local tools and launch flags. Connection status, OS access grants, and other MCP servers are outside the observation.
 
 ### Project-scope read metadata (legacy, API 37)
 
@@ -718,8 +703,6 @@ The request below selects Claude in Chrome with a device ID and starts `orrery-s
 
 API 45 accepts `permission` on a legacy `/api/jump` for a stopped, retained Claude or Codex CLI child with a saved tool selection. API 46 also supports agents spawned without a parent when they meet the same conditions. Direct launches, persistent agents, Codex App, conversation-only resumes, and fresh and global modes are ineligible. Legacy roster rows report `permission_resume_supported` and a short English `permission_resume_reason`. A direct launch or other agent with no saved settings reports `No saved launch settings; use Resume`.
 
-API 52 accepts the same `permission` for a Claude Code agent without a launch record whose `permission_apply` is `restart` or `resume`. The server saves the choice, then resumes the same conversation with it. A running agent qualifies only when the dashboard's Resume started it (its command is `--resume <id> -n <name>` plus only the arguments the Resume adds). Rows with `next_start` save through `POST /api/agent-permissions` instead.
-
 Before stopping a running agent, add `check_only:true` to the request. Use the roster's bound `history_session_id` and exactly one of `computer_use` (`off`, `view`, `control`) or `browser_use` (boolean). A successful check returns `{"ok":true,"action":"validated"}` without changing the saved selection or Mail registration.
 
 ```json
@@ -731,18 +714,6 @@ Send the same `session` and `history_session_id` to `POST /api/exit`. Both reque
 The tools-change lock protects the original `base` and unrelated tools and approvals. `permission` cannot be combined with `base` or `tools`. A shared screen/browser MCP or an unavailable tool returns a reason and preserves the selection. Browser Off disables Claude in Chrome even with the `default` base. Disable any separately configured Codex Chrome extension before setting Browser Off.
 
 Success includes `action:"resumed"`, `tools_changed:true`, `base`, and the resulting `tools`. For Codex, the server waits up to 15 seconds for the conversation binding and idle prompt. If the restart cannot be confirmed and the agent has stopped, the previous selection is restored. When neither restart nor stop can be confirmed, the server returns `ok:false`, `error`, and `resume_confirmation_pending:true`. Inspect the session before retrying.
-
-## POST `/api/agent-permissions`
-
-Saves one permission for the next start of a Claude Code agent without a launch record (`permission_save_supported: true`). The running process does not change. Send exactly one of `computer_use` (`off`, `view`, `control`) or `browser_use` (boolean). Not available in fresh or global mode.
-
-```json
-{"session":"SampleAgent","computer_use":"control"}
-```
-
-```json
-{"ok":true,"action":"saved","saved":{"computer_use":"control","browser_use":true}}
-```
 
 ## POST `/api/exit`
 

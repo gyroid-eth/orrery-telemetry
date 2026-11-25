@@ -371,22 +371,7 @@ legacy の各エージェント行に以下の表示用フィールドを追加�
 
 `orrery-screen` の権限を変更すると、次回の一覧取得時に現在の値を返します。ほかの権限は起動時の設定を示します。サーバーの接続状況や OS の許可は検査しません。
 
-### 起動記録のないエージェントの権限（legacy、API 52）
-
-子として生成していない Claude Code（常駐、Resume、別の起動 script）や Codex CLI には起動記録がありません。稼働中なら、`computer_use` と `browser_use` を実際のプロセスから読みます。
-
-- 画面操作：エージェントの子プロセスに Cua Driver（直接、または relay の末尾が `cua-driver mcp`）があれば `control`、`orrery-screen` の relay があればその世代の権限、どちらもなければ `off` です。
-- ブラウザー：Claude は `--chrome`／`--no-chrome`、どちらもなければ `~/.claude.json` の Claude in Chrome の既定値です。起動後に既定値を変えた場合は区別できません。Codex は `chrome-devtools-mcp` の子プロセスの有無です。
-- 引数は照合だけに使い、一覧には返しません。MCP 定義の環境変数の値は読みません。読めない場合は今までどおり `null` です。
-
-| フィールド | 値 | 意味 |
-|---|---|---|
-| `permission_source` | `process` | 上の値をプロセスから読んだ行にだけ付きます。 |
-| `computer_use_next` / `browser_use_next` | 値または `null` | 次の起動で使う値です。保存した選択があればその値、なければ同じ起動方法がユーザー設定から得る値です。今の値と違えば再起動待ちです。 |
-| `permission_save_supported` | 真偽値 | 起動記録のない Claude Code で、選択を保存できる行です。 |
-| `permission_apply` | `restart`、`resume`、`next_start` | 保存した選択がどう使われるかです。`restart` は dashboard の Resume で起動した稼働中の会話、`resume` は停止中、`next_start` は常駐や別の起動 script など、その起動方法が次に起動するときです。 |
-
-保存先は runtime の `agent-permissions/<name>.json`（0600）で、登録の `agent_id` と `project_key` で本人を照合します。dashboard の Resume、[常駐の起動](persistent-agents.md)、`agentstack-agent-permissions exec` が同じ記録を起動の引数に直します。Computer use は子と同じ `orrery-screen` を通し、ユーザー設定の Cua Driver と内蔵の computer use はその起動で拒否します。[手順](persistent-agents.md#画面操作とブラウザーの権限)
+API 52 の旧運用の `GET /api/agents` は、起動記録のない稼働中の Claude Code／Codex CLI の状態を `permission_source: "process"` とともに返します。対象の引数と子孫プロセスからローカルの Cua Driver と Codex の Chrome DevTools を確認し、Claude では明示の `--chrome`／`--no-chrome` を読みます。プロセスや引数、画面 relay のモード、Claude の Chrome フラグを確認できない場合、`computer_use` または `browser_use` が `null` になり、短い英語の `computer_use_reason`／`browser_use_reason` が付きます。スマホの Reader にも現在値と理由が届きます。観測の対象は指定のローカルの道具と起動フラグです。接続状態、OS の許可、他の MCP サーバーは観測の対象外です。
 
 ### 所属projectの読み取りメタデータ（legacy、API 37）
 
@@ -721,8 +706,6 @@ API 43 から、停止した Claude の `resume_mode: conversation_only` でも�
 
 API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。直接起動、常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。直接起動などで設定の記録がない場合の理由は `No saved launch settings; use Resume` です。
 
-API 52 から、起動記録のない Claude Code で `permission_apply` が `restart` か `resume` の行にも同じ `permission` を使えます。サーバーは選択を保存してから同じ会話を Resume し、保存した選択を起動に当てます。稼働中の場合は、dashboard の Resume が起動した会話（Resume が足す引数のほかに `--resume <id> -n <name>` だけを持つ）に限ります。`next_start` の行は次の `POST /api/agent-permissions` で保存だけを行います。
-
 稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と、`computer_use`（`off`、`view`、`control`）または `browser_use`（真偽値）の片方だけを指定します。この確認に成功すると `{"ok":true,"action":"validated"}` を返し、設定と Mail 登録はそのままです。
 
 ```json
@@ -734,18 +717,6 @@ API 52 から、起動記録のない Claude Code で `permission_apply` が `re
 設定変更ロック内で元の `base` と変更対象以外の道具・承認を維持します。`permission` と `base`／`tools` の併用は拒否します。画面とブラウザーが同じ MCP を共有する場合や選んだ構成を用意できない場合は理由を返し、元の設定を維持します。Claude の Browser Off は元の `base` が `default` でも適用します。Codex の Chrome 拡張を別に設定している場合は先に解除してください。
 
 成功応答には `action:"resumed"`、`tools_changed:true`、`base`、変更後の `tools` が含まれます。Codex の再開では会話の binding と待機プロンプトを最大15秒待ちます。確認できず停止を確認した場合は設定を戻します。再開も停止も確認できない場合は `ok:false`、`error`、`resume_confirmation_pending:true` を返します。この場合は再試行前にセッションの状態を確認してください。
-
-## POST `/api/agent-permissions`
-
-起動記録のない Claude Code（`permission_save_supported: true`）について、次の起動で使う権限を 1 つ保存します。稼働中のプロセスは変わりません。`computer_use`（`off`、`view`、`control`）か `browser_use`（真偽値）の片方だけを指定します。fresh／global では使えません。
-
-```json
-{"session":"SampleAgent","computer_use":"control"}
-```
-
-```json
-{"ok":true,"action":"saved","saved":{"computer_use":"control","browser_use":true}}
-```
 
 ## POST `/api/exit`
 

@@ -10,6 +10,11 @@ from collections import OrderedDict, deque
 from copy import deepcopy
 from typing import Callable
 
+if __package__:
+    from .agent_process import UNKNOWN_REASONS
+else:
+    from agent_process import UNKNOWN_REASONS
+
 WINDOWS = {'all': None, 'day': 86400, '15m': 900,
            **{'m'+str(n): n*60 for n in range(15, 43201, 15)}}
 NAME = re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,95}\Z')
@@ -86,13 +91,19 @@ def project_agent(row):
     # task/group metadata or the remaining annotation dictionary.
     if isinstance(role, str) and role.strip() and not any(ord(c) < 32 or ord(c) == 127 for c in role):
         result['role'] = role.strip()[:40]
-    # Tool permissions are closed enums; nothing else about the launch crosses.
-    for key in ('computer_use', 'computer_use_next'):
-        if row.get(key) in ('off', 'view', 'control'):
-            result[key] = row[key]
-    for key in ('browser_use', 'browser_use_next'):
-        if type(row.get(key)) is bool:
-            result[key] = row[key]
+    # Only status and fixed reasons cross this boundary. Inactive rows do
+    # not show a running process's permission.
+    if running is True:
+        if row.get('computer_use') in ('off', 'view', 'control'):
+            result['computer_use'] = row['computer_use']
+        if type(row.get('browser_use')) is bool:
+            result['browser_use'] = row['browser_use']
+        if row.get('permission_source') == 'process':
+            for key in ('computer_use', 'browser_use'):
+                reason_key = key + '_reason'
+                reason = row.get(reason_key)
+                if key not in result and isinstance(reason, str) and reason in UNKNOWN_REASONS:
+                    result[reason_key] = reason
     duration = row.get('work_disp')
     if (act == 'work' and isinstance(duration, str)
             and re.fullmatch(r'[0-9]{1,6}(?:s|m[0-9]{2}s|h[0-9]{2}m)', duration)):

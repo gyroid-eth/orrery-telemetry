@@ -451,23 +451,6 @@ exec "$HOME/.agentstack/bin/agentstack-persistent" run \
 
 起動 service / tmux script はこの command を最後に `exec` してください。interactive surface を保つため、さらに子 process として隠さないでください。
 
-### 画面操作とブラウザーの権限
-
-常駐 agent には子のような起動記録がないため、Claude Code の画面操作とブラウザーはユーザー設定（`~/.claude.json` の MCP と Claude in Chrome の既定値）に従います。DECK でこの agent の権限を選ぶと runtime の `agent-permissions/<name>.json` に保存され、`agentstack-persistent run` が次の起動で使います。稼働中のプロセスは変わらず、再起動するまで再起動待ちの印が出ます。
-
-- ブラウザー：`--chrome` か `--no-chrome` を足します。profile の command に指定があれば、その指定が優先です。
-- 画面操作：子と同じ gate 付きの `orrery-screen` を MCP 設定に足し、その起動ではユーザー設定の Cua Driver と内蔵の computer use を拒否します。起動後の View と Control は [computer use API](computer-use.md#起動中に権限を変える) で切り替えられます。
-- 保存した記録が読めない場合（0600 でないなど）は `saved-permissions-unavailable` で起動を止めます。DECK で選び直すと記録を置き換えます。
-
-profile を使わずに別の script で Claude を起動している場合は、その command の前に wrapper を置きます。command はそのまま実行され、保存した値の引数だけが後ろに足されます。保存がなければ何も足しません。
-
-```bash
-exec "$HOME/.agentstack/bin/agentstack-agent-permissions" exec ChannelsBot -- \
-  claude --model sample-model --channels plugin:sample@sample-marketplace
-```
-
-保存した値は `agentstack-agent-permissions show ChannelsBot` で確かめられます。dashboard の Resume で起動した会話は、DECK で選ぶと同じ会話のまま再起動して使います。
-
 ### credential-unavailable
 
 再起動後に `local-credential-unavailable` または `stage=local-token reason=credential-unavailable` が出たときだけ、bot を停止した状態で operator が `$HOME/.agentstack/bin/agentstack-enroll inspect` からやり直し、状態が `server-token` + local missing なら `recover` を選びます。モデル自身に実行させません。単なる registration failure、HTTP 401 / 403、Mail 停止を credential 紛失と推定しないでください。

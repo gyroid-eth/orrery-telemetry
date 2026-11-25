@@ -723,7 +723,13 @@ html.graph-fullscreen #settings{z-index:40}
 .reader-permission[data-state=on]{color:var(--amber)}.reader-permission[data-state=view]{color:var(--amber);opacity:.62}
 .reader-permission[data-state=off] .mobile-icon{opacity:.55}
 .reader-permission[data-state=off]::before{content:'';position:absolute;width:15px;height:1.5px;border-radius:1px;background:currentColor;transform:rotate(-45deg);opacity:.8}
-.reader-permission[data-pending]::after{content:'';position:absolute;top:-1px;right:-2px;width:5px;height:5px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 1.5px var(--bg)}
+.reader-permission-summary{display:flex;align-items:center;gap:2px;white-space:nowrap;color:var(--ink-dim);font-size:10px;cursor:pointer;list-style:none}
+.reader-permission-summary::-webkit-details-marker{display:none}
+.reader-permission-summary::after{content:'';width:4px;height:4px;flex:none;margin-left:2px;border:solid currentColor;border-width:0 1px 1px 0;transform:rotate(45deg)}
+.reader-permission-details[open] .reader-permission-summary::after{transform:rotate(225deg)}
+.reader-permission-summary:focus-visible{outline:1px solid var(--amber);outline-offset:2px}
+.reader-permission-reasons{position:absolute;z-index:1;top:calc(100% + 8px);left:0;width:min(260px,calc(100vw - 24px));padding:8px;border:1px solid var(--hair);border-radius:6px;background:var(--panel);color:var(--ink);font:11px/1.5 var(--mono);overflow-wrap:anywhere}
+@media(max-width:360px){.reader-permission-unknown{display:none}}
 .reader-state{flex:none;width:5px;height:5px;border-radius:50%;background:var(--ink-dim)}.reader-state[data-state=work]{background:var(--amber)}.reader-state[data-state=ask],.reader-state[data-state=question]{background:var(--alert)}
 .mobile .reader-icon{display:grid;place-items:center;width:44px;min-width:44px;min-height:44px;flex:none;padding:0;border:0;border-radius:5px;color:var(--ink-dim);touch-action:manipulation}
 .reader-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}

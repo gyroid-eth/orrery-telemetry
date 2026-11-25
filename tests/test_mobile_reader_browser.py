@@ -7,6 +7,26 @@ import pytest
 from mobile_reader_browser import AREA, MAIL_MARKDOWN, assert_mail_markdown, phone  # noqa: F401
 
 
+def test_reader_unknown_permissions_disclose_reasons_without_resizing_header(phone):
+    _, js, wait, state = phone
+    height = js("document.querySelector('.reader-bar').offsetHeight")
+    state['snapshot']['agents'][0].update(
+        computer_use_reason='Screen relay mode could not be verified',
+        browser_use_reason='Chrome launch flag was not recorded')
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("document.querySelector('.reader-permission-summary') !== null")
+    assert js("document.querySelector('.reader-permission-summary').textContent") == 'Unknown'
+    assert js("document.querySelectorAll('.reader-permission[data-state=unknown]').length") == 2
+    assert not js("document.querySelector('.reader-permission-details').open")
+    js("document.querySelector('.reader-permission-summary').click()")
+    assert js("document.querySelector('.reader-permission-details').open")
+    assert js("[...document.querySelector('.reader-permission-reasons').children].map(row=>row.textContent)") == [
+        'Computer use: Screen relay mode could not be verified',
+        'Browser use: Chrome launch flag was not recorded',
+    ]
+    assert js("document.querySelector('.reader-bar').offsetHeight") == height
+
+
 def two_pane_targets():
     return [
         dict(choice='fixture-choice', name='SampleAgent', pane_label='Window 0 · pane 0',

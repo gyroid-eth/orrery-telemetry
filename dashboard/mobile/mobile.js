@@ -78,32 +78,41 @@ function readerProfile(name,recordedModel=''){
 }
 const PERMISSION_MODES={off:'Off',view:'View',control:'Control'};
 function paintPermissions(box){
- // Display only. A mark appears when the value is known; a dot means the next start differs.
- // A stopped agent shows what its next start gets instead.
  const rows=(snapshot?.agents||[]).filter(a=>a.name===box.dataset.agent),a=rows.length===1?rows[0]:{};
- const marks=[],running=a.running===true,label=running?'. Restart to apply: ':'. Next start: ';
- const computerNext=a.computer_use_next in PERMISSION_MODES?a.computer_use_next:'';
- const computer=a.computer_use in PERMISSION_MODES?a.computer_use:running?'':computerNext;
- if(computer){
-  const next=computerNext&&computerNext!==a.computer_use?computerNext:'';
-  marks.push(['computer',computer==='control'?'on':computer,next,
-   'Computer use: '+(a.computer_use in PERMISSION_MODES?PERMISSION_MODES[a.computer_use]:'Unknown')+(next?label+PERMISSION_MODES[next]:'')]);
- }
- const browserNext=typeof a.browser_use_next==='boolean'?a.browser_use_next:null;
- const browser=typeof a.browser_use==='boolean'?a.browser_use:running?null:browserNext;
- if(browser!==null){
-  const next=browserNext!==null&&browserNext!==a.browser_use;
-  marks.push(['browser',browser?'on':'off',next?'pending':'',
-   'Browser use: '+(typeof a.browser_use==='boolean'?(a.browser_use?'On':'Off'):'Unknown')+(next?label+(browserNext?'On':'Off'):'')]);
+ const marks=[];
+ if(a.running===true){
+  const computer=Object.hasOwn(PERMISSION_MODES,a.computer_use)?a.computer_use:null;
+  const browser=typeof a.browser_use==='boolean'?a.browser_use?'on':'off':null;
+  if(computer||a.computer_use_reason)marks.push(['computer',computer||'unknown',PERMISSION_MODES[computer]||'Unknown',a.computer_use_reason]);
+  if(browser||a.browser_use_reason)marks.push(['browser',browser||'unknown',browser==='on'?'On':browser==='off'?'Off':'Unknown',a.browser_use_reason]);
  }
  const signature=JSON.stringify(marks);if(box.dataset.signature===signature)return;box.dataset.signature=signature;
- box.replaceChildren(...marks.map(([kind,state,next,label])=>{
-  const mark=node('span','reader-permission');mark.dataset.kind=kind;mark.dataset.state=state;
-  if(next)mark.dataset.pending='true';mark.setAttribute('role','img');mark.title=label;mark.setAttribute('aria-label',label);
+ const labelFor=kind=>kind==='computer'?'Computer use':'Browser use';
+ const permissionMark=([kind,state,value,reason])=>{
+  const label=labelFor(kind)+': '+value+(reason?'. '+reason:'');
+  const mark=node('span','reader-permission');mark.dataset.kind=kind;mark.dataset.state=state==='control'?'on':state;
+  mark.setAttribute('role','img');mark.title=label;mark.setAttribute('aria-label',label);
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),use=document.createElementNS('http://www.w3.org/2000/svg','use');
   svg.setAttribute('class','mobile-icon');svg.setAttribute('aria-hidden','true');use.setAttribute('href','#icon-launch-'+kind);svg.append(use);mark.append(svg);
   return mark;
- }));
+ };
+ const elements=marks.filter(mark=>mark[1]!=='unknown').map(permissionMark);
+ const unresolved=marks.filter(mark=>mark[1]==='unknown');
+ if(unresolved.length){
+  const details=node('details','reader-permission-details'),summary=node('summary','reader-permission-summary');
+  const icons=unresolved.map(permissionMark);
+  summary.setAttribute('aria-label',icons.map(mark=>mark.title).join('. '));
+  for(const icon of icons)icon.setAttribute('aria-hidden','true');
+  summary.append(...icons,node('span','reader-permission-unknown','Unknown'));
+  const reasons=node('div','reader-permission-reasons');
+  if(unresolved.length===2&&unresolved[0][3]===unresolved[1][3]){
+   reasons.textContent=unresolved[0][3];
+  }else{
+   for(const [kind,,,reason] of unresolved)reasons.append(node('div','',labelFor(kind)+': '+reason));
+  }
+  details.append(summary,reasons);elements.push(details);
+ }
+ box.replaceChildren(...elements);
  box.hidden=!marks.length;
 }
 window.OrreryMobileProfile={forName:readerProfile,paintPermissions,face(name,model){const e=face(readerProfile(name,model)||{name},1);e.setAttribute('aria-hidden','true');return e;}};
@@ -1277,9 +1286,9 @@ function changePane(){if(busy()||phase==='unknown')return;window.OrreryMobileCom
 function paneButton(label,cls=''){const b=action(label,'terminal-pane-button '+cls,changePane);b.disabled=busy()||phase==='unknown';return b;}
 function readerBar(){
  const bar=make('div','reader-bar'),who=make('div','reader-person'),portrait=make('img');portrait.src=window.AGENTSTACK_DEMO.portraitURL(name);portrait.alt='';portrait.onerror=()=>{portrait.remove();};
- const initials=make('span','reader-initials',name.slice(0,2)),title=make('h2','',name);title.id='terminal-title';
+ const initials=make('span','reader-initials',name.slice(0,2)),title=make('h2','',name);title.id='terminal-title';title.title=name;
  // Permission marks sit under the name so they never take its width.
- const label=make('span','reader-name'),permissions=make('span','reader-permissions');permissions.dataset.agent=name;permissions.hidden=true;label.append(title,permissions);
+ const label=make('div','reader-name'),permissions=make('div','reader-permissions');permissions.dataset.agent=name;permissions.hidden=true;label.append(title,permissions);
  who.append(initials,portrait,label,make('span','reader-state'));bar.append(who);
  window.OrreryMobileProfile?.paintPermissions?.(permissions);
  const icons={conversation:['Conversation','M3 4h6l3 2 3-2h6v15h-6l-3 2-3-2H3z M12 6v15'],terminal:['Terminal','m5 7 5 5-5 5 M13 17h6'],close:['Close Conversation','m6 6 12 12 M18 6 6 18']};
