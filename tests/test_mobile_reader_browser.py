@@ -501,16 +501,60 @@ def test_visual_viewport_keeps_the_composer_above_the_keyboard(phone):
 
 def test_preview_back_and_escape_peel_the_front_layer(phone):
     _, js, wait, state = phone
-    state['events'].append(dict(id='file', kind='tool', role='assistant', text='Read', files=[dict(ref='a'*32, kind='file', label='notes.md')], ts=''))
+    state['events'].append(dict(id='file', kind='tool', role='assistant', text='Read', files=[dict(ref='a'*32, kind='file', label='notes.txt')], ts=''))
     wait("document.querySelector('.previewable')!==null", 8)
     js("document.querySelector('.previewable').click()")
-    wait("document.querySelector('.conversation-preview-text')!==null")
+    wait("document.querySelector('pre.conversation-preview-text')?.textContent==='File contents'")
+    assert js("document.querySelector('.conversation-preview-toggle')===null")
     js('history.back()')
     wait("document.querySelector('.conversation-preview')===null")
     assert js("document.querySelector('#terminal-sheet').open")
     js("document.querySelector('#terminal-text').focus()")
     js("document.querySelector('#terminal-sheet').dispatchEvent(new Event('cancel',{cancelable:true}))")
     assert js("document.querySelector('#terminal-sheet').open&&document.querySelector('#terminal-text')!==null&&document.activeElement.id!=='terminal-text'")
+
+
+def test_markdown_file_preview_renders_and_downloads_edited_source(phone):
+    _, js, wait, state = phone
+    source = (MAIL_MARKDOWN + '\n[Unsafe](javascript:alert%281%29)\n').replace('\n', '\r\n')
+    state['file_preview'] = dict(ok=True, kind='text', text=source, truncated=True)
+    state['events'].append(dict(id='file', kind='tool', role='assistant', text='Read',
+                                files=[dict(ref='a'*32, kind='file', label='notes.MD')], ts=''))
+    wait("document.querySelector('.previewable')!==null", 8)
+    js("document.querySelector('.previewable').click()")
+    wait("document.querySelector('.conversation-preview-markdown')!==null")
+    assert_mail_markdown(js, '.conversation-preview-markdown')
+    assert js("!document.querySelector('.conversation-preview-markdown a[href^=javascript]')")
+    assert js("document.querySelector('.conversation-preview-status').textContent") == 'Showing the start of the file.'
+
+    js("""window.downloads=[]; const createURL=URL.createObjectURL;
+          URL.createObjectURL=blob=>{downloads.push({type:blob.type,text:blob.text()});return createURL(blob)};
+          document.addEventListener('click',event=>{
+            if(event.target.matches('.conversation-preview a[download]')){
+              downloads.at(-1).name=event.target.download;event.preventDefault();
+            }
+          });""")
+    save = "document.querySelector('.conversation-preview-save')"
+    toggle = "document.querySelector('.conversation-preview-toggle')"
+    field = "document.querySelector('.conversation-preview-source')"
+    saved = "(async()=>{const {name,type,text}=downloads.at(-1);return [name,type,await text]})()"
+    js(f"{save}.click()")
+    assert js(saved) == ['notes.MD', 'text/plain;charset=utf-8', source]
+    assert js(f"[{toggle}.textContent,{toggle}.title,{toggle}.getAttribute('aria-label')]") == [
+        '', 'Edit Markdown source', 'Edit Markdown source']
+    js(f"{toggle}.click()")
+    assert js(f"{toggle}.getAttribute('aria-label')") == 'Show rendered Markdown'
+    assert js(f"{field}.value") == source.replace('\r\n', '\n')
+    assert js(f"document.activeElement==={field}")
+    edited = '# Updated heading\n\nLiteral <b data-edited>still text</b>.'
+    js(f"{field}.value={json.dumps(edited)};{save}.click()")
+    assert js(saved) == ['notes.MD', 'text/plain;charset=utf-8', edited]
+    js(f"{toggle}.click()")
+    assert js("document.querySelector('.conversation-preview-markdown h1').textContent") == 'Updated heading'
+    assert js("!document.querySelector('.conversation-preview-markdown [data-edited]')")
+    js(f"{toggle}.click()")
+    assert js(f"{field}.value") == edited
+    assert len([path for path in state['get_calls'] if '/view/conversation/preview?' in path]) == 1
 
 
 def test_pending_shell_matching_and_dismiss_keep_focus(phone):

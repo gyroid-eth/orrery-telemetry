@@ -283,7 +283,17 @@ def test_cockpit_offline_or_wrong_type_is_unavailable():
 HARNESS = r'''
 const vm=require('node:vm'),assert=require('node:assert/strict');
 class El{
- constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.parent=null;this._text='';this.className='';this.dataset={};this.hidden=false;this.attrs={};this.listeners={};this.scrollTop=0;this.style={};this.classList={add:(...xs)=>{this.className=[this.className,...xs].filter(Boolean).join(' ');}};}
+ constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.parent=null;this._text='';this.className='';this.dataset={};this.hidden=false;this.attrs={};this.listeners={};this.scrollTop=0;this.style={};
+  this.classList={
+   add:(...xs)=>{this.className=[this.className,...xs].filter(Boolean).join(' ');},
+   toggle:(token,force)=>{
+    const classes=new Set(this.className.split(' ').filter(Boolean));
+    const add=force??!classes.has(token);
+    if(add)classes.add(token);else classes.delete(token);
+    this.className=[...classes].join(' ');return add;
+   },
+  };
+ }
  get isConnected(){let n=this;while(n.parent)n=n.parent;return n===body;}
  get textContent(){return this._text+this.children.map(c=>c.textContent).join('');}
  set textContent(v){this._text=String(v);this.children.forEach(c=>c.parent=null);this.children=[];}
@@ -305,7 +315,7 @@ class El{
  all(){return [this,...this.children.flatMap(c=>c.all())];}
 }
 const body=new El('body');const timers=new Map();let seq=0;const fetches=[];let docListeners={};
-const doc={hidden:false,createTextNode:t=>{const n=new El('#text');n.textContent=t;return n;},createElement:t=>new El(t),addEventListener(k,f){docListeners[k]=f;}};
+const doc={hidden:false,createTextNode:t=>{const n=new El('#text');n.textContent=t;return n;},createElement:t=>new El(t),createElementNS:(_ns,t)=>new El(t),addEventListener(k,f){docListeners[k]=f;}};
 let reply=null;
 const context={document:doc,console,TextEncoder,AbortController,URL,CSS:{escape:s=>s},Date,JSON,
  setTimeout(f,ms){timers.set(++seq,{f,ms});return seq;},clearTimeout(id){timers.delete(id);},
