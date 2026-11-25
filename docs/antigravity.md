@@ -135,9 +135,7 @@ With the optional provider payload installed and the Dashboard restarted,
 `NEW AGENT` shows an `Antigravity` engine tab. A launch reuses the delegated
 child path above through `spawn_gemini_preregistered.sh`.
 
-![NEW AGENT with the Antigravity tab selected: the resources row sits under the task, and the footer explains what is still required](images/new_agent_capabilities_dark.png)
-
-![The same state in the light theme](images/new_agent_capabilities_light.png)
+![Telemetry の NEW AGENT で Antigravity を選んだ状態。Parent は Standalone で、Resources の入力欄は出ない](images/new_agent_capabilities_dark.png)
 
 Requirements checked before ORRERY Mail registration, so a launch that cannot
 start does not leave a retained child identity behind:

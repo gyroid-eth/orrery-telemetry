@@ -54,8 +54,6 @@ cockpitの画面からは変えられない前提が2つあります。どちら
 
 **Phone**の横のbadgeは**OFF**です。**Phone access**のスイッチを押します。
 
-<img src="images/phone-settings-1-off.png" width="360" alt="SettingsのPhoneの節。badgeはOFFで、Phone accessとSend from phoneの2つのスイッチが並ぶ">
-
 ### 手順1・2: Tailscaleとowner・address（本人・1回）
 
 初めて押したときは、**スイッチはまだオフのまま**です。スイッチのすぐ下に「Not on yet: check the owner and address in step 2 below, then press Confirm and turn on.」と出て、その下に**Setup**の手順が開き、手順2の入力欄へ移ります。
@@ -64,15 +62,11 @@ cockpitの画面からは変えられない前提が2つあります。どちら
 - 手順2の**Owner (Tailscale login)**は、readerが通す唯一のloginです。**Address on the phone**は、スマホで開くaddress（`https://<このコンピューターのTailscale名>:9443`）です。どちらも`tailscale status`から埋めてあるので、確かめて**Confirm and turn on**を押します。ここで初めてPhone accessがオンになります。
 - **確かめる:** badgeが**SETUP**になり、手順2に✓が付く。
 
-<img src="images/phone-settings-2-owner.png" width="360" alt="Phone accessを初めて押した後。スイッチの下に手順2へ進む案内が出て、手順2にownerとaddressの入力欄とConfirm and turn onのボタンがある">
-
 ### 手順3: Serve 9443 → reader（本人・terminal）
 
 macOSでは手順3に出ている`tailscale serve --https=9443 http://127.0.0.1:8781`を**Copy**し、terminalで1回実行してから**Check again**を押します。WSL2では[TelemetryのSettings](#wsl2でphone-accessを使う)で変更内容を見てから確定します。
 
 **確かめる:** **Check again**で手順3に✓が付く。付かないときは、`tailscale serve`の出力を読みます。HTTPS Certificatesが無効なら、ここで有効にするよう求められます（[始める前に](#始める前に本人1回)）。
-
-<img src="images/phone-settings-3-serve.png" width="360" alt="badgeはSETUP。手順3にtailscale serveのcommandとCopy・Check againのボタンがある">
 
 ### 手順4: Who can reach it（本人・管理画面）
 
@@ -82,13 +76,9 @@ macOSでは手順3に出ている`tailscale serve --https=9443 http://127.0.0.1:
 
 **確かめる:** ORRERYはpolicyを確かめられないので、自分で確かめます。どの場合も、管理画面で、許してよい人と端末だけがtcp:9443に届くことを見ます。端末を制限した場合は、除外した端末から開けないことも[実スマホで確認してから使う](#実スマホで確認してから使う)の手順で確かめます。
 
-<img src="images/phone-settings-4-policy.png" width="360" alt="手順1〜3に✓。スイッチの下に、会話とSendは手順4まで止まっているという1行。手順4にI reviewed the policyのボタン">
-
 ### オンの状態
 
 badgeが**ON**になり、Setupの手順は消えます。**自分で確かめる:** Statusが4行とも緑であることを見ます（reader・Serve・Funnel off・policy）。loginやaddressを変えるときは**Change owner or address**を使います。
-
-<img src="images/phone-settings-5-on.png" width="360" alt="badgeはON。Statusにreader running、Serve、Funnel off、Policy reviewedの4行が緑で並ぶ">
 
 ### スマホで会話を見る
 
@@ -110,8 +100,6 @@ Claude・Codex の会話には、PC の Reader と同じ **Agent steps** を表�
 loginとaddressをまだ設定していない状態でdemo modeのまま**Phone access**を押すと、スイッチのすぐ下に「Turn off demo mode to set up phone access (once). After that you can switch it on and off in demo mode.」と出ます。**Turn off demo mode**を押すと、demo modeを切ってpageを開き直します。Settingsは閉じるので、もう一度**Settings**を開いて**Phone access**を押し、上の手順を進めます。
 
 設定した後は、demo modeに戻しても、スイッチはそのまま使えます。loginとaddressは「hidden in demo mode」と表示され、画面には出ません。変更するときだけdemo modeを切ります。
-
-<img src="images/phone-settings-demo.png" width="360" alt="demo modeで初めて押したとき。スイッチの下にdemo modeを切って1回設定するよう案内と、Turn off demo modeのボタン"> <img src="images/phone-settings-demo-on.png" width="360" alt="設定後のdemo mode。badgeはON、ownerとaddressはhidden in demo modeと表示される">
 
 ### 裏で動くもの
 
@@ -200,11 +188,11 @@ Contextや状態・Roleだけが変わった場合は該当ノードの表示だ
 
 Graph右上の**Expand**でGraphを画面いっぱいに広げます。ブラウザの全画面機能が使えない場合も、同じページ内で全面表示します。Find・Focus/All・Fit・ピンチ・ドラッグ、Mail線の一覧やTerminal sheetはそのまま使えます。**Close**で通常表示へ戻ります。戻る／Escapeは手前のsheetを先に閉じ、次にGraphの全画面表示を終了します。OSやブラウザが全画面を終了した場合は通常表示へ戻り、開いていたsheetも閉じます。縦横の切替に追従し、選択と手動の拡大率を保ちます。実スマホでの全画面・戻るジェスチャー・キーボード動作は別途確認してください。
 
-<img src="images/mobile-graph-fullscreen.png" width="300" alt="Expandで全面表示にしたGraph。Allで全agentとMailの線を表示している">
+<img src="images/mobile-graph-to-terminal.gif" width="300" alt="スマホで All から1体を選んで Focus し、Terminal と Conversation を確認して入力を送る">
 
 件名は512文字、本文はUTF-8で64KiBまでで、超過は明示します。HTMLやMarkdownは文字として表示し、リンク・画像・添付を実行しません。read/ACKや返信も送りません。閉じる、別のMail、期間・画面の切替、背景移行で表示中の本文を消し、遅れた応答で復活させません。取得不能・削除・変更・期限切れはエラー表示し、前の本文で埋めません。
 
-<img src="images/mobile-mail.png" width="300" alt="Mailを1件開いたところ。差出人・宛先と件名・本文を文字のまま表示し、既読やACKは送らない">
+<img src="images/mobile-mail.png" width="300" alt="スマホで Mail を1通開き、件名、差出人、宛先、本文を読む">
 
 Mac readerは本人認証後のsnapshot取得をきっかけに、固定の直近24時間をメモリに準備します。最大2000通の一意なmessage、本文と対応metadataの合計32MiB（JSONの論理byte量で、RSSの保証ではありません）です。To/Ccが複数でも本文は1通分です。上限・時間・読取失敗時は**partial / unavailable**で、全件準備済みにはしません。タップ時はcache内でも現在の宛先と改訂を再照合します。24時間より古い表示済みMailは1件ずつ取得でき、cacheには残しません。reader停止で全cacheが消えます。件名・本文をスマホへまとめて送ることはありません。
 

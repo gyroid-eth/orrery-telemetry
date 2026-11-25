@@ -327,13 +327,13 @@ macOS・WSL（Ubuntu の中）とも、手順は同じです。
    "$AGENTSTACK_CODEX_BIN" -C "$AGENTSTACK_PROJECT_KEY"
    ```
 
-   素の `codex` は使わないでください。WSL では PATH の先頭に Windows 側の `codex` があることが多く、それは Ubuntu の中では動きません。`/hooks` を開くと、`⚠ 6 hooks need review` のように、確認が要る hooks が表示されます。
+   素の `codex` は使わないでください。WSL では PATH の先頭に Windows 側の `codex` があることが多く、それは Ubuntu の中では動きません。`/hooks` を開くと、確認が要る hooks とその件数が表示されます。
 
-   ![承認前の /hooks](images/codex-hooks-review.png)
+   ![承認前の /hooks。旧バージョンの表示例で、確認が必要な hook は Review に並ぶ](images/codex-hooks-review.png)
 
-3. 内容を確かめてから承認する（`t` ですべてを trust）。SessionStart・UserPromptSubmit・PostToolUse が Active になります。
+3. 内容を確かめてから承認する（`t` ですべてを trust）。承認した hook が Active になります。
 
-   ![承認後の /hooks](images/codex-hooks-after-trust.png)
+   ![承認後の /hooks。旧バージョンの表示例で、承認した hook は Active に並ぶ](images/codex-hooks-after-trust.png)
 
 4. その `codex` を終了する。承認は、この後に起動した Codex から効きます。すでに動いている Codex の子には効きません。
 

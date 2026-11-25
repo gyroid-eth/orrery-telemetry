@@ -4,7 +4,7 @@
 
 Claude Code・Codex・DeepSeek・Local LLMのagentが直接話し、仕事を分担し、結果を確かめ合う。その働きとMailの往復を一枚の画面で見渡せるのがORRERY Telemetryです。Claude CodeとCodexは各CLI、DeepSeekとLocal LLMはdshまたはHermesを使います。使いたい系統を選んで準備でき、DeepSeek・LocalのためにClaude CodeやCodexを先に入れる必要はありません。ターミナルも同じ画面で使う[ORRERY cockpit](https://github.com/gyroid-eth/orrery)と組み合わせて使えます。
 
-![NETWORK を開いたまま子が加わり、ready の後にしりとりの Mail が3往復する](docs/img/network-mail.gif)
+![Telemetry の NETWORK で Mail の線を選んで、2体の間のメッセージを読む](docs/img/network-mail.gif)
 
 ## 目的から始める
 
@@ -19,9 +19,9 @@ provider は接続先、model はそこで使うモデル、harness は道具や
 
 準備済みのDeepSeek / Localは、NEW AGENTのModelとHarness（dsh / Hermes）から選べます。初めて追加するときは、アプリの導入、APIキーの保存、接続先の設定が必要です。[初期設定ガイド](docs/native-setup.md)で順番に進めてください。キーはMacのキーチェーン、またはUbuntuのSecret Serviceへ保存し、NEW AGENTには貼りません。API起動はlegacy modeが対象です。Hermesの会話・記憶はprojectとagentの正式名ごとに分かれます。すべての接続先に使えるログイン機能やHermes共通のTelegram入口はまだなく、Localのeffort設定にも未確認範囲があります。[対応範囲と制限](docs/managed-catalog.md#現在の制限)・[画面の選択例](docs/dashboard.md#native-models-and-harnesses)を参照してください。
 
-![NEW AGENT で設定済み Local model と dsh / Hermes を選ぶ](docs/img/native-harness-picker.png)
+![Telemetry の NEW AGENT で DeepSeek と Local Qwen を選び、利用可能な dsh と Hermes を確認する](docs/img/native-harness-selection.gif)
 
-Telemetry 同梱 NEW AGENT の実画面です。正規の科学者名・肖像と、Claude / Codex / DeepSeek / Local models の選択を表示しています。[選択操作の GIF](docs/img/native-harness-selection.gif)は起動前までです。[cockpit の NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/usage.md)とは別の画面です。
+録画では Telemetry のフォームと架空のカタログを使っています。[cockpit の起動画面](https://github.com/gyroid-eth/orrery/blob/master/docs/usage.md#new-agent) は使い方のガイドで確認できます。
 
 ## Telemetry だけを入れる
 
@@ -85,8 +85,6 @@ Full tour は delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）�
 Telemetry の DECK の history を `7D` / `30D` / `ALL`、または NETWORK の範囲を `ALL` にすると、退出した agent の履歴も探せます。再開できる agent の詳細パネルで **RESUME** を押すと、同じ仕事に戻ります。履歴・認証・元の作業フォルダなどを検証できない場合は、理由を表示して再開を止めます。
 
 Telemetry 単体での例: 名前で絞り込み、`7D` の `RETIRED` / `RESUME READY` の agent を開いて `RESUME`。会話を tmux で再開したという通知の後、`LIVE` に戻して `ONLINE` を確認します。
-
-![Telemetry 単体で7Dの退出した agent を再開し、LIVEでONLINEへの復帰を確認する](docs/img/resume-retired-agent.gif)
 
 [Dashboard の再開手順](docs/dashboard.md#検索)と[Launcher の Claude resume](docs/launchers.md#dashboard-からの-claude-resume)に、検証が必要な場合と復帰できない場合の扱いがあります。
 global network の稼働状態・本人照合と unknown の境界は [観測の案内](docs/dashboard.md#global-runtime-observation)を参照してください。

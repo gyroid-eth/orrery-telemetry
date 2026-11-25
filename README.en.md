@@ -4,7 +4,7 @@
 
 Claude Code, Codex, DeepSeek and Local LLM agents can talk directly, divide the work and check each other's results. ORRERY Telemetry shows their work and Mail round trips on one screen. Claude Code and Codex use their own CLIs; DeepSeek and Local LLMs use dsh or Hermes. Choose which to prepare: you do not need to install Claude Code or Codex before using DeepSeek or Local models. Pair Telemetry with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to use their terminals in the same workspace.
 
-![A child joins the open NETWORK view, sends ready, and exchanges three shiritori Mail round trips](docs/img/network-mail.gif)
+![Select a Mail edge in Telemetry NETWORK to read messages between two agents](docs/img/network-mail.gif)
 
 ## Start from your goal
 
@@ -19,9 +19,9 @@ A provider supplies the connection, a model identifies what runs there, and a ha
 
 Once configured, DeepSeek / Local models appear under Model and Harness (dsh / Hermes) in NEW AGENT. When adding one for the first time, install the application, store your API key and connect the settings using the [setup guide](docs/native-setup.en.md). Keys belong in Mac Keychain or Ubuntu Secret Service, not in NEW AGENT. API launching currently requires legacy mode. Hermes keeps each agent's conversations and memory separate by project and registered name. There is no universal provider login or shared Hermes Telegram entry point yet, and manual Local effort still needs real-server verification. See the [supported scope and limitations](docs/managed-catalog.en.md#current-limitations) and the [selection screen examples](docs/dashboard.en.md#native-models-and-harnesses).
 
-![Select a configured Local model and dsh / Hermes in NEW AGENT](docs/img/native-harness-picker.png)
+![Select DeepSeek and Local Qwen in Telemetry NEW AGENT and inspect the available dsh and Hermes harnesses](docs/img/native-harness-selection.gif)
 
-The actual bundled Telemetry NEW AGENT, showing the real scientist names, portraits, and Claude / Codex / DeepSeek / Local models choices. [Watch the selection GIF](docs/img/native-harness-selection.gif); it stops before launching. The [cockpit NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/en/usage.md) is a separate screen.
+The demo uses the Telemetry form and a fictional catalog. The [cockpit guide](https://github.com/gyroid-eth/orrery/blob/master/docs/en/usage.md#new-agent) covers its own form.
 
 ## Install Telemetry only
 
@@ -85,8 +85,6 @@ Cockpit is where you work in terminals; Telemetry is where you view the team's s
 In Telemetry, choose DECK history `7D` / `30D` / `ALL`, or NETWORK's `ALL` range, to find exited agents. Open an agent that can resume and choose **RESUME** in its detail panel to return to the same work. When history, credentials, or the original working directory cannot be verified, the UI explains why and stops the resume.
 
 Standalone Telemetry example: filter by name, find the `RETIRED` / `RESUME READY` agent in `7D`, open it, and choose `RESUME`. After the notification confirms the conversation resumed in tmux, switch to `LIVE` and check that the agent is `ONLINE`.
-
-![Resume a retired agent from 7D in standalone Telemetry and confirm it returns ONLINE in LIVE](docs/img/resume-retired-agent.gif)
 
 [Dashboard search and resume](docs/dashboard.en.md#search) and [Launcher Claude resume](docs/launchers.en.md#dashboard-claude-resume) cover cases that need verification and cases that cannot resume.
 For global network activity, owner verification and unknown boundaries, see the [observation guide](docs/dashboard.en.md#global-runtime-observation).
