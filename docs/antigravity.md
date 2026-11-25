@@ -131,9 +131,11 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 ## Dashboard NEW AGENT
 
-With the optional provider payload installed and the Dashboard restarted,
-`NEW AGENT` shows an `Antigravity` engine tab. A launch reuses the delegated
-child path above through `spawn_gemini_preregistered.sh`.
+provider を導入して Dashboard を再起動すると、**NEW AGENT** に Antigravity が出ます。
+macOS では親を選ばずに、指定したフォルダで対話型 agent を起動できます。Git を使っていない
+フォルダも選べます。最初の文は CLI に一度だけ渡り、Mail、Reader、履歴からの Resume を使えます。
+ORRERY の Mail と hook の設定は起動ごとの専用ディレクトリに置き、終了時に削除します。
+選んだフォルダと個人設定には起動用の設定を書き込みません。
 
 ![NEW AGENT with the Antigravity tab selected: the resources row sits under the task, and the footer explains what is still required](images/new_agent_capabilities_dark.png)
 
@@ -142,12 +144,9 @@ child path above through `spawn_gemini_preregistered.sh`.
 Requirements checked before ORRERY Mail registration, so a launch that cannot
 start does not leave a retained child identity behind:
 
-- a parent agent: standalone Antigravity launches are rejected, and the parent
-  must have its local runtime owner token;
-- the launch directory must be inside a git repository, and the worktree base
-  (default `HEAD`) must resolve to a commit;
-- `agy`, `tmux`, the selected Python, `git`, the adapter hook, and the Gemini
-  provider helpers under `~/.agentstack/bin` must be present;
+- Linux／WSL の起動と macOS の委任起動には、親の agent とその所有資格が必要です。
+- worktree を使う場合は、Git リポジトリ内のフォルダと有効な base（既定は `HEAD`）が必要です。
+- `agy`、`tmux`、選択された Python、adapter hook、Gemini provider の helper が必要です。
 - `AGENTSTACK_GEMINI_MODELS` を明示した場合、モデルはその許可リストに限定されます。
   未設定なら、同梱の `gemini-3.8-flash-{high,medium,low}` と `agy models` が返した有効な
   Gemini ID を表示します。モデルの取得は起動前の検査と同じ方法で `agy` を探すため、
@@ -179,10 +178,9 @@ Engine and isolation rules:
   or `xhigh` where the catalog lists that variant), and the server
   rejects a request without one (`effort required for provider gemini`). The
   CLI launchers' `high` fallback is not applied to Dashboard launches.
-- **Isolated worktree is forced.** The isolation checkbox is locked on while
-  Antigravity is selected; switching to Claude or Codex restores the previous
-  choice, and hidden resource declarations are not sent to those providers.
-- **Resources are required.** Enter comma-separated paths relative to the
+- **親付きの起動は worktree を使います。** macOS の親なし起動で worktree を作るには、
+  Isolation を選びます。
+- **親付きの起動は予約対象が必要です。** Enter comma-separated paths relative to the
   repository root, for example `src/**,tests/**`. Absolute paths, `..`, `~`,
   control characters, a leading `-`, backslashes, and `.git` are rejected, as
   is any existing symlink component that resolves outside the repository. The
@@ -193,10 +191,9 @@ Engine and isolation rules:
   filesystem such as default APFS resolves names, so `.GI?/config` or `SR?/**`
   is judged against `.git` or `src` in any letter case.
 
-The launcher delivers the full task to Antigravity and reports the result to
-the parent automatically, so the Dashboard sends no separate task mail for an
-Antigravity child. Launch status, `/api/spawn-status`, and
-`dashboard/logs/spawn.log` record `provider=gemini`.
+最初の task は launcher が Antigravity に渡します。Linux／WSL の委任は終了時に自動で
+親へ報告します。macOS の対話型 agent は、起動後に Mail から追加の依頼を受け取れます。
+`/api/spawn-status` と `dashboard/logs/spawn.log` は `provider=gemini` を記録します。
 
 The core Dashboard modal interprets the provider `capabilities` contract. The
 optional payload only adds the Antigravity catalog item and its `/api/spawn`

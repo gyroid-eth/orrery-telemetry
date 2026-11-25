@@ -64,7 +64,7 @@ def test_unknown_generations_fail_before_reading_any_roster(api):
     assert backend.calls == ["/api/version"]
 
 
-@pytest.mark.parametrize("api", [37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 52])
+@pytest.mark.parametrize("api", [37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 52])
 def test_supported_legacy_generations_preserve_project_scope(api):
     data = snapshot(Backend({**VERSION, "api": api}), "legacy", project_key=PROJECT)
     assert data.api == api

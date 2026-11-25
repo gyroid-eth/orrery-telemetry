@@ -923,12 +923,11 @@ def mail_alias_names(settings: dict) -> list[str]:
     return sorted(names)
 
 
-def agy_config(mail_command, spec, *, runtime, project, child, mail_env, home=None):
-    """Project a managed screen server into an Antigravity child's workspace."""
+def agy_validate_selection(spec, *, home=None):
+    """Check Antigravity's inherited servers without creating launch state."""
     check_provider(spec, "gemini")
-    servers = {"orrery-mail": {"command": mail_command, "args": []}}
     if sys.platform != "darwin":
-        return {"mcpServers": servers}
+        return
     if home is None:
         home = Path.home()
     # Antigravity loads global servers alongside workspace entries even when
@@ -937,14 +936,23 @@ def agy_config(mail_command, spec, *, runtime, project, child, mail_env, home=No
     mode = spec["tools"].get("browser_mode")
     if mode and _agy_managed_browser_conflict(inherited):
         raise ToolsError("Disable the global Antigravity browser MCP before selecting a Browser mode")
-    if mode in ("temporary", "personal"):
-        name, definition = _browser_mcp(mode)
-        servers[name] = definition
     for name, definition in inherited.items():
         if (isinstance(definition, dict) and definition.get("disabled") is not True
                 and (_cua_server(name, definition) or _native_desktop_server(name, definition))):
             raise ToolsError(f"Disable the global Antigravity MCP server {name!r} before launching this child; "
                              "ORRERY uses orrery-screen for Computer use")
+
+
+def agy_config(mail_command, spec, *, runtime, project, child, mail_env, home=None):
+    """Project managed MCP servers into an Antigravity workspace."""
+    agy_validate_selection(spec, home=home)
+    servers = {"orrery-mail": {"command": mail_command, "args": []}}
+    if sys.platform != "darwin":
+        return {"mcpServers": servers}
+    mode = spec["tools"].get("browser_mode")
+    if mode in ("temporary", "personal"):
+        name, definition = _browser_mcp(mode)
+        servers[name] = definition
     screen = screen_definition(spec, runtime, project, child, uuid.uuid4().hex, mail_env=mail_env)
     if screen is not None:
         servers[SCREEN_SERVER] = {**screen, "enabledTools": list(_screen_state()["TOOLS"])}

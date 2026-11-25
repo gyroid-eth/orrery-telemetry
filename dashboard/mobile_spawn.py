@@ -77,6 +77,7 @@ def _catalog_choices(value):
         if not isinstance(provider, dict) or not _text(provider.get('id'), 96):
             continue
         provider_id = provider['id']
+        capabilities = provider.get('capabilities')
         label = provider.get('label')
         label = label if _text(label, 96) else provider_id
         options = provider.get('models')
@@ -109,10 +110,9 @@ def _catalog_choices(value):
                     modes = browser_modes.get(key)
                     routes[-1]['browser_modes'] = [mode for mode in _BROWSER_MODES
                                                     if isinstance(modes, list) and mode in modes]
-                # The mobile form submits standalone launches. Antigravity
-                # requires an explicit parent and a resource declaration.
                 if antigravity:
-                    routes[-1]['launch_blocked'] = True
+                    if not isinstance(capabilities, dict) or capabilities.get('standalone') is not True:
+                        routes[-1]['launch_blocked'] = True
                     if 'browser_modes' in routes[-1]:
                         routes[-1]['browser_modes'] = []
             if not routes:
@@ -143,7 +143,7 @@ def _catalog_choices(value):
 def _options(model, route, directory, task, role, effort, computer, browser, configurable, *, browser_mode=None):
     payload = {'task':task, 'model':model['model'], 'provider':model['provider'],
                'dir':directory['path'], 'standalone':True, 'headless':True, 'async':True}
-    legacy = {'claude':'claude-code', 'codex':'codex'}
+    legacy = {'claude':'claude-code', 'codex':'codex', 'gemini':'antigravity'}
     if route['key'] != legacy.get(model['provider']):
         payload['harness'] = route['id']
     if model['url_index'] is not None:
@@ -156,6 +156,8 @@ def _options(model, route, directory, task, role, effort, computer, browser, con
         return payload
     if role:
         payload['role'] = role
+    if route['key'] == 'antigravity':
+        return payload
     native = route['key'] in _NATIVE_HARNESSES
     browser = browser and (not native or directory.get('native_browser') is True)
     mcp = ['cua-driver'] if computer else []
@@ -291,6 +293,7 @@ class MobileSpawn:
             route = next((item for item in model['harnesses'] if item['id'] == value['harness']), None)
             if (route is None or route.get('launch_blocked') or (effort is None and route['effort_required'])
                     or (effort is not None and effort not in route['efforts'])
+                    or (route['key'] == 'antigravity' and (value['computer'] or browser or mode is not None))
                     or (mode is not None and mode not in route.get('browser_modes', ()))
                     or (not configurable and (role or value['computer'] or browser or mode is not None))):
                 raise SpawnError('invalid_launch', 400)

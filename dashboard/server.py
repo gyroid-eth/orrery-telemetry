@@ -2153,7 +2153,8 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                     "model_id": agent_card.native_model_id(status.get("model_id")) or plan.get("model"),
                     "effort": status.get("effort") or plan.get("effort"),
                     "act_state": status.get("activity"),
-                    "parent_state": "child", "parent_agent": state.get("parent_agent"),
+                    "parent_state": "top" if plan.get("standalone") is True else "child",
+                    "parent_agent": state.get("parent_agent"),
                     "harness_kind": "antigravity", "computer_use": None, "browser_use": None,
                     "ctx_window_tokens": None}
     kind = agent_card.HARNESS_KIND.get(program)
@@ -5518,7 +5519,8 @@ def _do_resume_native(session, program, *, open_terminal=None, replace_husk=Fals
 
 @functools.lru_cache(maxsize=4)
 def _gemini_interactive_module(path):
-    return _runtime_runpy.run_path(path, init_globals={"child_resume": _child_resume_module()})
+    return _runtime_runpy.run_path(path, init_globals={
+        "child_resume": _child_resume_module(), "child_tools": _child_tools_module()})
 
 
 def _gemini_resume_material(session):
@@ -5535,12 +5537,18 @@ def _gemini_resume_material(session):
         state = module.inspect_retained(runtime, session, agent_id=registration["agent_id"],
                                         project_key=registration["project_key"], program="antigravity")
         interactive = _gemini_interactive_module(str(helper))
+        interactive["launch_parent"](state)
         cwd = interactive["validate_plan"](state["gemini_launch"])
         sid = interactive["saved_conversation"](runtime, session, registration)
     except module.ResumeStateError as exc:
         raise _ResumeCapabilityError(exc.code, str(exc)) from None
     except (OSError, ValueError, KeyError, TypeError):
         raise _ResumeCapabilityError("config_unrestorable", "Antigravity launch settings are unavailable") from None
+    if state["gemini_launch"].get("standalone"):
+        try:
+            interactive["validate_standalone_config"](state["gemini_launch"])
+        except ValueError as exc:
+            raise _ResumeCapabilityError("config_unrestorable", str(exc)) from None
     if not isinstance(sid, str) or not re.fullmatch(
             r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", sid):
         raise _ResumeCapabilityError("no_history", "Antigravity conversation could not be verified")
@@ -5572,10 +5580,11 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False):
         mail_changed = True
         environment = {
             "AGENTSTACK_HOME": str(Path(HOOKS_DIR).parent), "AGENTSTACK_HOOKS_DIR": HOOKS_DIR,
+            "AGENTSTACK_WORKTREE_ROOT": _worktree_root(),
             "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": project,
             "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
             "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
-            "AGENT_NAME": session, "PARENT_AGENT": state["parent_agent"],
+            "AGENT_NAME": session, "PARENT_AGENT": state.get("parent_agent", ""),
             "AGENTSTACK_RESERVED_IDENTITY": "1", "AGENTSTACK_GEMINI_INTERACTIVE": "1",
         }
         context = Path(HOOKS_DIR) / "project-context.sh"

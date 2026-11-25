@@ -216,12 +216,13 @@
   }
 
   function browserAvailable(next = chosenRoute()) {
-    return catalog?.configurable && next &&
+    return catalog?.configurable && next && next.key !== 'antigravity' &&
       (!['dsh', 'hermes'].includes(next.key) || catalog.directories[Number(directory.value)]?.native_browser === true);
   }
 
   function browserModes(next = chosenRoute()) {
-    return catalog?.configurable && Array.isArray(next?.browser_modes) ? next.browser_modes : null;
+    return catalog?.configurable && next?.key !== 'antigravity' && Array.isArray(next?.browser_modes)
+      ? next.browser_modes : null;
   }
 
   function syncBrowser(next, reset = false) {
@@ -254,6 +255,7 @@
       browser.setAttribute('aria-label', 'Browser');
       browser.setAttribute('aria-describedby', 'spawn-browser-help');
       for (const attr of ['aria-expanded', 'aria-controls', 'aria-disabled', 'title']) browser.removeAttribute(attr);
+      if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
       reset = true;
     }
     const available = Boolean(browserAvailable(next));
@@ -298,10 +300,11 @@
     if (!next) return;
     const provider = selectedModel().provider;
     const key = provider + '/' + next.key;
+    tools.hidden = !catalog.configurable || next.key === 'antigravity';
     const changed = route !== key;
     if (changed) {
       dismissToolHelp();
-      const on = catalog.configurable && next.key !== 'dsh';
+      const on = !tools.hidden && next.key !== 'dsh';
       computer.setAttribute('aria-checked', String(on));
       toggleMotion[0]?.sync(false);
     }
@@ -455,9 +458,10 @@
     selection = {
       catalog:catalog.catalog, model:modelIndex, harness:harness.value, directory:Number(directory.value),
       task:task.value.trim(), role:catalog.configurable ? role.value.trim() : '',
-      effort:effort.value || null, computer:catalog.configurable && checked(computer),
+      effort:effort.value || null, computer:!tools.hidden && checked(computer),
       ...(modes ? (modes.includes(browserMode) ? {browser_mode:browserMode} : {})
-        : canUseBrowser || !catalog.configurable ? {browser:Boolean(canUseBrowser) && checked(browser)} : {}),
+        : canUseBrowser || (!catalog.configurable && route.key !== 'antigravity')
+          ? {browser:Boolean(canUseBrowser) && checked(browser)} : {}),
     };
     const item = selectedModel(), source = modelSource(item);
     const name = modelLabel(item) + (source ? ' on ' + source : '');
@@ -467,7 +471,7 @@
     ];
     if (route.efforts.length) labels.push(summaryValue('Effort', 'working', effortLabel(selection.effort || route.default_effort)));
     if (selection.role) labels.push(summaryValue('Role', 'agents', selection.role));
-    if (catalog.configurable) {
+    if (!tools.hidden) {
       labels.push(summaryValue('Computer use', 'launch-computer', selection.computer ? 'On' : 'Off'));
       if (selection.browser_mode) labels.push(summaryValue('Browser', 'launch-browser', browserLabels[selection.browser_mode]));
       else if (!modes && canUseBrowser) labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));

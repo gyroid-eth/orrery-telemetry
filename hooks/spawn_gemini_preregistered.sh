@@ -37,6 +37,8 @@ PRINT_TIMEOUT="${AGENTSTACK_GEMINI_PRINT_TIMEOUT:-30m}"
 RESOURCE_TTL="${AGENTSTACK_GEMINI_RESOURCE_TTL:-14400}"
 WORKTREE_ROOT="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/worktrees}"
 WORKTREE_BASE_REV=""
+USE_WORKTREE=false
+STANDALONE=false
 CHILD_NAME=""
 CHILD_TOKEN_FILE=""
 MODEL="${AGENTSTACK_GEMINI_MODEL:-gemini-3.8-flash-high}"
@@ -56,7 +58,7 @@ INTERACTIVE_HELPER="$HOOKS_DIR/gemini_interactive.py"
 usage() {
   cat >&2 <<'EOF'
 Usage: spawn_gemini_preregistered.sh --pre-registered NAME --child-token-file FILE \
-  [--worktree] [--worktree-base REV] [--tools SPEC] --model MODEL [TASK_SHORT] [WORKDIR]
+  [--standalone] [--worktree] [--worktree-base REV] [--tools SPEC] --model MODEL [TASK_SHORT] [WORKDIR]
 EOF
 }
 
@@ -68,12 +70,9 @@ while [[ "${1:-}" == --* ]]; do
       [[ $# -ge 2 ]] || { usage; exit 2; }
       GEMINI_TOOLS+=(--tools "$2"); shift 2 ;;
     --model) MODEL="${2:-}"; shift 2 ;;
-    --worktree) shift ;;
+    --worktree) USE_WORKTREE=true; shift ;;
     --worktree-base) WORKTREE_BASE_REV="${2:-}"; shift 2 ;;
-    --standalone)
-      echo "$PROG: standalone Gemini launch is not supported by the dashboard adapter" >&2
-      exit 2
-      ;;
+    --standalone) STANDALONE=true; shift ;;
     *) echo "$PROG: unknown option: $1" >&2; usage; exit 2 ;;
   esac
 done
@@ -83,8 +82,15 @@ WORK_DIR="${2:-$PWD}"
 [[ -n "$CHILD_NAME" ]] || { usage; exit 2; }
 [[ -n "$CHILD_TOKEN_FILE" && -s "$CHILD_TOKEN_FILE" ]] || { echo "$PROG: child token file is required" >&2; exit 2; }
 [[ -n "$PROJECT_KEY" ]] || { echo "$PROG: AGENTSTACK_PROJECT_KEY is required" >&2; exit 2; }
-[[ -n "${PARENT_AGENT:-}" ]] || { echo "$PROG: PARENT_AGENT is required" >&2; exit 2; }
-[[ -n "$RESOURCES" ]] || { echo "$PROG: Gemini dashboard launch requires declared resources" >&2; exit 2; }
+if [[ "$STANDALONE" == true ]]; then
+  [[ "$INTERACTIVE" == 1 ]] || { echo "$PROG: standalone Antigravity requires macOS" >&2; exit 2; }
+  [[ -z "$RESOURCES" ]] || { echo "$PROG: declared resources require a parent" >&2; exit 2; }
+  export PARENT_AGENT=""
+else
+  [[ -n "${PARENT_AGENT:-}" ]] || { echo "$PROG: PARENT_AGENT is required" >&2; exit 2; }
+  [[ -n "$RESOURCES" ]] || { echo "$PROG: Gemini dashboard launch requires declared resources" >&2; exit 2; }
+  USE_WORKTREE=true
+fi
 [[ -n "$TASK_FILE" && -s "$TASK_FILE" ]] || { echo "$PROG: full task handoff file is missing" >&2; exit 2; }
 [[ -d "$WORK_DIR" ]] || { echo "$PROG: workdir does not exist: $WORK_DIR" >&2; exit 2; }
 case "$EFFORT" in low|medium|high|xhigh) ;; *) echo "$PROG: invalid effort: $EFFORT" >&2; exit 2 ;; esac
@@ -317,24 +323,26 @@ if root:
 print(",".join(canonical))
 PY
 }
-RESOURCES="$(validate_resources)" || exit 2
+if [[ "$STANDALONE" != true ]]; then
+  RESOURCES="$(validate_resources)" || exit 2
+fi
 
 agentstack_apply_workspace_context "$WORK_DIR" "$PROJECT_KEY" || exit 1
 WORK_DIR="$AGENTSTACK_PROJECT_WORK_DIR"
-SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
-[[ -n "$SOURCE_REPO" ]] || { echo "$PROG: Gemini dashboard launch requires a git repository" >&2; exit 1; }
-if [[ -n "$WORKTREE_BASE_REV" ]]; then
-  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify "$WORKTREE_BASE_REV^{commit}" 2>/dev/null || true)"
-else
-  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify HEAD 2>/dev/null || true)"
+if [[ "$USE_WORKTREE" == true ]]; then
+  SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -n "$SOURCE_REPO" ]] || { echo "$PROG: Gemini dashboard launch requires a git repository" >&2; exit 1; }
+  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify "${WORKTREE_BASE_REV:-HEAD}^{commit}" 2>/dev/null || true)"
+  [[ -n "$BASE_REV" ]] || { echo "$PROG: could not resolve worktree base" >&2; exit 1; }
+  mkdir -p "$WORKTREE_ROOT"
 fi
-[[ -n "$BASE_REV" ]] || { echo "$PROG: could not resolve worktree base" >&2; exit 1; }
 
-mkdir -p "$RUNTIME_DIR" "$WORKTREE_ROOT"
+mkdir -p "$RUNTIME_DIR"
 chmod 700 "$RUNTIME_DIR" 2>/dev/null || true
 TOKEN_KEY="$(printf '%s' "$CHILD_NAME" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
 DURABLE_TOKEN="$RUNTIME_DIR/agent_token_$TOKEN_KEY"
 WORKTREE_DIR="$WORKTREE_ROOT/$CHILD_NAME"
+WORKSPACE_DIR="$WORK_DIR"
 BRANCH_NAME="exp/$CHILD_NAME"
 MCP_CONFIG=""
 GIT_EXCLUDES_FILE=""
@@ -386,6 +394,9 @@ cleanup_failure() {
     rm -f "$TASK_EVENT_FILE" "$RUNNER_FILE" "$MCP_CONFIG" "$DURABLE_TOKEN" "$GIT_EXCLUDES_FILE" "$TASK_FILE"
     if [[ "$INTERACTIVE_PREPARED" == true ]]; then
       rm -f "$RUNTIME_DIR/child-agents/$CHILD_NAME.json"
+      if [[ "$STANDALONE" == true ]]; then
+        rm -rf "$RUNTIME_DIR/child-agents/$CHILD_NAME.agy-config"
+      fi
     fi
     if [[ "$INTERACTIVE" == 1 ]]; then
       rm -f "$CHILD_TOKEN_FILE" "$CHILD_TOKEN_FILE.binding.json"
@@ -408,15 +419,19 @@ if [[ "$INTERACTIVE" == 0 ]]; then
   rm -f "$CHILD_TOKEN_FILE"
 fi
 
-[[ ! -e "$WORKTREE_DIR" ]] || { echo "$PROG: worktree path already exists: $WORKTREE_DIR" >&2; exit 1; }
-if git -C "$SOURCE_REPO" show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-  echo "$PROG: child branch already exists: $BRANCH_NAME" >&2
-  exit 1
+if [[ "$USE_WORKTREE" == true ]]; then
+  [[ ! -e "$WORKTREE_DIR" ]] || { echo "$PROG: worktree path already exists: $WORKTREE_DIR" >&2; exit 1; }
+  if git -C "$SOURCE_REPO" show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+    echo "$PROG: child branch already exists: $BRANCH_NAME" >&2
+    exit 1
+  fi
+  git -C "$SOURCE_REPO" worktree add -b "$BRANCH_NAME" "$WORKTREE_DIR" "$BASE_REV" >/dev/null
+  WORKTREE_CREATED=true
+  WORKSPACE_DIR="$WORKTREE_DIR"
+  agentstack_apply_workspace_context "$WORKSPACE_DIR" "$PROJECT_KEY" || exit 1
 fi
-git -C "$SOURCE_REPO" worktree add -b "$BRANCH_NAME" "$WORKTREE_DIR" "$BASE_REV" >/dev/null
-WORKTREE_CREATED=true
-agentstack_apply_workspace_context "$WORKTREE_DIR" "$PROJECT_KEY" || exit 1
 
+if [[ "$STANDALONE" != true ]]; then
 # Linked worktrees share .git/info/exclude. Use a child-owned excludes file
 # injected only into the Antigravity runner instead of mutating shared repo
 # metadata, so overlapping delegated children cannot remove each other's rule.
@@ -456,8 +471,9 @@ path.write_text(json.dumps({"mcpServers": {"orrery-mail": entry}}, indent=2) + "
 os.chmod(path, 0o600)
 PY
 fi
+fi
 
-"$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKTREE_DIR" "$INTERACTIVE" <<'PY'
+"$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKSPACE_DIR" "$INTERACTIVE" <<'PY'
 import json, os, sys
 from pathlib import Path
 raw_path, event_path, child, parent, resources, worktree, interactive = sys.argv[1:8]
@@ -484,6 +500,10 @@ prefix = (
        if interactive == "1" else "The launcher will report your final result to the parent automatically.\n")
     +
     f"Declared resources (worktree-anchored):\n{resource_text}\n\nCanonical task:\n"
+) if parent else (
+    f"You are {child}, an independent Antigravity agent. Your working directory is {workspace_root}. "
+    "Use the existing bound ORRERY Mail identity. Take a reservation before editing any file. "
+    "Resolve relative paths against your working directory.\n\n"
 )
 with open(event_path, "w", encoding="utf-8") as fh:
     json.dump({"event": "user", "message": {"content": prefix + task}}, fh, ensure_ascii=False, separators=(",", ":"))
@@ -493,8 +513,12 @@ PY
 rm -f "$TASK_FILE"
 
 if [[ "$INTERACTIVE" == 1 ]]; then
+  interactive_args=()
+  if [[ "$STANDALONE" == true ]]; then
+    interactive_args=(--standalone ${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"})
+  fi
   AGENT_NAME="$CHILD_NAME" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" \
-    "$PYTHON_BIN" "$INTERACTIVE_HELPER" prepare "$CHILD_TOKEN_FILE" "$WORKTREE_DIR" "$GEMINI_BIN" "$MODEL" "$EFFORT"
+    "$PYTHON_BIN" "$INTERACTIVE_HELPER" prepare "$CHILD_TOKEN_FILE" "$WORKSPACE_DIR" "$GEMINI_BIN" "$MODEL" "$EFFORT" ${interactive_args[@]+"${interactive_args[@]}"}
   INTERACTIVE_PREPARED=true
   RESERVATION_TOKEN="$DURABLE_TOKEN"
   rm -f "$CHILD_TOKEN_FILE" "$CHILD_TOKEN_FILE.binding.json"
@@ -503,7 +527,7 @@ fi
 cat > "$RUNNER_FILE" <<EOF
 #!/usr/bin/env bash
 set -uo pipefail
-cd $(printf '%q' "$WORKTREE_DIR") || exit 1
+cd $(printf '%q' "$WORKSPACE_DIR") || exit 1
 export AGENT_NAME=$(printf '%q' "$CHILD_NAME")
 export PARENT_AGENT=$(printf '%q' "$PARENT_AGENT")
 export AGENTSTACK_RESERVED_IDENTITY=1
@@ -511,6 +535,7 @@ export AGENTSTACK_PROJECT_KEY=$(printf '%q' "$PROJECT_KEY")
 export AGENTSTACK_HOME=$(printf '%q' "$AGENTSTACK_HOME_DIR")
 export AGENTSTACK_HOOKS_DIR=$(printf '%q' "$HOOKS_DIR")
 export AGENTSTACK_RUNTIME_DIR=$(printf '%q' "$RUNTIME_DIR")
+export AGENTSTACK_WORKTREE_ROOT=$(printf '%q' "$WORKTREE_ROOT")
 export AGENTSTACK_MCP_URL=$(printf '%q' "$MCP_URL")
 export AGENTSTACK_MAIL_ENV=$(printf '%q' "$MAIL_ENV")
 export AGENTSTACK_MAIL_HTTP_BEARER_MODE=$(printf '%q' "$HTTP_BEARER_MODE")
@@ -523,9 +548,11 @@ git_config_count="\${GIT_CONFIG_COUNT:-0}"
 case "\$git_config_count" in
   ''|*[!0-9]*) git_config_count=0 ;;
 esac
-export "GIT_CONFIG_KEY_\${git_config_count}=core.excludesFile"
-export "GIT_CONFIG_VALUE_\${git_config_count}=\$git_excludes_file"
-export GIT_CONFIG_COUNT="\$((git_config_count + 1))"
+if [[ -n "\$git_excludes_file" ]]; then
+  export "GIT_CONFIG_KEY_\${git_config_count}=core.excludesFile"
+  export "GIT_CONFIG_VALUE_\${git_config_count}=\$git_excludes_file"
+  export GIT_CONFIG_COUNT="\$((git_config_count + 1))"
+fi
 
 if [[ $(printf '%q' "$INTERACTIVE") == 1 ]]; then
   rm -f -- "\$0"
@@ -578,11 +605,11 @@ exit "\$child_status"
 EOF
 chmod 700 "$RUNNER_FILE"
 
-tmux new-session -d -s "$CHILD_NAME" -c "$WORKTREE_DIR" \
+tmux new-session -d -s "$CHILD_NAME" -c "$WORKSPACE_DIR" \
   -e "AGENT_NAME=$CHILD_NAME" -e "PARENT_AGENT=$PARENT_AGENT" \
   -e "AGENTSTACK_RESERVED_IDENTITY=1" \
   -e "AGENTSTACK_GEMINI_INTERACTIVE=$INTERACTIVE" \
-  "/bin/bash $(printf '%q' "$RUNNER_FILE")"
+  /bin/bash "$RUNNER_FILE"
 TMUX_STARTED=true
 
 if [[ "$INTERACTIVE" == 1 ]]; then

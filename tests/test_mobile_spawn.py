@@ -135,6 +135,34 @@ def test_read_only_relay_denies_spawn_before_upstream():
         assert request(port,'POST','/view/spawn',{})[0] == 405
 
 
+def test_standalone_antigravity_forwards_launch_without_optional_tools():
+    provider = {'id':'gemini','label':'Antigravity','efforts':['low','high'],
+                'capabilities':{'standalone':True, 'resources_required':True, 'effort_required':True},
+                'models':[{'id':'gemini-fixture','default':True}],
+                'harnesses':[{'id':'antigravity','available':True,'default':True}]}
+    submitted = []
+    def launch(body):
+        submitted.append(body)
+        return {'ok':True,'child_name':'FixtureCurie'}
+
+    source = {**CATALOG, 'providers':[provider], 'browser_modes':{'antigravity':['off','temporary','personal']}}
+    store = MobileSpawn(lambda: source, launch, lambda _: {})
+    catalog = store.catalog('a'*32, configurable=True)
+    route = catalog['models'][0]['harnesses'][0]
+    assert route['browser_modes'] == [] and not route.get('launch_blocked')
+    value = dict(payload(catalog), harness='antigravity', computer=False)
+    value.pop('browser')
+    for tools in ({'computer':True}, {'browser':True}, *({'browser_mode':mode} for mode in ('off', 'temporary', 'personal'))):
+        with pytest.raises(relay.mobile_spawn.SpawnError, match='invalid_launch'):
+            store.launch('a'*32, {**value, **tools})
+    assert not submitted
+    assert store.launch('a'*32, value) == {'state':'ready','name':'FixtureCurie'}
+    assert submitted == [{
+        'task':value['task'],'model':'gemini-fixture','provider':'gemini','dir':'/workspace',
+        'standalone':True,'headless':True,'async':True,'effort':'high','role':'Review',
+    }]
+
+
 def test_antigravity_models_are_listed_without_forwarding_an_invalid_standalone_launch():
     catalog_source = {**CATALOG, 'providers': [*CATALOG['providers'],
         {'id': 'gemini', 'label': 'Antigravity',

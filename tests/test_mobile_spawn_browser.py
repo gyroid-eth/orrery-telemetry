@@ -67,3 +67,33 @@ def test_browser_icon_opens_three_modes_and_posts_the_choice(phone):
     wait("document.querySelector('#spawn-notice').textContent.includes('is ready')")
     posted = [body for operation, body in state['calls'] if operation == 'spawn']
     assert posted[0]['browser_mode'] == 'temporary' and 'browser' not in posted[0]
+
+
+def test_switching_to_antigravity_hides_tools_and_clears_the_launch_selection(phone):
+    _, js, wait, state = phone
+    catalog = local_catalog()
+    catalog['browser_modes'] = {'hermes':['off','temporary','personal']}
+    catalog['providers'].append({
+        'id':'gemini', 'label':'Antigravity', 'efforts':['low','high'],
+        'capabilities':{'standalone':True, 'effort_required':True},
+        'models':[{'id':'gemini-fixture'}],
+        'harnesses':[{'id':'antigravity', 'available':True, 'default':True}],
+    })
+    open_local_editor(phone, lambda: catalog)
+    js("""document.querySelector('#spawn-browser').click();
+        document.querySelectorAll('#spawn-browser-menu button')[1].click();
+        document.querySelector('#spawn-model-chip').click();
+        document.querySelector('#spawn-provider-tabs [aria-label=Antigravity]').click();""")
+    assert js("document.querySelector('#spawn-tools').hidden")
+    assert not js("document.querySelector('#spawn-browser-menu').matches(':popover-open')")
+    js("""const effort=document.querySelector('#spawn-effort');
+        effort.value='low';effort.dispatchEvent(new Event('change'));
+        document.querySelector('#spawn-settings-close').click();
+        document.querySelector('#spawn-editor').requestSubmit();""")
+    assert not js("Boolean(document.querySelector('#spawn-summary [aria-label^=Browser],#spawn-summary [aria-label^=Computer]'))")
+    state['spawn_receipt'] = {'state':'ready','name':'FixtureCurie'}
+    js("document.querySelector('#spawn-confirm').click()")
+    wait("document.querySelector('#spawn-notice').textContent.includes('is ready')")
+    [posted] = [body for operation, body in state['calls'] if operation == 'spawn']
+    assert posted['harness'] == 'antigravity' and posted['computer'] is False
+    assert 'browser' not in posted and 'browser_mode' not in posted

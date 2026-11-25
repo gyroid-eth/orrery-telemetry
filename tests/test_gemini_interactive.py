@@ -67,7 +67,7 @@ def test_one_workspace_is_trusted_without_changing_global_settings(managed, monk
 
 
 def test_edit_uses_shared_reservation_and_shell_stays_in_the_worktree(managed, monkeypatch):
-    _, cwd, _ = managed
+    runtime, cwd, _ = managed
     calls = []
 
     def hook(argv, **kw):
@@ -78,16 +78,66 @@ def test_edit_uses_shared_reservation_and_shell_stays_in_the_worktree(managed, m
     monkeypatch.setattr(agy.subprocess, "run", hook)
     event = {"conversationId": SID, "toolCall": {"name": "replace_file_content",
                                                  "args": {"TargetFile": "edit.txt"}}}
-    assert agy.guard(event, cwd)["decision"] == "deny"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
     assert [item[0] for item in calls] == [
         "deny-llm-key-read.py", "check-agent-registered.sh", "check-file-reservation.sh"]
     assert calls[-1][1]["tool_input"]["file_path"] == str(cwd / "edit.txt")
     event["toolCall"]["args"]["TargetFile"] = "../not-in-worktree"
-    assert agy.guard(event, cwd)["decision"] == "deny"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
     event["toolCall"] = {"name": "run_command", "args": {"CommandLine": "printf OK"}}
-    assert agy.guard(event, cwd) == {"decision": "allow", "overwrite": {"Cwd": str(cwd)}}
+    assert agy.guard(event, cwd, runtime=runtime) == {"decision": "allow", "overwrite": {"Cwd": str(cwd)}}
     event["toolCall"]["args"]["BypassSandbox"] = True
-    assert agy.guard(event, cwd)["decision"] == "deny"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
+
+
+@pytest.mark.parametrize("shared_inside", [False, True])
+def test_guard_allows_reserved_edits_with_a_shared_agents_symlink(tmp_path, monkeypatch, shared_inside):
+    cwd = tmp_path / "selected"
+    cwd.mkdir()
+    shared = (cwd if shared_inside else tmp_path) / "shared"
+    shared.mkdir()
+    (shared / "hooks.json").write_text("{}")
+    (cwd / ".agents").symlink_to(shared, target_is_directory=True)
+    checked = []
+
+    def hook(argv, **kwargs):
+        if Path(argv[-1]).name == "check-file-reservation.sh":
+            checked.append(json.loads(kwargs["input"])["tool_input"]["file_path"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", hook)
+    event = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": "notes.md"}}}
+    runtime = tmp_path / "runtime"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "allow"
+    event["toolCall"]["args"]["TargetFile"] = ".agents/hooks.json"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
+    assert checked == [str(cwd / "notes.md")]
+
+
+def test_guard_protects_installation_and_runtime_and_allows_the_managed_worktree(tmp_path, monkeypatch):
+    install = tmp_path / "stack"
+    runtime = tmp_path / "separate runtime"
+    worktrees = install / "workspaces"
+    selected_worktree = worktrees / NAME
+    selected_worktree.mkdir(parents=True)
+    monkeypatch.setenv("AGENTSTACK_HOME", str(install))
+    monkeypatch.setenv("AGENTSTACK_WORKTREE_ROOT", str(worktrees))
+    checked = []
+
+    def hook(argv, **kwargs):
+        checked.append(Path(argv[-1]).name)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", hook)
+    for folder in (runtime / "child-agents" / f"{NAME}.agy-config", install / "hooks"):
+        edit = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": str(folder / "fixture.json")}}}
+        shell = {"toolCall": {"name": "run_command", "args": {"CommandLine": "pwd", "Cwd": str(folder)}}}
+        assert agy.guard(edit, tmp_path, runtime=runtime)["decision"] == "deny"
+        assert agy.guard(shell, tmp_path, runtime=runtime)["decision"] == "deny"
+    assert not checked
+    edit = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": "notes.md"}}}
+    assert agy.guard(edit, selected_worktree, runtime=runtime)["decision"] == "allow"
+    assert checked[-1] == "check-file-reservation.sh"
 
 
 def test_roster_status_is_bound_to_this_tmux_generation(managed, monkeypatch, capsys):
@@ -108,6 +158,129 @@ def test_roster_status_is_bound_to_this_tmux_generation(managed, monkeypatch, ca
     session["created"] += 1
     observed = server._agent_card_fields(row, session, {}, REGISTRATION, ())
     assert (observed["model_id"], observed["effort"], observed["act_state"]) == ("gemini-fixture", "high", None)
+
+
+def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_folder(tmp_path, monkeypatch):
+    cwd = tmp_path / "vault"
+    own_hooks = cwd / ".agents" / "hooks.json"
+    own_hooks.parent.mkdir(parents=True)
+    own_hooks.write_text('{"existing":{}}')
+    runtime = tmp_path / "runtime"
+    source = tmp_path / "temporary-token"
+    source.write_text("fixture-credential")
+    source.chmod(0o600)
+    child_resume._atomic_json(Path(str(source) + ".binding.json"), REGISTRATION)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", PROJECT)
+    monkeypatch.setenv("PARENT_AGENT", "Unrelated")
+    monkeypatch.setenv("AGENTSTACK_PROXY_PARENT_AGENT", "Unrelated")
+    monkeypatch.setenv("TMUX_PANE", "%4")
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.chdir(cwd)
+    agy.prepare(runtime, NAME, PROJECT, "", source=source, cwd=cwd,
+                binary=sys.executable, model="gemini-fixture", effort="high", standalone=True)
+    state_path = runtime / "child-agents" / f"{NAME}.json"
+    state = child_resume._load_state(state_path)
+    assert agy.launch_parent(state) == "" and "parent_agent" not in state
+    assert state["gemini_launch"]["cwd"] == str(cwd.resolve())
+    card = server._agent_card_fields({"name": NAME, "program": "antigravity"}, {}, {}, REGISTRATION, ())
+    assert card["parent_state"] == "top" and card["parent_agent"] is None
+    assert own_hooks.read_text() == '{"existing":{}}'
+
+    def check_output(argv, **_kwargs):
+        if argv[0] == "tmux":
+            return IDENTITY
+        assert argv[-3:] == ["prepare", "52", IDENTITY]
+        return "fixture-nonce"
+
+    launches = []
+
+    def launch(argv, *, env, **_kwargs):
+        if argv[0] == "/bin/bash":
+            return SimpleNamespace(returncode=0)
+        added = Path(argv[argv.index("--add-dir") + 1])
+        assert added.parent == state_path.parent and added != cwd
+        assert "PARENT_AGENT" not in env and "AGENTSTACK_PROXY_PARENT_AGENT" not in env
+        assert env["AGENTSTACK_AGY_HISTORY_LAUNCH"] == "fixture-nonce"
+        assert Path.cwd() == cwd.resolve()
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        assert settings["trustedWorkspaces"] == [str(cwd.resolve()), str(added)]
+        config = json.loads((added / ".agents" / "mcp_config.json").read_text())
+        assert set(config["mcpServers"]) == {"orrery-mail"}
+        hooks = json.loads((added / ".agents" / "hooks.json").read_text())
+        assert any("PreToolUse" in hook for hook in hooks.values())
+        assert any("SessionStart" in hook for hook in hooks.values())
+        assert sorted(path.name for path in added.rglob("*.json")) == ["hooks.json", "mcp_config.json"]
+        assert "fixture-credential" not in str(hooks) + str(config)
+        launches.append(argv[-2:])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "check_output", check_output)
+    monkeypatch.setattr(agy.subprocess, "run", launch)
+    task = tmp_path / "handoff"
+    child_resume._atomic_json(task, {"message": {"content": "One initial task."}})
+    assert agy.run(runtime, NAME, task_file=task) == 0
+    assert not task.exists()
+    assert not state_path.with_suffix(".agy-config").exists()
+
+    child_resume.mark_retired(runtime, NAME, retention_days=30)
+    child_resume.begin_resume(runtime, NAME, agent_id=52, project_key=PROJECT, program="antigravity")
+    assert agy.run(runtime, NAME, conversation=SID) == 0
+    assert launches == [["-i", "One initial task."], ["--conversation", SID]]
+    assert not state_path.with_suffix(".agy-config").exists()
+    assert sorted(path.relative_to(cwd).as_posix() for path in cwd.rglob("*")) == [
+        ".agents", ".agents/hooks.json"]
+
+
+@pytest.fixture
+def standalone_preflight(tmp_path, monkeypatch):
+    cwd = tmp_path / "selected"
+    cwd.mkdir()
+    runtime = tmp_path / "runtime"
+    source = tmp_path / "owner.token"
+    source.write_text("fixture-credential")
+    source.chmod(0o600)
+    child_resume._atomic_json(Path(str(source) + ".binding.json"), REGISTRATION)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(agy.child_tools, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", PROJECT)
+    config = tmp_path / ".gemini/config/mcp_config.json"
+    config.parent.mkdir(parents=True)
+
+    def prepare():
+        agy.prepare(runtime, NAME, PROJECT, "", source=source, cwd=cwd, binary=sys.executable,
+                    model="gemini-fixture", effort="high", standalone=True)
+
+    return runtime, config, prepare
+
+
+def test_standalone_prepare_rejects_incompatible_mcp_before_creating_state(standalone_preflight):
+    runtime, config, prepare = standalone_preflight
+    config.write_text('{"mcpServers":{"cua-driver":{"command":"/usr/bin/true"}}}')
+    with pytest.raises(ValueError, match="Disable the global Antigravity MCP server 'cua-driver'"):
+        prepare()
+    assert not runtime.exists()
+
+
+def test_standalone_resume_reports_new_incompatible_mcp_before_start(standalone_preflight, monkeypatch):
+    runtime, config, prepare = standalone_preflight
+    prepare()
+    child_resume.mark_retired(runtime, NAME, retention_days=30)
+    config.write_text('{"mcpServers":{"cua-driver":{"command":"/usr/bin/true"}}}')
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "HOOKS_DIR", str(Path(agy.__file__).parent))
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(server, "_resume_registration", lambda *_: REGISTRATION)
+    monkeypatch.setattr(server, "_child_tools_module", lambda: agy.child_tools)
+    monkeypatch.setattr(server, "_mcp_call", lambda *_: pytest.fail("resume touched Mail"))
+    monkeypatch.setattr(server, "_launch_claude_resume_tmux", lambda *_a, **_k: pytest.fail("resume started tmux"))
+    server._gemini_interactive_module.cache_clear()
+    try:
+        result = server._do_resume_gemini(NAME, open_terminal=False)
+        assert result["ok"] is False and result["resume_capability"] == "config_unrestorable"
+        assert "Disable the global Antigravity MCP server 'cua-driver'" in result["error"]
+    finally:
+        server._gemini_interactive_module.cache_clear()
 
 
 def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch):

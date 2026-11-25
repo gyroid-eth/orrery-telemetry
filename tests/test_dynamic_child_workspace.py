@@ -182,7 +182,7 @@ def test_gemini_runner_recomputes_its_isolated_worktree_context(tmp_path, launch
     runner = tmp_path / "runner.sh"
     render_env = environment(tmp_path)
     render_env.update({
-        "WORKTREE_DIR": str(linked), "CHILD_NAME": "WorkspaceGemini", "PARENT_NAME": "Parent",
+        "WORKTREE_DIR": str(linked), "WORKSPACE_DIR": str(linked), "CHILD_NAME": "WorkspaceGemini", "PARENT_NAME": "Parent",
         "PARENT_AGENT": "Parent", "PROJECT_KEY": "shared-namespace", "AGENTSTACK_HOME_DIR": str(tmp_path),
         "HOOKS_DIR": str(ROOT / "hooks"), "PROJECT_CONTEXT_HELPER": str(CONTEXT),
         "RUNTIME_DIR": str(tmp_path / "runtime"), "MCP_URL": "http://127.0.0.1:9/mcp",
