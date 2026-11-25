@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from orrery_chatgpt_mcp.model import Dashboard, DashboardError, ToolError, invoke, snapshot
+from orrery_chatgpt_mcp import server
 from orrery_chatgpt_mcp.server import Config, ConfigurationError, Gateway, Server, handler, pair, read_secret
 
 
@@ -169,6 +170,29 @@ def test_unknown_tool_raises_before_any_dashboard_read():
 def test_invalid_configuration_refused(values):
     with pytest.raises(ConfigurationError):
         Config.from_env(values)
+
+
+def test_default_separate_from_cockpit_and_override_wins():
+    assert Config.from_env({"ORRERY_MCP_MODE": "fresh"}).port == 8792
+    assert Config.from_env({"ORRERY_MCP_MODE": "fresh", "ORRERY_MCP_PORT": "8791"}).port == 8791
+
+
+def test_serve_guides_operator_when_port_is_occupied(tmp_path, monkeypatch, capsys):
+    config_dir = tmp_path / "state"
+    monkeypatch.setenv("ORRERY_MCP_MODE", "fresh")
+    monkeypatch.setenv("ORRERY_MCP_STATE_DIR", str(config_dir))
+    monkeypatch.delenv("ORRERY_MCP_PROJECT_KEY", raising=False)
+    monkeypatch.setattr(server, "snapshot", lambda *args, **kwargs: None)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        monkeypatch.setenv("ORRERY_MCP_PORT", str(port))
+        pair(Config.from_env())
+        assert server.main(["serve"]) == 2
+    err = capsys.readouterr().err
+    assert f"port {port} is already in use" in err
+    assert "Set ORRERY_MCP_PORT to a free loopback port" in err
 
 
 def test_pair_private_file_and_explicit_rotation(tmp_path):

@@ -7,10 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'EOF'
-Usage: doctor.sh [--install-dir PATH] [--report]
+Usage: doctor.sh [--install-dir PATH] [--core-only] [--report]
 
 Checks the core ORRERY Telemetry install footprint without modifying files.
 
+  --core-only  Report watcher health without including it in the exit status.
   --report   Also print a paste-ready environment report for a bug report.
              Every failure this project has had came from an environment
              difference, and each one cost several rounds of asking. Values
@@ -19,6 +20,7 @@ EOF
 }
 
 REPORT="${AGENTSTACK_DOCTOR_REPORT:-0}"
+core_only=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,6 +31,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --report)
       REPORT=1
+      shift
+      ;;
+    --core-only)
+      core_only=true
       shift
       ;;
     -h|--help)
@@ -44,6 +50,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 status=0
+watcher_status=0
 
 if [[ -f "$INSTALL_DIR/env.sh" ]]; then
   echo "ok: env $INSTALL_DIR/env.sh"
@@ -278,11 +285,13 @@ PY
 )"
 if [[ "$CLAUDE_MCP_STATE" == "configured" ]]; then
   echo "ok: Claude MCP orrery-mail registered in $CLAUDE_JSON"
+  echo "claude-mcp: configured"
 elif [[ "$CLAUDE_MCP_STATE" == "unavailable" ]]; then
   echo "warn: cannot check the Claude MCP entry: $SCRIPT_DIR/lib/mcp_endpoint.py is missing" >&2
   echo "      This is an incomplete install, not a problem with $CLAUDE_JSON." >&2
   status=1
 else
+  echo "claude-mcp: needs setup if you use Claude Code"
   echo "warn: Claude MCP orrery-mail is not registered for $MCP_URL in $CLAUDE_JSON" >&2
   echo "      /delegate cannot use ORRERY Mail until this fixed-name entry exists." >&2
   MCP_MERGE_HELPER="$INSTALL_DIR/bin/agentstack-merge-claude-mcp"
@@ -425,7 +434,7 @@ PY
   else
     echo "warn: mail watcher health is ${hstatus:-unknown} (dashboard /api/mail-watcher-health: watcher_running=${running:-0}${age:+, last success ${age}s ago}, signals=${signals:-0}, actionable=${actionable:-0}, orphan=${orphans:-0})" >&2
     echo "      mail delivered to an agent waiting for input may not wake it; see docs/troubleshooting*.md (mail watcher)" >&2
-    status=1
+    watcher_status=1
   fi
 }
 
@@ -1124,4 +1133,12 @@ for item in json.loads(sys.argv[1]):
   fi
 fi
 
+if [[ "$status" == 0 ]]; then
+  echo "shared-services: OK (install, Mail health and dashboard checks)"
+else
+  echo "shared-services: FAILED (see diagnostics above)"
+fi
+if [[ "$core_only" == false && "$watcher_status" == 1 ]]; then
+  status=1
+fi
 exit "$status"

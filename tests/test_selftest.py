@@ -128,9 +128,10 @@ def test_missing_agent_mail_makes_selftest_fail(tmp_path, monkeypatch, capsys):
     assert "self-test failed" in capsys.readouterr().err
 
 
-def test_missing_claude_mcp_registration_makes_selftest_fail(
+def test_missing_claude_mcp_does_not_fail_healthy_shared_services(
     tmp_path, monkeypatch, capsys
 ):
+    _stub_healthy_mail_flow(monkeypatch)
     install_dir = _write_installed_env(
         tmp_path,
         mcp_url="http://agent-mail.invalid/mcp",
@@ -138,10 +139,12 @@ def test_missing_claude_mcp_registration_makes_selftest_fail(
         claude_mcp=False,
     )
 
-    assert _run_main(monkeypatch, install_dir) == 1
-    stderr = capsys.readouterr().err
-    assert "Claude MCP registration is missing" in stderr
-    assert "agentstack-doctor" in stderr
+    monkeypatch.setattr(SELFTEST, "dashboard_sees", lambda _url, _pair, _report: None)
+    assert _run_main(monkeypatch, install_dir) == 0
+    stdout = capsys.readouterr().out
+    assert "Claude MCP setup needed if you use Claude Code" in stdout
+    assert "agentstack-doctor" in stdout
+    assert "shared-services: OK" in stdout
 
 
 def test_missing_dashboard_makes_selftest_fail(tmp_path, monkeypatch, capsys):

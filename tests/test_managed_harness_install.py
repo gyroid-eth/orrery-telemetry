@@ -444,7 +444,7 @@ class AcquisitionTests(unittest.TestCase):
         installer.save(self.repo / 'integrations/dsh/tui-datadir.patch.json', installer.read(ROOT / 'integrations/dsh/tui-datadir.patch.json'))
 
 
-    def fake_run(self, argv, *, cwd, env):
+    def fake_run(self, argv, *, cwd, env, progress=False):
         self.calls.append((argv, Path(cwd), dict(env)))
         self.assertNotIn('DEEPSEEK_API_KEY', env)
         self.assertNotIn('ANTHROPIC_API_KEY', env)
@@ -475,9 +475,14 @@ class AcquisitionTests(unittest.TestCase):
                 for name in ('bundled', 'missing'):
                     installer.save(Path(cwd) / 'node_modules' / name / 'package.json', {'version': '1.0.0'})
             return ''
-        if argv[:2] == ['git', 'clone']:
+        if argv[:2] in (['git', 'clone'], ['git', 'init']):
             Path(argv[-1]).mkdir()
             self.ca.source(Path(argv[-1]))
+            return ''
+        if argv[:2] == ['git', 'remote']:
+            return ''
+        if argv[:2] == ['git', 'fetch']:
+            self.assertTrue(progress)
             return ''
         if argv[:2] == ['git', 'checkout']:
             self.assertEqual(argv[-1], installer.HERMES_COMMIT)
@@ -588,12 +593,14 @@ class AcquisitionTests(unittest.TestCase):
             self.dsh()
         self.assertFalse((self.root / 'evidence/upstream-runtime.json').exists())
 
-    def test_hermes_without_donor_keeps_original_official_clone(self):
+    def test_hermes_without_donor_fetches_only_pinned_commit(self):
         with patch.object(installer, 'run', side_effect=self.fake_run):
             details = installer.install_hermes(self.repo, self.root, sys.executable)
         git = [argv for argv, _, _ in self.calls if argv[0] == 'git']
         self.assertEqual(git, [
-            ['git', 'clone', '--no-checkout', installer.HERMES_URL, str(self.root / 'source')],
+            ['git', 'init', '--quiet', str(self.root / 'source')],
+            ['git', 'remote', 'add', 'origin', installer.HERMES_URL],
+            ['git', 'fetch', '--depth=1', '--no-tags', '--progress', 'origin', installer.HERMES_COMMIT],
             ['git', 'checkout', '--detach', installer.HERMES_COMMIT],
             ['git', 'rev-parse', 'HEAD']])
         self.assertEqual(len(self.pm_inputs), 2)
@@ -603,15 +610,16 @@ class AcquisitionTests(unittest.TestCase):
         for cache in (self.cache, None):
             with self.subTest(cache=bool(cache)):
                 self.calls.clear()
-                def failed_acquisition(argv, *, cwd, env):
-                    if argv[:2] == ['git', 'clone']:
+                def failed_acquisition(argv, *, cwd, env, progress=False):
+                    if argv[:2] in (['git', 'clone'], ['git', 'fetch']):
                         self.calls.append((argv, Path(cwd), dict(env)))
                         raise subprocess.CalledProcessError(128, argv)
                     return self.fake_run(argv, cwd=cwd, env=env)
                 with patch.object(installer, 'run', side_effect=failed_acquisition):
                     with self.assertRaises(subprocess.CalledProcessError):
                         installer.install_hermes(self.repo, self.root, sys.executable, cache)
-                self.assertEqual([argv[1] for argv, _, _ in self.calls], ['clone'])
+                expected = ['clone'] if cache else ['init', 'remote', 'fetch']
+                self.assertEqual([argv[1] for argv, _, _ in self.calls], expected)
                 self.assertFalse(self.pm_inputs)
 
     def test_hermes_cloned_head_mismatch_stops_before_ca_and_pm(self):
@@ -661,7 +669,7 @@ class AcquisitionTests(unittest.TestCase):
                 before = current.read_bytes()
                 self.root = install / 'harnesses/hermes' / installer.generation_id(self.repo, 'hermes')
                 first_call = len(self.calls)
-                def fail(argv, *, cwd, env):
+                def fail(argv, *, cwd, env, progress=False):
                     if stage == 'missing-esbuild' and len(argv) > 1 and '/scripts/build/' in argv[1]:
                         self.assertEqual(env['npm_config_ignore_scripts'], 'true')
                         if argv[1].endswith('/tui.mjs'):
@@ -790,7 +798,7 @@ class AcquisitionTests(unittest.TestCase):
                 install = self.base / ('install-' + option[2:])
                 self.root = install / 'harnesses/hermes' / installer.generation_id(self.repo, 'hermes')
                 self.calls.clear()
-                def failing_run(argv, *, cwd, env):
+                def failing_run(argv, *, cwd, env, progress=False):
                     if argv[1:4] == ['-m', 'pm.cli', 'install'] and option in argv:
                         self.calls.append((argv, Path(cwd), dict(env)))
                         self.assertNotIn('DEEPSEEK_API_KEY', env)
@@ -913,7 +921,7 @@ class HermesSourceGitTests(unittest.TestCase):
         self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                  '-c', 'core.hooksPath=/dev/null', 'commit', '-m', message, cwd=source)
 
-    def local_only(self, argv, *, cwd, env):
+    def local_only(self, argv, *, cwd, env, progress=False):
         self.calls.append(argv)
         self.assertEqual(argv[0], 'git')
         self.assertFalse(argv[:2] == ['git', 'clone'] and argv[-2] == installer.HERMES_URL,
@@ -992,32 +1000,35 @@ class HermesSourceGitTests(unittest.TestCase):
         self.assertEqual(self.calls[0], ['git', 'clone', '--no-checkout', str(cache / 'hermes-agent'),
                                         str(self.destination / 'source')])
 
-    def test_missing_object_and_unowned_generation_use_original_official_clone(self):
-        class OfficialClone(Exception):
+    def test_missing_object_and_unowned_generation_fetch_pinned_commit(self):
+        class OfficialFetch(Exception):
             pass
-        def stop_at_official(argv, *, cwd, env):
-            if argv[:2] == ['git', 'clone']:
+        def stop_at_official(argv, *, cwd, env, progress=False):
+            if argv[:2] == ['git', 'fetch']:
                 self.calls.append(argv)
-                self.assertEqual(argv, ['git', 'clone', '--no-checkout', installer.HERMES_URL,
-                                        str(self.destination / 'source')])
-                raise OfficialClone
+                self.assertTrue(progress)
+                self.assertEqual(argv, ['git', 'fetch', '--depth=1', '--no-tags', '--progress',
+                                        'origin', self.pin])
+                raise OfficialFetch
             return self.local_only(argv, cwd=cwd, env=env)
         # A real empty owned repository cannot resolve the recorded fixed SHA.
         self.source.rename(self.base / 'outside-managed-source')
         self.git('init', str(self.source), cwd=self.donor)
-        with self.assertRaises(OfficialClone):
+        with self.assertRaises(OfficialFetch):
             self.install_until_ca(run=stop_at_official)
         self.assertEqual(self.calls[0], ['git', 'rev-parse', '--verify', '--quiet', self.pin + '^{commit}'])
         # Without the owner marker it must not even query this repository.
         (self.donor / installer.OWNER).unlink()
         self.calls.clear()
-        with self.assertRaises(OfficialClone):
+        self.destination = self.managed / (self.pin[:16] + '-ca1-' + 'e' * 16)
+        self.destination.mkdir(mode=0o700)
+        with self.assertRaises(OfficialFetch):
             self.install_until_ca(run=stop_at_official)
-        self.assertEqual(self.calls[0][:2], ['git', 'clone'])
+        self.assertEqual([argv[1] for argv in self.calls], ['init', 'remote', 'fetch'])
 
     def test_selected_local_clone_failure_never_retries_official_source(self):
         before = self.snapshot(self.donor)
-        def fail_local_clone(argv, *, cwd, env):
+        def fail_local_clone(argv, *, cwd, env, progress=False):
             if argv[:2] == ['git', 'clone']:
                 self.calls.append(argv)
                 self.assertEqual(argv, ['git', 'clone', '--no-checkout', '--no-hardlinks',
@@ -1088,7 +1099,7 @@ class HermesSourceGitTests(unittest.TestCase):
     def test_git_errors_or_resolved_mismatch_stop_without_network_fallback(self):
         for result in ('0' * 40, subprocess.CalledProcessError(128, ['git', 'rev-parse'])):
             self.calls.clear()
-            def failed_probe(argv, *, cwd, env):
+            def failed_probe(argv, *, cwd, env, progress=False):
                 self.calls.append(argv)
                 self.assertEqual(argv[:3], ['git', 'rev-parse', '--verify'])
                 if isinstance(result, Exception):
