@@ -310,6 +310,8 @@ html[data-color-theme=light] .graph-status-flag.question{color:#076c80}
 .mobile #gsvg{touch-action:none}
 .mobile #net.focus .node:not(.hl){opacity:.26}
 .mobile #net.node-dragging :is(#gsvg,.node[role=button]){cursor:grabbing}
+/* Parent lines can sit directly over Mail lines in the shared SVG. */
+.mobile #gsvg .edge-hit[data-kind=spawn],
 .mobile #net.node-dragging .edge-hit{pointer-events:none}
 .mobile .node .portrait-initials{font:500 10px var(--mono);fill:var(--ink);pointer-events:none}
 #net.overview .node text:not([class]),#net.overview .node .annot-pill,#net.overview .node .annot-lab{display:none}
