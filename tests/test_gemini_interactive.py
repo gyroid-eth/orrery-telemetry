@@ -67,7 +67,7 @@ def test_one_workspace_is_trusted_without_changing_global_settings(managed, monk
 
 
 def test_edit_uses_shared_reservation_and_shell_stays_in_the_worktree(managed, monkeypatch):
-    _, cwd, _ = managed
+    runtime, cwd, _ = managed
     calls = []
 
     def hook(argv, **kw):
@@ -78,16 +78,66 @@ def test_edit_uses_shared_reservation_and_shell_stays_in_the_worktree(managed, m
     monkeypatch.setattr(agy.subprocess, "run", hook)
     event = {"conversationId": SID, "toolCall": {"name": "replace_file_content",
                                                  "args": {"TargetFile": "edit.txt"}}}
-    assert agy.guard(event, cwd)["decision"] == "deny"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
     assert [item[0] for item in calls] == [
         "deny-llm-key-read.py", "check-agent-registered.sh", "check-file-reservation.sh"]
     assert calls[-1][1]["tool_input"]["file_path"] == str(cwd / "edit.txt")
     event["toolCall"]["args"]["TargetFile"] = "../not-in-worktree"
-    assert agy.guard(event, cwd)["decision"] == "deny"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
     event["toolCall"] = {"name": "run_command", "args": {"CommandLine": "printf OK"}}
-    assert agy.guard(event, cwd) == {"decision": "allow", "overwrite": {"Cwd": str(cwd)}}
+    assert agy.guard(event, cwd, runtime=runtime) == {"decision": "allow", "overwrite": {"Cwd": str(cwd)}}
     event["toolCall"]["args"]["BypassSandbox"] = True
-    assert agy.guard(event, cwd)["decision"] == "deny"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
+
+
+@pytest.mark.parametrize("shared_inside", [False, True])
+def test_guard_allows_reserved_edits_with_a_shared_agents_symlink(tmp_path, monkeypatch, shared_inside):
+    cwd = tmp_path / "selected"
+    cwd.mkdir()
+    shared = (cwd if shared_inside else tmp_path) / "shared"
+    shared.mkdir()
+    (shared / "hooks.json").write_text("{}")
+    (cwd / ".agents").symlink_to(shared, target_is_directory=True)
+    checked = []
+
+    def hook(argv, **kwargs):
+        if Path(argv[-1]).name == "check-file-reservation.sh":
+            checked.append(json.loads(kwargs["input"])["tool_input"]["file_path"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", hook)
+    event = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": "notes.md"}}}
+    runtime = tmp_path / "runtime"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "allow"
+    event["toolCall"]["args"]["TargetFile"] = ".agents/hooks.json"
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
+    assert checked == [str(cwd / "notes.md")]
+
+
+def test_guard_protects_installation_and_runtime_and_allows_the_managed_worktree(tmp_path, monkeypatch):
+    install = tmp_path / "stack"
+    runtime = tmp_path / "separate runtime"
+    worktrees = install / "workspaces"
+    selected_worktree = worktrees / NAME
+    selected_worktree.mkdir(parents=True)
+    monkeypatch.setenv("AGENTSTACK_HOME", str(install))
+    monkeypatch.setenv("AGENTSTACK_WORKTREE_ROOT", str(worktrees))
+    checked = []
+
+    def hook(argv, **kwargs):
+        checked.append(Path(argv[-1]).name)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", hook)
+    for folder in (runtime / "child-agents" / f"{NAME}.agy-config", install / "hooks"):
+        edit = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": str(folder / "fixture.json")}}}
+        shell = {"toolCall": {"name": "run_command", "args": {"CommandLine": "pwd", "Cwd": str(folder)}}}
+        assert agy.guard(edit, tmp_path, runtime=runtime)["decision"] == "deny"
+        assert agy.guard(shell, tmp_path, runtime=runtime)["decision"] == "deny"
+    assert not checked
+    edit = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": "notes.md"}}}
+    assert agy.guard(edit, selected_worktree, runtime=runtime)["decision"] == "allow"
+    assert checked[-1] == "check-file-reservation.sh"
 
 
 def test_roster_status_is_bound_to_this_tmux_generation(managed, monkeypatch, capsys):
@@ -180,6 +230,57 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
     assert not state_path.with_suffix(".agy-config").exists()
     assert sorted(path.relative_to(cwd).as_posix() for path in cwd.rglob("*")) == [
         ".agents", ".agents/hooks.json"]
+
+
+@pytest.fixture
+def standalone_preflight(tmp_path, monkeypatch):
+    cwd = tmp_path / "selected"
+    cwd.mkdir()
+    runtime = tmp_path / "runtime"
+    source = tmp_path / "owner.token"
+    source.write_text("fixture-credential")
+    source.chmod(0o600)
+    child_resume._atomic_json(Path(str(source) + ".binding.json"), REGISTRATION)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(agy.child_tools, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", PROJECT)
+    config = tmp_path / ".gemini/config/mcp_config.json"
+    config.parent.mkdir(parents=True)
+
+    def prepare():
+        agy.prepare(runtime, NAME, PROJECT, "", source=source, cwd=cwd, binary=sys.executable,
+                    model="gemini-fixture", effort="high", standalone=True)
+
+    return runtime, config, prepare
+
+
+def test_standalone_prepare_rejects_incompatible_mcp_before_creating_state(standalone_preflight):
+    runtime, config, prepare = standalone_preflight
+    config.write_text('{"mcpServers":{"cua-driver":{"command":"/usr/bin/true"}}}')
+    with pytest.raises(ValueError, match="Disable the global Antigravity MCP server 'cua-driver'"):
+        prepare()
+    assert not runtime.exists()
+
+
+def test_standalone_resume_reports_new_incompatible_mcp_before_start(standalone_preflight, monkeypatch):
+    runtime, config, prepare = standalone_preflight
+    prepare()
+    child_resume.mark_retired(runtime, NAME, retention_days=30)
+    config.write_text('{"mcpServers":{"cua-driver":{"command":"/usr/bin/true"}}}')
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "HOOKS_DIR", str(Path(agy.__file__).parent))
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(server, "_resume_registration", lambda *_: REGISTRATION)
+    monkeypatch.setattr(server, "_child_tools_module", lambda: agy.child_tools)
+    monkeypatch.setattr(server, "_mcp_call", lambda *_: pytest.fail("resume touched Mail"))
+    monkeypatch.setattr(server, "_launch_claude_resume_tmux", lambda *_a, **_k: pytest.fail("resume started tmux"))
+    server._gemini_interactive_module.cache_clear()
+    try:
+        result = server._do_resume_gemini(NAME, open_terminal=False)
+        assert result["ok"] is False and result["resume_capability"] == "config_unrestorable"
+        assert "Disable the global Antigravity MCP server 'cua-driver'" in result["error"]
+    finally:
+        server._gemini_interactive_module.cache_clear()
 
 
 def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch):

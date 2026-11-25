@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -1421,6 +1422,89 @@ def _mail_calls(run) -> list[str]:
         return run.mail_log.read_text(encoding="utf-8").split()
     except FileNotFoundError:
         return []
+
+
+@pytest.mark.parametrize("isolation", [False, True])
+def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, isolation):
+    selected = _make_repo(tmp_path) if isolation else tmp_path / "vault"
+    selected.mkdir(exist_ok=True)
+    home = tmp_path / "install"
+    hooks = home / "hooks"
+    hooks.mkdir(parents=True)
+    for filename in ("gemini_interactive.py", "child_resume.py", "child_tools.py", "screen_state.py"):
+        shutil.copy2(ROOT / "hooks" / filename, hooks / filename)
+    (home / "dashboard").mkdir()
+    (home / "dashboard/agy_history.py").write_text(
+        "GROUP='fixture-reader'\nHOOKS=('SessionStart',)\n"
+        "if __name__=='__main__': print('fixture-launch')\n")
+    _executable(hooks / "cleanup-child-agent.sh", "#!/bin/sh\nexit 0\n")
+    for helper in ("agentstack-gemini-child-mail", "agentstack-gemini-stream", "agentstack-gemini-mcp"):
+        _executable(home / "bin" / helper, "#!/bin/sh\nexit 99\n")
+    fake_bin = tmp_path / "commands"
+    _executable(fake_bin / "uname", "#!/bin/sh\nprintf 'Darwin\\n'\n")
+    capture = tmp_path / "launch.json"
+    _executable(fake_bin / "agy", f"#!{sys.executable}\n" + """
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+added = Path(args[args.index("--add-dir") + 1])
+assert (added / ".agents/hooks.json").is_file()
+assert (added / ".agents/mcp_config.json").is_file()
+Path(os.environ["FIXTURE_CAPTURE"]).write_text(json.dumps(
+    {"cwd": os.getcwd(), "args": args, "parent": os.getenv("PARENT_AGENT")}))
+""")
+    _executable(fake_bin / "tmux", f"#!{sys.executable}\n" + """
+import json, os, subprocess, sys
+from pathlib import Path
+args = sys.argv[1:]
+identity = "FixtureAgy|$1|1000|123"
+if args[0] == "display-message":
+    print(identity)
+elif args[0] == "new-session":
+    workdir = args[args.index("-c") + 1]
+    runner = args.index("/bin/bash")
+    assert args[runner-2:runner] == ["-e", "AGENTSTACK_GEMINI_INTERACTIVE=1"]
+    result = subprocess.run(args[runner:], cwd=workdir, env={**os.environ, "TMUX_PANE": "%1"})
+    assert result.returncode == 0
+    status = Path(os.environ["AGENTSTACK_RUNTIME_DIR"]) / "child-agents/FixtureAgy.agy-status.json"
+    status.write_text(json.dumps({"tmux": identity, "activity": "wait"}))
+    status.chmod(0o600)
+else:
+    sys.exit(1)
+""")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    token = tmp_path / "handoff.token"
+    token.write_text("synthetic-token")
+    token.chmod(0o600)
+    binding = pathlib.Path(str(token) + ".binding.json")
+    binding.write_text(json.dumps({"agent_id":72, "agent_name":"FixtureAgy",
+                                   "project_key":"/fixture", "program":"antigravity"}))
+    binding.chmod(0o600)
+    task = tmp_path / "task.txt"
+    task.write_text("One canonical task.")
+    result = _REAL_RUN(
+        ["/bin/bash", str(ADAPTER), "--pre-registered", "FixtureAgy", "--child-token-file", str(token),
+         "--standalone", *(["--worktree"] if isolation else []), "--model", "gemini-fixture",
+         "preview", str(selected)],
+        env={**os.environ, "HOME":str(tmp_path), "PATH":f"{fake_bin}:{os.environ['PATH']}",
+             "PARENT_AGENT":"Unrelated", "AGENTSTACK_HOME":str(home), "AGENTSTACK_HOOKS_DIR":str(hooks),
+             "AGENTSTACK_PYTHON":sys.executable, "AGENTSTACK_RUNTIME_DIR":str(runtime),
+             "AGENTSTACK_WORKTREE_ROOT":str(tmp_path / "worktrees"), "AGENTSTACK_PROJECT_KEY":"/fixture",
+             "AGENTSTACK_GEMINI_TASK_FILE":str(task), "FIXTURE_CAPTURE":str(capture)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(capture.read_text())
+    launched_folder = tmp_path / "worktrees/FixtureAgy" if isolation else selected
+    assert observed["cwd"] == str(launched_folder)
+    assert observed["parent"] is None
+    assert observed["args"][-2] == "-i"
+    assert observed["args"][-1].count("One canonical task.") == 1
+    assert "independent Antigravity agent" in observed["args"][-1]
+    assert not any((directory / ".agents").exists() for directory in (selected, launched_folder))
+    assert not list((runtime / "child-agents").glob("*.agy-config"))
+    assert not token.exists() and not binding.exists() and not task.exists()
 
 
 def test_adapter_rejects_absolute_resource_before_worktree(tmp_path):

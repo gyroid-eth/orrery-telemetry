@@ -19,6 +19,11 @@ if "child_resume" not in globals():
         from . import child_resume
     else:
         import child_resume
+if "child_tools" not in globals():
+    if __package__:
+        from . import child_tools
+    else:
+        import child_tools
 
 
 PROGRAM = "antigravity"
@@ -133,6 +138,7 @@ def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effor
             "binary": os.path.abspath(binary), "python": sys.executable, "model": model, "effort": effort}
     if standalone:
         plan.update(standalone=True, tools=list(tools))
+        validate_standalone_config(plan)
     else:
         hooks = _configured_hooks(plan["python"])
     generation = uuid.uuid4().hex
@@ -153,14 +159,17 @@ def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effor
         raise
 
 
+def _standalone_selection(plan):
+    return child_tools.normalize(tools=child_tools.parse_cli(plan["tools"]))
+
+
+def validate_standalone_config(plan):
+    child_tools.agy_validate_selection(_standalone_selection(plan))
+
+
 def _configure_standalone(directory, runtime, name, project, plan):
-    if __package__:
-        from . import child_tools
-    else:
-        import child_tools
-    tools = child_tools.normalize(tools=child_tools.parse_cli(plan["tools"]))
     mcp = child_tools.agy_config(
-        str(_home() / "bin" / "agentstack-gemini-mcp"), tools, runtime=str(runtime),
+        str(_home() / "bin" / "agentstack-gemini-mcp"), _standalone_selection(plan), runtime=str(runtime),
         project=project, child=name,
         mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
     )
@@ -299,23 +308,36 @@ def status(runtime, name, payload):
     print(" · ".join(details))
 
 
-def guard(event, cwd):
+def _workspace_protected_roots(cwd, runtime):
+    install = Path(os.environ.get("AGENTSTACK_HOME") or _home()).resolve()
+    worktrees = Path(os.environ.get("AGENTSTACK_WORKTREE_ROOT") or install / "worktrees").resolve()
+    # An explicitly selected managed worktree can live under the installation.
+    if cwd != worktrees and cwd.is_relative_to(worktrees) and not install.is_relative_to(worktrees):
+        return (runtime.resolve(),)
+    return runtime.resolve(), install
+
+
+def guard(event, cwd, *, runtime):
     tool = event["toolCall"]
     name, args = tool["name"], tool["args"]
     inputs = {}
     overwrite = None
+    protected = _workspace_protected_roots(cwd, runtime)
     if name in WRITE_TOOLS:
         target = Path(args["TargetFile"])
         target = (cwd / target).resolve()
         if (args.get("IsArtifact") or not target.is_relative_to(cwd)
+                or any(target.is_relative_to(root) for root in protected)
                 or any(part.casefold() == ".git" for part in target.relative_to(cwd).parts)
-                or target in {_guard_config(cwd), cwd / ".agents" / "mcp_config.json"}):
+                or target in {(cwd / ".agents" / filename).resolve()
+                              for filename in ("hooks.json", "mcp_config.json")}):
             return {"decision": "deny", "reason": "Edit files only in the child worktree"}
         inputs["file_path"] = str(target)
         mode = WRITE_TOOLS[name]
     elif name == "run_command":
         workdir = (cwd / Path(args.get("Cwd") or cwd)).resolve()
-        if args.get("BypassSandbox") or not workdir.is_relative_to(cwd):
+        if (args.get("BypassSandbox") or not workdir.is_relative_to(cwd)
+                or any(workdir.is_relative_to(root) for root in protected)):
             return {"decision": "deny", "reason": "Use a sandboxed command inside the child worktree"}
         inputs["command"] = args["CommandLine"]
         cwd = workdir
@@ -381,7 +403,7 @@ def main():
             child_resume._validate_identity(state, agent_name=name, program=PROGRAM,
                                             project_key=os.environ["AGENTSTACK_PROJECT_KEY"])
             decision = guard(json.loads(sys.stdin.buffer.read(1024 * 1024)),
-                             Path(state["gemini_launch"]["cwd"]))
+                             Path(state["gemini_launch"]["cwd"]), runtime=runtime)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError):
             decision = {"decision": "deny", "reason": "ORRERY could not check the child worktree"}
         print(json.dumps(decision))
@@ -391,5 +413,7 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except child_tools.ToolsError as error:
+        sys.exit(f"Error: {error}")
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         sys.exit(f"Antigravity child: {error}")

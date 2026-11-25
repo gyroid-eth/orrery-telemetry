@@ -830,7 +830,7 @@ request:
 | `web_search` | no | native の dsh / Hermes だけ。`exa` または `searxng` で今回の検索先を上書きする。URL・資格の参照は managed spawn manifest の共通 `web_search` を使う。省略時は共通設定、共通設定も無ければ従来どおり。既存 API 世代の任意 field |
 | `model` | DeepSeek / Local 必須 | 正式 ID。DeepSeek / Local は選択した provider と harness の有効な catalog entry と一致必須。Claude / Codex は既存の省略時の既定を維持 |
 | `url_index`, `url_key` | 動的Local必須 | 選択model行の両値をそのまま送る。indexは0以上の整数、keyは設定URLと束縛。URL変更・並べ替えは拒否し、再取得・再選択が必要。固定model・他providerには指定不可 |
-| `effort` | Antigravity 必須 | Claude / Codex は `model_efforts` / `model_effort_defaults`、DeepSeek / Local は選択した model × harness の能力で検証。Antigravity では `low`、`medium`、`high` から明示する |
+| `effort` | Antigravity のみ必須 | 明示時だけ送る。Claude / Codex は `model_efforts` / `model_effort_defaults`、DeepSeek / Local は選択した model × harness の能力で検証。未指定は CLI 設定を使用し、能力不明の値は推測しない。Antigravity は `low`、`medium`、`high` から明示する |
 | `role` | no | 最大40文字 |
 | `group` | no | 最大24文字 |
 | `worktree` | no | isolated worktree |
