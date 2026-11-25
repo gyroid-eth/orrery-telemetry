@@ -1,0 +1,209 @@
+{
+  "source": "Native macOS TUI capture-pane excerpts. Startup and selection screens came from isolated HOME and named tmux sockets or were supplied by the parent agent. ANSI, padding, and workspace paths removed.",
+  "cases": [
+    {
+      "id": "claude-folder-trust",
+      "program": "claude",
+      "version": "2.1.332",
+      "kind": "trust",
+      "active": " Accessing workspace:\n\n /fixture/workspace\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open\n source project, or work from your team). If not, take a moment to review what's in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel\n"
+    },
+    {
+      "id": "claude-login",
+      "program": "claude",
+      "version": "2.1.332",
+      "kind": "login",
+      "active": "  Login\n\n  Claude Code can be used with your Claude subscription or billed based on API usage through your Console\n  account.\n\n  Select login method:\n\n  ❯ 1. Claude account with subscription · Individual, Team, or Enterprise\n    2. Anthropic Console account · API usage billing\n    3. 3rd-party platform · Bedrock, Microsoft Foundry, Google Vertex AI\n\n  Esc to cancel\n"
+    },
+    {
+      "id": "claude-model",
+      "program": "claude",
+      "version": "2.1.332",
+      "kind": "other",
+      "active": "  Select model\n  Your pick is the default for new sessions. For other models, use --model.\n\n    1. Default (recommended)  Use the default model (currently Opus 5.5) · $4/$20 per Mtok\n    2. Opus                   Opus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok\n    3. Fable                  Fable 5.2 · Most capable for your hardest and longest-running tasks · $8/$40\n                              per Mtok\n    4. Sonnet                 Sonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok\n    5. Haiku                  Haiku 5.5 · Fastest for quick answers · $0.10/$0.50 per Mtok ($0.50/$2.50 for\n                              prompts over 100k)\n  ❯ 6. Sonnet 4.6 ✔           Newer version available · select Sonnet for Sonnet 5.5\n\n  ● High effort (default) ←/→ to adjust\n\n  s to use this session only · Enter to save · Esc to cancel\n"
+    },
+    {
+      "id": "codex-trust",
+      "program": "codex",
+      "version": "0.167.2",
+      "kind": "trust",
+      "active": "  Folder access\n  /fixture/workspace\n\n  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder\n  settings can run code automatically, even without a model request. Continue only if you trust these files.\n  Your trust decision will be saved.\n\n› 1. Trust and continue\n  2. Back to Agent Command Center\n\n  enter continue · esc back\n"
+    },
+    {
+      "id": "codex-update",
+      "program": "codex",
+      "version": "0.167.2",
+      "kind": "other",
+      "active": "  Update available · 0.167.2 → 0.172.0\n  Release notes: https://github.com/openai/codex/releases/latest\n\n› 1. Update now (runs `npm install -g @openai/codex`)\n  2. Skip\n  3. Skip until next version\n\n  enter continue · esc skip\n"
+    },
+    {
+      "id": "codex-open-restricted",
+      "program": "codex",
+      "version": "0.167.2",
+      "kind": "trust",
+      "active": "  Folder access\n  /fixture/workspace\n\n  Config, hooks, and exec policies from untrusted folders stay disabled. Trusted project folders can still\n  contribute settings. Skills still load, and tools follow your permission settings. Opening will not change\n  saved trust.\n\n› 1. Open restricted\n  2. Back to Agent Command Center\n\n  enter continue · esc back\n"
+    },
+    {
+      "id": "codex-login",
+      "program": "codex",
+      "version": "0.167.2",
+      "kind": "login",
+      "active": "  Welcome to Codex, OpenAI's command-line coding agent\n\n  Choose how you want to use Codex.\n\n> 1. Sign in with ChatGPT\n     Usage included with Plus, Pro, Business, and Enterprise plans\n\n  2. Sign in with Device Code\n     Sign in from another device with a one-time code\n\n  3. Sign in another way\n     Use an API key or another provider\n\n  Press enter to continue\n"
+    },
+    {
+      "id": "dsh-onboarding-credentials",
+      "program": "dsh",
+      "version": "0.16.1",
+      "kind": "login",
+      "active": "  Welcome to dsh-TUI  Step 1 of 4\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n   ❯ API key and connectivity · Language and theme · Model and workspace · Shortcuts and commands\n\n    Confirm DEEPSEEK_API_KEY is in place and actually reach the API.\n\n    ✗ No DEEPSEEK_API_KEY yet\n\n      Looks like sk-… (presence only — the value is never printed)\n      Set an environment variable and restart:\n        DEEPSEEK_API_KEY=sk-…      (PowerShell: $env:DEEPSEEK_API_KEY=\"sk-…\")\n      Or put it in the dsh config:\n        ~/.deepseek/config.json  { \"apiKey\": \"sk-…\" }\n\n    ✗ No usable credential, so the check cannot start\n\n    ❯ Check again\n\n\n\n\n\n\n\n\n\n\n\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n    ←/→ step · Enter act on this step / go next · Esc skip the guide\n"
+    },
+    {
+      "id": "dsh-welcome-model",
+      "program": "dsh",
+      "version": "0.16.1",
+      "kind": "other",
+      "active": "                     Model\n                     Tab / Shift+Tab providers · ↑/↓ model · Enter select · Esc cancel\n\n                      Recently used   DeepSeek\n\n                     ❯ deepseek-official / deepseek-v4.1-flash ✓\n\n                     Reasoning effort  ←/→ adjust\n                      Off   Low   High   Max\n                     The default balance for most tasks.\n                   ╭──────────────────────────────────────────────────────────────────────╮\n                   │ ❯ Say something, or type / for commands…                             │\n                   ╰──────────────────────────────────────────────────────────────────────╯\n                     deepseek-v4.1-flash  ·  standard  ·  Workspace read/write\n\n\n\n\n  /fixture/workspace                       dsh-tui v0.16.1\n                                                                                ▸ DSH · dsh-core v0.2.1-rc.2\n                                                                   Claude · Not installed · Enter to install\n                                                                                  Codex · codex-cli v0.167.2\n"
+    },
+    {
+      "id": "hermes-metrics-consent",
+      "program": "hermes",
+      "version": "0.22.2",
+      "kind": "consent",
+      "active": "Help improve Hermes?\nShared metrics are bounded counters: activity, outcomes, error classes (with a\nfixed-list reason when a memory write, compression, update or install fails),\nmodel routes, token totals, feature use and coarse machine facts. A failed or\nfinished fresh install is noted on this machine and counted only if you opt in.\nNever prompts, files, paths,\nsetting values or error text. Collection stays on this machine; sending to Nous is\na separate choice, and apart from that install note, data from before you opt in\nis never sent.\nDetails: https://hermes-agent.nousresearch.com/docs/developer-guide/relay-shared-metrics\nChange it any time: hermes setup telemetry\n  ↑↓ navigate  ENTER/SPACE select  ESC cancel\n\n   (○) Collect and send to Nous\n   (○) Collect locally only\n → (●) No thanks\n"
+    },
+    {
+      "id": "hermes-setup",
+      "program": "hermes",
+      "version": "0.22.2",
+      "kind": "login",
+      "active": "It looks like Hermes isn't configured yet -- no API keys or providers found.\n\n  Run:  hermes setup\n\nRun setup now? [Y/n]\n"
+    },
+    {
+      "id": "hermes-provider-picker",
+      "program": "hermes",
+      "version": "0.22.2",
+      "kind": "other",
+      "active": "╭─ cli.tui.picker_title_provider ──────────────────────────────────╮\n│                                                                  │\n│ cli.tui.picker_current_hint                                      │\n│                                                                  │\n│ ❯ cli.tui.picker_provider_row_onecli.tui.picker_current_marker   │\n│   cli.tui.picker_provider_row_one                                │\n│   cli.shared.cancel                                              │\n│                                                                  │\n╰──────────────────────────────────────────────────────────────────╯\n\n\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n"
+    },
+    {
+      "id": "agy-login",
+      "program": "agy",
+      "version": "1.5.16",
+      "kind": "login",
+      "active": " Welcome to the Antigravity CLI. You are currently not signed in.\n\n Select login method:\n > 1. Google OAuth\n   2. Use a Google Cloud project\n\n   ↑/↓ Navigate · enter Select\n"
+    },
+    {
+      "id": "codex-model",
+      "program": "codex",
+      "version": "0.167.2",
+      "kind": "other",
+      "active": "  Select Model and Effort\n\n\n› 1. GPT-6.1-Sol    Latest workhorse model for coding and everyday work.\n  2. GPT-6-Astra    Frontier intelligence for the most demanding work.\n  3. GPT-6-Sol      Previous generation workhorse model.\n  4. GPT-6-Luna     Fast and affordable model for easier tasks.\n  5. GPT-5.6-Sol    Older generation workhorse model.\n  6. GPT-6.1 Terra  GPT-6.1 Terra Codex model.\n  7. GPT-5.6-Terra  Older balanced model for straightforward work.\n  8. GPT-5.6-Luna   Older fast and efficient model.\n↓\n  enter select · esc back\n"
+    },
+    {
+      "id": "dsh-chat-model",
+      "program": "dsh",
+      "version": "0.16.1",
+      "kind": "other",
+      "active": "    Model\n    Tab / Shift+Tab providers · ↑/↓ model · Enter select · Esc cancel                                       a…\n                                                                                                            t…\n     Recently used   DeepSeek\n\n    ❯ deepseek-official / deepseek-v4.1-flash ✓\n\n    Reasoning effort  ←/→ adjust\n     Off   Low   High   Max\n    The default balance for most tasks.\n\n  ╭────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n  ⌸ ❯                                                                                                      ⛶\n  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n                                                                                               24/131k 0.0%\n   deepseek-v4.1-flash · high · cache 0.0% · ≈ unpriced 11 tok · work                    ctx 0.0% (24/131k)\n"
+    },
+    {
+      "id": "agy-mcp-approval",
+      "program": "agy",
+      "version": "1.5.16",
+      "kind": "approval",
+      "active": "MCP\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n\norrery-mail/whois\n\nAllow calling this tool?\n> 1. Yes, allow tool call\n  2. Yes, and always allow tool 'orrery-mail/whois' in this conversation\n  3. Yes, and always allow tool 'orrery-mail/whois' (Persist to settings.json)\n  4. No, deny tool call\n  5. No, and always deny tool 'orrery-mail/whois' in this conversation\n  6. No, and always deny tool 'orrery-mail/whois' (Persist to settings.json)\n\n  ↑/↓ Navigate · tab Amend\nauto · Gemini 3.8 Flash (Low) · low\n"
+    }
+  ],
+  "negative": [
+    {
+      "id": "claude-idle",
+      "program": "claude",
+      "active": "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  ⏸ manual mode on · ? for shortcuts · ← for agents\n",
+      "source": "native"
+    },
+    {
+      "id": "codex-idle",
+      "program": "codex",
+      "active": "› Ask Codex to do anything\n\n  GPT-5.4 medium · /fixture/workspace · ← for agents\n",
+      "source": "native"
+    },
+    {
+      "id": "dsh-idle",
+      "program": "dsh",
+      "active": "     instead of working around it\n     ctrl+t for the full trajectory\n\n  ● Cancelled fixture r\n\n  ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n  ⌸ ❯                                                                                                              ⛶\n  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n                                                                                                       25/131k 0.0%\n   deepseek-v4.1-flash · high · cache 0.0% · ≈ unpriced 24 tok · work                            ctx 0.0% (25/131k)\n",
+      "source": "native"
+    },
+    {
+      "id": "hermes-idle",
+      "program": "hermes",
+      "active": "⚠ Approval: chmod 777 ./nonexistent-fixture → denied\n  ┊ 💻 $         chmod 777 ./nonexistent-fixture  1.2s [You denied this command — it did not run.]\n ☤ gpt-4o │ ~181/128K │ [░░░░░░░░░░] ~0% │ ◷ 0.3s │ ↑ 8 t/s │ 4s │ ⏲ 2s │ ✓ 0s         ─ Open the synthetic fixtur...\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ Explain this error and how to fix it\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n",
+      "source": "native"
+    },
+    {
+      "id": "agy-idle",
+      "program": "agy",
+      "active": "● Ran (/usr/bin/printf ORRERY_FIXTURE) (ctrl+o to expand)\n\n  ⎿  Interrupted · What should Antigravity CLI do instead?\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n>\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n? for shortcuts                                                                             auto · Gemini 4 Neon · low\n",
+      "source": "native"
+    },
+    {
+      "id": "agy-draft",
+      "program": "agy",
+      "active": "● Ran (/usr/bin/printf ORRERY_FIXTURE) (ctrl+o to expand)\n\n  ⎿  Interrupted · What should Antigravity CLI do instead?\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n> an unsubmitted fixture draft\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n? for shortcuts                                                                             auto · Gemini 4 Neon · low\n",
+      "source": "simulated"
+    },
+    {
+      "id": "agy-work",
+      "program": "agy",
+      "active": "● Ran (/usr/bin/printf ORRERY_FIXTURE) (ctrl+o to expand)\n\n  ⎿  Interrupted · What should Antigravity CLI do instead?\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n>\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\nesc to interrupt                                                                             auto · Gemini 4 Neon · low\n",
+      "source": "simulated"
+    },
+    {
+      "id": "claude-draft",
+      "program": "claude",
+      "active": "──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ an unsubmitted fixture draft\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  Fixture status | Sonnet | ctx: 22% used\n  ⏵⏵ auto mode on (shift+tab to cycle)\n",
+      "source": "native"
+    },
+    {
+      "id": "codex-draft",
+      "program": "codex",
+      "active": "  >_ OpenAI Codex (v0.167.2)\n     /fixture/workspace\n\n  Tip: Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost.\n\n\n› an unsubmitted fixture draft\n\n  gpt-5.4 default · /fixture/workspace  ⚠ 1 warning · f2 to view\n",
+      "source": "native"
+    },
+    {
+      "id": "dsh-draft",
+      "program": "dsh",
+      "active": "                   ╭──────────────────────────────────────────────────────────────────────╮\n                   │ ❯ an unsubmitted fixture draft                                       │\n                   ╰──────────────────────────────────────────────────────────────────────╯\n                     deepseek-v4.1-flash  ·  standard  ·  Workspace read/write\n\n\n\n\n  /fixture/workspace                       dsh-tui v0.16.1\n                                                                                ▸ DSH · dsh-core v0.2.1-rc.2\n                                                                   Claude · Not installed · Enter to install\n                                                                                  Codex · codex-cli v0.167.2\n",
+      "source": "native"
+    },
+    {
+      "id": "hermes-draft",
+      "program": "hermes",
+      "active": "│  gpt-4o · Nous Research                                                                                    │\n│  /fixture/workspace                                                    │\n│  Session: fixture-session                                                                           │\n╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\nWelcome to Hermes Agent! Type your message or /help for commands.\ncli.tip_line\n\n ☤ gpt-4o │ cli.status_bar.ctx_unknown │ [░░░░░░░░░░] -- │ 4s │ ⏲ 0s\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ an unsubmitted fixture draft\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n",
+      "source": "native"
+    },
+    {
+      "id": "codex-work",
+      "program": "codex",
+      "active": "  Tip: Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost.\n\n\n› fixture interaction\n\n\n• Working (0s • esc to interrupt)\n\n\n› Ask Codex to do anything\n\n  gpt-5.4 default · /fixture/workspace  ⚠ 2 warnings · f2 to view\n",
+      "source": "native"
+    },
+    {
+      "id": "dsh-work",
+      "program": "dsh",
+      "active": "  ╭──────────────────────────────────────────────────────────────────────────╮\n  ⌸ ❯                                                                        ⛶\n  ╰──────────────────────────────────────────────────────────────────────────╯\n                                                                29k/1.0M 2.9%\n   deepseek-… · h… · cache 9… ·≈¥0.04 … · accept-dsh-20…  ctx 2.9% (29k/1.0m)\n   esc to interrupt\n",
+      "source": "native"
+    },
+    {
+      "id": "hermes-work",
+      "program": "hermes",
+      "active": " ☤ deepseek-flash │ ~32.2K/1M │ [░░░░░░░░░░] ~3% │ .. ─ Fetch canonical task...\n────────────────────────────────────────────────────────────────────────────────\n☤ ❯ cli.tui.placeholder_busy\n────────────────────────────────────────────────────────────────────────────────\n",
+      "source": "native"
+    },
+    {
+      "id": "claude-work",
+      "program": "claude",
+      "active": "✻ Contemplating…\n                                                                                            ● high · /effort\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  Fixture status | Sonnet | ctx: 22% used\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents\n",
+      "source": "native"
+    }
+  ]
+}
