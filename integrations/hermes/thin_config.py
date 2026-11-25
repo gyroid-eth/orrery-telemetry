@@ -343,6 +343,13 @@ def generate(document):
         raise ValueError('invalid_input')
     if document.get('worktree') and Path(document['worktree']).resolve() != cwd:
         raise ValueError('invalid_input')
+    # The personal skills a Claude child reads (see harness_child.personal_skill_roots).
+    personal_skills = document.get('skill_roots', [])
+    if (not isinstance(personal_skills, list)
+            or any(not isinstance(root, str) or not Path(root).is_absolute() or not Path(root).is_dir()
+                   for root in personal_skills)):
+        raise ValueError('invalid_skill_roots')
+    personal_names = {source.parent.name for root in personal_skills for source in Path(root).glob('*/SKILL.md')}
     servers = read(document['mcp_config'])['mcpServers']
     if not isinstance(servers, dict):
         raise ValueError('unsupported_mcp_selection')
@@ -410,7 +417,14 @@ def generate(document):
                 _link(target / name, product / 'integrations/hermes/telegram' / name)
         skills = Path(document.get('skills_root') or product / 'skills').resolve()
         for source in skills.glob('*/SKILL.md'):
-            _link(profile / 'skills' / source.parent.name, source.parent)
+            target = profile / 'skills' / source.parent.name
+            if source.parent.name in personal_names:
+                # Profile skills outrank skills.external_dirs. Like the
+                # installer for Claude, the same-named personal skill wins.
+                if target.is_symlink() and target.resolve() == source.parent.resolve():
+                    target.unlink()
+                continue
+            _link(target, source.parent)
         auxiliary = existing.get('auxiliary')
         auxiliary = auxiliary if isinstance(auxiliary, dict) else {}
         tasks = list(dict.fromkeys([*_auxiliary_tasks(Path(facts['source'])),
@@ -483,6 +497,8 @@ def generate(document):
         spec.loader.exec_module(defaults)
         defaults.settle_unanswered(profile, state)
         defaults.project_mcp(profile, raw_mcp)
+        # Native skill discovery reads skills.external_dirs from raw config only.
+        defaults.project_skill_dirs(profile, state, personal_skills)
         if search:
             # native の dotenv 入口は secrets だけ raw config から読む。
             # 非秘密の helper 参照をここにも写す（overlay のみでは起動時に読まれない）。

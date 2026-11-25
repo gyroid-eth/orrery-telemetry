@@ -427,6 +427,37 @@ class ThinConfig(unittest.TestCase):
             self.generate()
         self.assertEqual((path / 'SKILL.md').read_text(), 'user skill')
 
+    def test_personal_skills_are_external_dirs_and_win_over_product_links(self):
+        personal, moved = self.base / 'claude-config/skills', self.base / 'claude-moved/skills'
+        for root in (personal, moved):
+            (root / 'delegate').mkdir(parents=True)
+            (root / 'delegate/SKILL.md').write_text('---\nname: delegate\ndescription: personal\n---\n')
+        product = (ROOT / 'skills/delegate').resolve()
+        for platform in ('darwin', 'linux'):
+            with self.subTest(platform=platform), patch.object(sys, 'platform', platform):
+                child = {'agent_name': 'Fixture' + platform.title(), 'state_dir': str(self.base / platform)}
+                home = config.child_home({**self.document, **child})
+                raw = lambda: config.read(home / 'config.yaml')
+                skills = lambda: raw().get('skills', {}).get('external_dirs')
+                # Without personal skills the profile is unchanged.
+                self.generate(**child, skill_roots=[])
+                self.assertEqual((home / 'skills/delegate').resolve(), product)
+                self.assertNotIn('skills', raw())
+                with (home / 'config.yaml').open('a', encoding='utf-8') as handle:
+                    handle.write('skills:\n  external_dirs:\n  - /fixture/own-skills\n')
+                self.generate(**child, skill_roots=[str(personal)])
+                self.assertFalse((home / 'skills/delegate').is_symlink())
+                self.assertTrue((home / 'skills/log').is_symlink())
+                self.assertEqual(skills(), [str(personal), '/fixture/own-skills'])
+                # Only the root a previous launch added is replaced.
+                self.generate(**child, skill_roots=[str(moved)])
+                self.assertEqual(skills(), [str(moved), '/fixture/own-skills'])
+                self.generate(**child, skill_roots=[])
+                self.assertEqual(skills(), ['/fixture/own-skills'])
+                self.assertEqual((home / 'skills/delegate').resolve(), product)
+                with self.assertRaisesRegex(ValueError, '^invalid_skill_roots$'):
+                    self.generate(**child, skill_roots=['relative/skills'])
+
     def test_native_personality_kept_with_shared_instructions(self):
         (self.source / 'hermes_cli/personality.py').write_text("BUILTIN_PERSONALITIES: dict = {'concise': 'Be concise'}\n")
         self.save(self.profile / 'config.yaml', {'display': {'personality': 'concise'}})

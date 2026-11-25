@@ -18,7 +18,7 @@ install の opt-in は従来どおり `--enable-dsh`。同じ固定版でも新�
 
 `helper_model` は省略/`same` または同じ backend の正式 ID。候補は manifest の `models`（省略時は `model` 一件）で、別資格の route は推測しません。明示の helper は native subagent の agentOptions に投影し、fork は親継承の既定を保ちます。`effort` は明示した場合だけ設定します。
 
-native session 作成イベントから本人の `harness_state_dir/native-session.json` に ID を保存します。subagent の ID で上書きせず、保存失敗で起動は止めません。再開は `resume_session_id` を native `--resume` へ渡し、その子の profile/履歴を再利用します。MRU で本人の ID を推測しません。指示は共有 renderer の出力を読み、skill は共通の元へ link します。
+native session 作成イベントから本人の `harness_state_dir/native-session.json` に ID を保存します。subagent の ID で上書きせず、保存失敗で起動は止めません。再開は `resume_session_id` を native `--resume` へ渡し、その子の profile/履歴を再利用します。MRU で本人の ID を推測しません。指示は共有 renderer の出力を読み、skill は共通の元へ link します。Claude の子と同じ利用者の skill（`$CLAUDE_CONFIG_DIR/skills`、未設定なら `~/.claude/skills`）があれば `customSkillDirs` に渡し、同じ名前の製品 skill より先に見せます。
 
 legacy の会話記録用 receipt は native の保存先と inode を照合して発行します。TUI は最初の作業まで保存を遅らせるため、作成時に記録がまだ無ければ session の flush と turn 終了でも再試行します。同じ session の再試行は直列に処理し、発行済み receipt の inode と時刻は固定します。別の root、古い launch、lock・conflict の検査は再試行にも適用します。
 

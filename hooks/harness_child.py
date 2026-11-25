@@ -214,12 +214,26 @@ def fresh_instructions(state_dir, root):
     return target
 
 
+def personal_skill_roots():
+    """The personal skills directory a Claude child reads, when it exists.
+
+    Claude resolves $CLAUDE_CONFIG_DIR/skills, or ~/.claude/skills when that
+    variable is unset. The installer links product skills there only under
+    names the user does not already own, so a same-named personal skill wins.
+    """
+    configured = os.environ.get('CLAUDE_CONFIG_DIR', '').strip()
+    skills = (Path(configured).expanduser() if configured else Path.home() / '.claude') / 'skills'
+    return [str(skills)] if skills.is_absolute() and skills.is_dir() else []
+
+
 def generate_plan(document, runner):
     """One generator path for initial launch and exact-ID resume."""
     state_dir = Path(document['state_dir'])
     # Re-evaluate against authenticated Mail, never the previous merged output.
     # Keep the source in saved input for dynamic prelaunch regeneration as well.
     document.setdefault('mcp_base_config', document['mcp_config'])
+    # Re-read at every launch and resume, like the Claude CLI does.
+    document['skill_roots'] = personal_skill_roots()
     managed_screen = None
     if 'project_key' in document:
         generation = document.setdefault('screen_generation', uuid.uuid4().hex)

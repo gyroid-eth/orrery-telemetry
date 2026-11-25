@@ -88,6 +88,26 @@ class ThinTests(unittest.TestCase):
         self.assertEqual(linked.resolve(), source.resolve())
         self.assertEqual((linked / 'SKILL.md').read_bytes(), content)
 
+    def test_personal_skills_are_a_custom_root_ahead_of_product_links(self):
+        product = self.product / 'skills/log'
+        product.mkdir(parents=True)
+        (product / 'SKILL.md').write_text('---\nname: log\ndescription: product\n---\n')
+        personal = self.root / 'claude-config/skills'
+        (personal / 'log').mkdir(parents=True)
+        (personal / 'log/SKILL.md').write_text('---\nname: log\ndescription: personal\n---\n')
+        for platform in ('darwin', 'linux'):
+            with self.subTest(platform=platform), patch.object(sys, 'platform', platform):
+                plan = thin.generate({**self.doc, 'skill_roots': [str(personal)]})
+                # Native skill-filesystem ranks custom roots (300) ahead of
+                # <DSH_HOME>/skills (400), where the product copy stays linked.
+                self.assertIn({'id': 'skill-filesystem', 'config': {'customSkillDirs': [str(personal)]}},
+                              self.rows(plan))
+                self.assertEqual((Path(plan['env']['DSH_HOME']) / 'skills/log').resolve(), product.resolve())
+                unchanged = thin.generate({**self.doc, 'skill_roots': []})
+                self.assertFalse(any(row.get('id') == 'skill-filesystem' for row in self.rows(unchanged)))
+                with self.assertRaisesRegex(ValueError, '^missing_file$'):
+                    thin.generate({**self.doc, 'skill_roots': [str(self.root / 'absent')]})
+
     def test_native_plan_omits_trial_policy_preserves_proxy_and_instructions(self):
         with patch('subprocess.run', side_effect=AssertionError('subprocess forbidden')):
             plan = thin.generate(self.doc)

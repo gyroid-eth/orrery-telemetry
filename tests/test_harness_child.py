@@ -95,6 +95,52 @@ def test_regeneration_replaces_previous_browser_selection(tmp_path, monkeypatch,
     assert child.read(mail) == original_mail
 
 
+@pytest.mark.parametrize('platform', ['darwin', 'linux'])
+def test_personal_skill_roots_follow_claude_resolution(tmp_path, monkeypatch, platform):
+    monkeypatch.setattr(sys, 'platform', platform)
+    home = tmp_path / 'home'
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.delenv('CLAUDE_CONFIG_DIR', raising=False)
+    # Without a personal skills directory, nothing is added.
+    assert child.personal_skill_roots() == []
+    (home / '.claude/skills/log').mkdir(parents=True)
+    assert child.personal_skill_roots() == [str(home / '.claude/skills')]
+    # An explicit Claude profile replaces the default, as for the Claude CLI.
+    configured = tmp_path / 'claude-profile'
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(configured))
+    assert child.personal_skill_roots() == []
+    (configured / 'skills').mkdir(parents=True)
+    assert child.personal_skill_roots() == [str(configured / 'skills')]
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', '')
+    assert child.personal_skill_roots() == [str(home / '.claude/skills')]
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', 'relative-profile')
+    assert child.personal_skill_roots() == []
+
+
+@pytest.mark.parametrize('program', ['dsh', 'hermes'])
+def test_generation_reads_personal_skills_at_each_launch(tmp_path, monkeypatch, program):
+    mail = tmp_path / 'mail.json'
+    private(mail, {'mcpServers': {'orrery-mail': {'command': '/fixture/proxy'}}})
+    generator = tmp_path / 'generator.py'
+    generator.write_text('import argparse,json\n'
+        'p=argparse.ArgumentParser();p.add_argument("--input");p.add_argument("--out");'
+        'a=p.parse_args();d=json.load(open(a.input));'
+        'json.dump({"argv":["/bin/true"],"env":{},"cwd":d["cwd"]},open(a.out,"w"))\n')
+    monkeypatch.setattr(child, 'config_generator', lambda *args: generator)
+    skills = tmp_path / 'claude-config/skills'
+    (skills / 'log').mkdir(parents=True)
+    document = dict(state_dir=str(tmp_path), cwd=str(tmp_path), program=program,
+                    mcp_config=str(mail), tools={'base': 'default', 'tools': {}})
+    child.generate_plan(document, {'python': sys.executable})
+    assert child.read(tmp_path / 'input.json')['skill_roots'] == [str(skills)]
+    # A resume regenerates from saved input and follows the current directory.
+    (skills / 'log').rmdir()
+    skills.rmdir()
+    document = child.read(tmp_path / 'input.json')
+    child.generate_plan(document, {'python': sys.executable})
+    assert child.read(tmp_path / 'input.json')['skill_roots'] == []
+
+
 @pytest.mark.parametrize('program', ['dsh','hermes'])
 @pytest.mark.parametrize('helper', [None,'same','alternate'])
 def test_native_generation_keeps_identity_prompt_and_shared_instructions(tmp_path, program, helper, monkeypatch):
