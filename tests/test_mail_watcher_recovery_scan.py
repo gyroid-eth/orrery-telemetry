@@ -16,9 +16,11 @@ real fswatch on Linux only.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import pathlib
 import re
+import runpy
 import shlex
 import shutil
 import signal
@@ -306,6 +308,11 @@ case "$1" in
     capture-pane) echo 'Claude Code' ;;
     display-message)
         if [[ -f observation-lost ]]; then exit 1; fi
+        if [[ -f stop-before-enter && -f "${AGENTSTACK_NOTIFY_RECEIPT:-}" ]] &&
+           grep -q '"phase": "enter_pending"' "$AGENTSTACK_NOTIFY_RECEIPT"; then
+            touch stopped-before-enter
+            exit 1
+        fi
         draft=$(cat draft 2>/dev/null || true)
         printf '%s\t300\t%%1\t400\t1\t0\t%s\t1\tclaude\n' "$FAKE_TMUX_SOCKET" "$((2 + ${#draft}))"
         printf '────────\n❯ %s\n────────\n' "$draft"
@@ -345,7 +352,7 @@ esac
     return scan, signal_path, payload
 
 
-def test_restart_resumes_visible_notification_and_reports_repeated_waits(tmp_path, legacy_notification):
+def test_watcher_holds_matching_drafts_and_reports_repeated_waits(tmp_path, legacy_notification):
     scan, signal_path, _ = legacy_notification
     draft = tmp_path / 'draft'
     draft.write_text('A draft still being edited')
@@ -361,9 +368,14 @@ def test_restart_resumes_visible_notification_and_reports_repeated_waits(tmp_pat
     assert 'Waiting: agent=ProbeAgent message=42 attempts=5 reason=input_not_found' in output
     (tmp_path / 'observation-lost').unlink()
     draft.write_text('ORRERY Mail notification: message from Sender [normal]: fixture. Please call fetch_inbox to read it.')
+    output, state = scan()
+    assert state['wait_reason'] == 'editor_not_empty'
+    assert signal_path.exists() and draft.exists()
+    assert not (tmp_path / 'calls').exists()
+    draft.unlink()
     _, state = scan()
     assert state['last_result'] == 'success'
-    assert (tmp_path / 'calls').read_text().splitlines() == ['enter']
+    assert (tmp_path / 'calls').read_text().splitlines() == ['load', 'paste', 'enter']
     assert not signal_path.exists()
     # The per-message filename preserves the ID even without body metadata.
     signal_path.parent.mkdir()
@@ -371,23 +383,83 @@ def test_restart_resumes_visible_notification_and_reports_repeated_waits(tmp_pat
     output, state = scan()
     assert state['last_result'] == 'success'
     assert 'Signal:' not in output and not signal_path.exists()
-    assert (tmp_path / 'calls').read_text().splitlines() == ['enter']
+    assert (tmp_path / 'calls').read_text().splitlines() == ['load', 'paste', 'enter']
 
 
-def test_restart_reconciles_enter_when_the_previous_worker_could_not_see_the_receipt(tmp_path, legacy_notification):
+@pytest.mark.parametrize('boundary', ['before-enter', 'after-enter'])
+def test_restart_keeps_unknown_enter_pending_without_sending_again(tmp_path, legacy_notification, boundary):
     scan, signal_path, _ = legacy_notification
-    (tmp_path / 'lose-observation').touch()
+    fault = tmp_path / ('stop-before-enter' if boundary == 'before-enter' else 'lose-observation')
+    fault.touch()
     _, state = scan()
     assert state['last_result'] == 'submit_failed'
     assert signal_path.is_file()
     receipt = tmp_path / 'runtime/notify-locks/ProbeAgent-42.receipt'
-    assert json.loads(receipt.read_text())['confirmed'] is False
-    (tmp_path / 'observation-lost').unlink()
-    (tmp_path / 'lose-observation').unlink()
-    _, state = scan()
-    assert state['last_result'] == 'success'
-    assert not receipt.exists() and not signal_path.exists()
-    assert (tmp_path / 'calls').read_text().splitlines() == ['load', 'paste', 'enter']
+    assert json.loads(receipt.read_text())['phase'] == 'enter_pending'
+    fault.unlink()
+    (tmp_path / 'observation-lost').unlink(missing_ok=True)
+    calls = ['load', 'paste'] + (['enter'] if boundary == 'after-enter' else [])
+    if boundary == 'before-enter':
+        assert (tmp_path / 'stopped-before-enter').exists()
+    draft = tmp_path / 'draft'
+    text = 'ORRERY Mail notification: message from Sender [normal]: fixture. Please call fetch_inbox to read it.'
+    for replacement in (text, '', 'New active pane already has a user draft'):
+        draft.write_text(replacement)
+        _, state = scan()
+        assert state['last_result'] == 'submit_failed'
+        assert state['wait_reason'] == 'notification_enter_pending'
+        assert receipt.is_file() and signal_path.is_file()
+        assert draft.read_text() == replacement
+        assert (tmp_path / 'calls').read_text().splitlines() == calls
+
+
+def test_submit_watchdog_stops_the_entire_helper_group(tmp_path):
+    source = WATCHER.read_text()
+    function = source[source.index('run_to() ('):source.index('\n# 1行目は ok / invalid')]
+    child = tmp_path / 'stubborn.py'
+    started = tmp_path / 'started'
+    late = tmp_path / 'late'
+    child.write_text(
+        'import signal, time\nfrom pathlib import Path\n'
+        'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'
+        f'Path({str(started)!r}).touch()\n'
+        'time.sleep(3)\n'
+        f'Path({str(late)!r}).touch()\n')
+    script = function + '''
+tmux() { "$PYTHON" "$CHILD"; }
+AGENTSTACK_NOTIFY_RECEIPT=fixture run_to 1 tmux submit-input
+'''
+    result = subprocess.run(['/bin/bash', '-c', script], env={
+        **os.environ, 'PYTHON': sys.executable, 'CHILD': str(child),
+    }, timeout=5, capture_output=True)
+    assert result.returncode in (137, 143)
+    assert started.exists() and not late.exists()
+
+
+@pytest.mark.parametrize('record,expected_code,reason', [
+    ({'version': 2, 'phase': 'paste_pending'}, 4, 'notification_paste_pending'),
+    ({'version': 2, 'phase': 'enter_pending'}, 4, 'notification_enter_pending'),
+    ({'confirmed': False}, 4, 'notification_enter_pending'),
+    ({'confirmed': True}, 4, 'notification_enter_pending'),
+    ({'version': 2, 'phase': 'confirmed'}, 0, None),
+])
+def test_saved_receipts_never_open_a_new_destination(tmp_path, monkeypatch, capsys,
+                                                      record, expected_code, reason):
+    script = runpy.run_path(str(ROOT / 'bin/lib/runtime_tmux_consumer.py'))
+    payload = tmp_path / 'notice'
+    payload.write_text('Synthetic notification')
+    receipt = tmp_path / 'receipt'
+    receipt.write_text(json.dumps({
+        **record, 'pane': ['/tmp/fixture.sock', 100, '%1', 200],
+        'digest': hashlib.sha256(payload.read_bytes()).hexdigest(),
+    }))
+    monkeypatch.setenv('AGENTSTACK_NOTIFY_RECEIPT', str(receipt))
+
+    def no_consumer():
+        pytest.fail('a saved receipt must not look up a new pane')
+
+    assert script['submit_input'](['%2', str(payload)], no_consumer) == expected_code
+    assert capsys.readouterr().err.strip() == (reason or '')
 
 
 # --- real fswatch on Linux -------------------------------------------------------

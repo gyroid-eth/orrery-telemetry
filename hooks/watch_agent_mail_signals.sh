@@ -160,20 +160,28 @@ PY
 # 強制終了し非ゼロを返す。macOS には timeout(1)/gtimeout が無く、watcher は
 # bash 3.2 で動くため、background + watchdog で自前実装する。これにより
 # tmux のブロックが本体ループへ波及しなくなる。
-run_to() {
+run_to() (
     local secs="$1"; shift
+    local group=""
+    # submit-input goes through a Bash adapter to Python and a tmux client.
+    # Keep them in one job group so timeout also closes inherited output pipes.
+    if [[ -n "${AGENTSTACK_NOTIFY_RECEIPT:-}" && "${2:-}" == "submit-input" ]]; then
+        set -m || return 124
+        group="-"
+    fi
     "$@" &
     local cmd_pid=$!
     # watchdog: fd を /dev/null へ向ける ($(run_to ...) が watchdog の stdout 保持で
     # ハングしないように)。cmd 側は呼び出し元の stdout を保持し続ける。
-    ( sleep "$secs"; kill -TERM "$cmd_pid" 2>/dev/null; sleep 0.3; kill -KILL "$cmd_pid" 2>/dev/null ) >/dev/null 2>&1 &
+    ( sleep "$secs"; kill -TERM -- "${group}${cmd_pid}" 2>/dev/null; sleep 0.3; kill -KILL -- "${group}${cmd_pid}" 2>/dev/null ) >/dev/null 2>&1 &
     local wd_pid=$!
     local rc=0
     wait "$cmd_pid" 2>/dev/null || rc=$?
+    if [[ -n "$group" ]]; then kill -KILL -- "${group}${cmd_pid}" 2>/dev/null || true; fi
     kill "$wd_pid" 2>/dev/null || true
     wait "$wd_pid" 2>/dev/null || true
     return "$rc"
-}
+)
 
 # 1行目は ok / invalid。Mail server は signal を直接 write_text するので、書きかけ
 # （空や途中で切れた JSON）を読むことがある。それを空の metadata として配送すると
@@ -600,8 +608,10 @@ handle_signal_file() {
     # 早期スキップは `return 0` を明示してスクリプト継続を保証する。
     local previous
     if ! previous=$(state_should_attempt "$agent_name" "$msg_key"); then
-        if [[ "$previous" == "delivered" && "$per_msg_file" == "1" ]]; then
-            discard_absent_signal "$signal_file" "$signal_identity"
+        if [[ "$previous" == "delivered" ]]; then
+            if [[ "$per_msg_file" == "1" ]]; then
+                discard_absent_signal "$signal_file" "$signal_identity"
+            fi
             rm -f "${STATE_DIR}/notify-locks/${agent_name}-${msg_key}.receipt" 2>/dev/null || true
         fi
         return 0
@@ -663,6 +673,21 @@ deliver_worker() {
     local lease_owner="${10:-}"
     local signal_identity="${11:-}"
     local session_name="$agent_name"
+    local receipt_file="${STATE_DIR}/notify-locks/${agent_name}-${msg_key}.receipt"
+    local prompt
+    if [[ -n "$body_snippet" && "$body_truncated" == "0" ]]; then
+        prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Body (complete; no inbox fetch needed): ${body_snippet}"
+    elif [[ -n "$body_snippet" ]]; then
+        prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Body preview: ${body_snippet} ... Fetch inbox to read the rest."
+    else
+        prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Please call fetch_inbox to read it."
+    fi
+    if [[ -e "$receipt_file" || -L "$receipt_file" ]]; then
+        # Reconcile the saved result without choosing a new pane or switching
+        # delivery routes. An unresolved result keeps its original signal.
+        submit_notice "$signal_file" "$agent_name" "$msg_key" "$per_msg_file" "$lease_owner" "$receipt_file" "" "$prompt"
+        return 0
+    fi
 
     # A persistent headless profile has no REPL pane to inject. Its wrapper
     # publishes a mode-0600 runtime manifest and execs a bridge that owns the
@@ -747,15 +772,6 @@ deliver_worker() {
         return 0
     fi
 
-    local prompt
-    if [[ -n "$body_snippet" && "$body_truncated" == "0" ]]; then
-        prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Body (complete; no inbox fetch needed): ${body_snippet}"
-    elif [[ -n "$body_snippet" ]]; then
-        prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Body preview: ${body_snippet} ... Fetch inbox to read the rest."
-    else
-        prompt="ORRERY Mail notification: message from ${from} [${importance}]: ${subject}. Please call fetch_inbox to read it."
-    fi
-
     # 本文は bracketed paste で渡す。send-keys -l は 1 文字ずつの打鍵として届くため、
     # 受け側の読み取りが遅れる（機械の飽和など）と本文と C-m が同じ読み取りに入り、
     # C-m が貼り付けの一部として扱われて submit されない。本文が入力欄に残り、
@@ -779,6 +795,12 @@ deliver_worker() {
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
+    submit_notice "$signal_file" "$agent_name" "$msg_key" "$per_msg_file" "$lease_owner" "$receipt_file" "$pane_id" "$prompt"
+}
+
+submit_notice() {
+    local signal_file="$1" agent_name="$2" msg_key="$3" per_msg_file="$4"
+    local lease_owner="$5" receipt_file="$6" pane_id="$7" prompt="$8"
     local paste_file submit_rc=0 submit_reason
     paste_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify.XXXXXX") || paste_file=""
     if [[ -z "$paste_file" ]] || ! printf '%s' "$prompt" > "$paste_file"; then
@@ -789,18 +811,19 @@ deliver_worker() {
     fi
     # The helper shares the pane lock with Cockpit and checks the visible
     # input before Enter. A refused or unknown send leaves the signal pending.
-    local receipt_file="${STATE_DIR}/notify-locks/${agent_name}-${msg_key}.receipt"
     # Keep normal output on the watcher log and read only the helper's diagnostic.
     {
-        submit_reason=$(AGENTSTACK_NOTIFY_RECEIPT="$receipt_file" \
+        submit_reason=$(AGENTSTACK_NOTIFY_RECEIPT="$receipt_file" AGENTSTACK_NOTIFY_TIMEOUT="$TMUX_TIMEOUT" \
+            AGENTSTACK_NOTIFY_SESSION="$agent_name" \
             run_to "$((TMUX_TIMEOUT + 2))" tmux submit-input "$pane_id" "$paste_file" 2>&1 >&4) || submit_rc=$?
     } 4>&1
     rm -f "$paste_file"
     if (( submit_rc != 0 )); then
         local result="submit_failed"
         if (( submit_rc == 3 )); then result="submit_deferred"; fi
+        if (( submit_rc == 124 || submit_rc == 137 || submit_rc == 143 )); then submit_reason="submission_deadline"; fi
         case "$submit_reason" in
-            input_not_found|pane_locked|pane_changed|previous_pane_changed|editor_waiting|scrolled_draft|editor_not_empty|paste_unavailable|load_buffer_failed|editor_changed|paste_failed|enter_failed|draft_not_confirmed|enter_not_confirmed|terminal_unavailable|submission_state_unavailable) ;;
+            input_not_found|pane_locked|pane_changed|editor_waiting|scrolled_draft|editor_not_empty|paste_unavailable|load_buffer_failed|editor_changed|paste_failed|enter_failed|draft_not_confirmed|enter_not_confirmed|terminal_unavailable|submission_state_unavailable|submission_deadline|notification_paste_pending|notification_enter_pending|completion_mismatch|completion_unverified) ;;
             *) submit_reason="$result" ;;
         esac
         state_mark_result "$agent_name" "$msg_key" "$result" "watcher" "$submit_reason"
@@ -811,7 +834,7 @@ deliver_worker() {
     state_mark_result "$agent_name" "$msg_key" "success" "watcher"
     rm -f "$receipt_file" 2>/dev/null || true
     release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
-    log "  Injected notification into '$agent_name' (session: $session_name)"
+    log "  Injected notification into '$agent_name' (session: $agent_name)"
     # Per-message files are watcher-owned (each represents one delivery); unlink
     # them on success so identical msg_ids never re-fire. Legacy single-file
     # signals remain server-owned and are cleared by fetch_inbox.

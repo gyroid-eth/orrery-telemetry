@@ -67,7 +67,6 @@ class Frame:
     slash_picker: bool = False
     selected_command: str | None = None
     scrolled: bool = False
-    full_draft: bool = False
 
     @property
     def identity(self):
@@ -203,8 +202,7 @@ def frame(metadata, lines, pane):
                 selected_command = _slash_selection(lines, plain, start, codex=codex)
         return Frame(*base, draft, waiting, menu or selected_command is not None,
                      bool(hermes), boxed, bracketed, command,
-                     slash_picker=slash_picker, selected_command=selected_command,
-                     full_draft=framed or (codex and (not tail or bool(footer))))
+                     slash_picker=slash_picker, selected_command=selected_command)
     return Frame(*base,None,False)
 
 
@@ -293,19 +291,7 @@ def capture(command,pane):
     return frame(metadata,screen.splitlines(),pane) if separator else None
 
 
-def same_notice(observed, text):
-    """Resume only a fully visible, literal notice, including soft wraps."""
-    if (not observed.draft or observed.waiting or observed.selected or not observed.full_draft
-            or not observed.allows_paste(text) or '\n' in text):
-        return False
-    # tmux strips padding at the ends of display rows. A wrapped row can
-    # break within a word, or at the one unpainted space between words.
-    parts = observed.draft.splitlines()
-    pattern = ' ?'.join(re.escape(part.strip(' ')) for part in parts)
-    return re.fullmatch(pattern, text) is not None
-
-
-def submit(command,admit,pane,text,*,deadline=None,recovery=None,on_wait=None):
+def submit(command,admit,pane,text,*,deadline=None,receipt=None,on_wait=None):
     """Watcher path. Refused means a prompt was never pasted."""
     end=time.monotonic()+TIMEOUT if deadline is None else deadline
     fd=None
@@ -316,6 +302,13 @@ def submit(command,admit,pane,text,*,deadline=None,recovery=None,on_wait=None):
         if on_wait is not None:
             on_wait(reason)
         return 'unknown' if pending else 'refused'
+
+    def checkpoint(write, identity):
+        try:
+            write(identity)
+        except OSError:
+            return False
+        return True
 
     try:
         current=capture(command,pane)
@@ -330,62 +323,55 @@ def submit(command,admit,pane,text,*,deadline=None,recovery=None,on_wait=None):
         if not before or before.identity!=current.identity:
             return defer('pane_changed')
         identity=before.identity
-        entered=recovery.identity if recovery is not None else None
-        if entered is not None:
-            if entered!=identity:
-                return defer('previous_pane_changed')
-            if before.empty:
-                # The previous process reached Enter on this exact pane.
-                # The cleared editor is the same receipt we wait for below.
-                return 'accepted'
-        resume=recovery is not None and same_notice(before,text)
-        if not resume:
-            if before.draft is None:
-                return defer('input_not_found')
-            if before.waiting:
-                return defer('editor_waiting')
-            if before.scrolled:
-                return defer('scrolled_draft')
-            if not before.empty:
-                return defer('editor_not_empty')
-            if not before.allows_paste(text):
-                return defer('paste_unavailable')
-            buffer='orrery-submit-'+uuid.uuid4().hex
-            if command('load-buffer','-b',buffer,'-',input=text).returncode:
-                return defer('load_buffer_failed')
-            if time.monotonic()>=end or not admit():
-                return defer('pane_changed')
-            current=capture(command,pane)
-            if not current or current.identity!=identity:
-                return defer('pane_changed')
-            if not current.empty or not current.allows_paste(text):
-                return defer('editor_changed')
-            pending=True  # A timeout after the command starts cannot prove absence.
-            if command('paste-buffer','-r','-p','-d','-b',buffer,'-t',pane).returncode:
-                return defer('paste_failed')
+        if before.draft is None:
+            return defer('input_not_found')
+        if before.waiting:
+            return defer('editor_waiting')
+        if before.scrolled:
+            return defer('scrolled_draft')
+        if not before.empty:
+            return defer('editor_not_empty')
+        if not before.allows_paste(text):
+            return defer('paste_unavailable')
+        buffer='orrery-submit-'+uuid.uuid4().hex
+        if command('load-buffer','-b',buffer,'-',input=text).returncode:
+            return defer('load_buffer_failed')
+        if receipt is not None and not checkpoint(receipt.before_paste,identity):
+            return defer('submission_state_unavailable')
+        if time.monotonic()>=end:
+            return defer('submission_deadline')
+        if not admit():
+            return defer('pane_changed')
+        current=capture(command,pane)
+        if not current or current.identity!=identity:
+            return defer('pane_changed')
+        if not current.empty or not current.allows_paste(text):
+            return defer('editor_changed')
+        if time.monotonic()>=end:
+            return defer('submission_deadline')
+        pending=True  # A timeout after the command starts cannot prove absence.
+        if command('paste-buffer','-r','-p','-d','-b',buffer,'-t',pane).returncode:
+            return defer('paste_failed')
 
-        matches=same_notice if resume else ready
-        previous=before.draft if resume else None
+        previous=None
         while time.monotonic()<end:
             view=capture(command,pane)
             if not view or view.identity!=identity:
                 return defer('pane_changed')
-            if entered is not None and view.empty:
-                return 'accepted'
-            draft=view.draft if matches(view,text) else None
+            draft=view.draft if ready(view,text) else None
             if draft is not None and draft==previous:
-                if not admit() or time.monotonic()>=end:
+                if receipt is not None and not checkpoint(receipt.before_enter,identity):
+                    return defer('submission_state_unavailable')
+                if time.monotonic()>=end:
+                    return defer('submission_deadline')
+                if not admit():
                     return defer('pane_changed')
                 view=capture(command,pane)
                 if not view or view.identity!=identity:
                     return defer('pane_changed')
-                if matches(view,text):
-                    if recovery is not None:
-                        try:
-                            recovery.before_enter(identity)
-                        except OSError:
-                            return defer('submission_state_unavailable')
-                    pending=True
+                if ready(view,text):
+                    if time.monotonic()>=end:
+                        return defer('submission_deadline')
                     if command('send-keys','-t',pane,'C-m').returncode:
                         return defer('enter_failed')
                     break

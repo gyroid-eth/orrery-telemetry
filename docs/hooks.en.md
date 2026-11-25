@@ -184,7 +184,7 @@ It uses event watching when `fswatch` is available and two-second polling otherw
 
 When updating the guard scheme, stop the old watcher and its delivery workers through their usual manager before starting the new watcher. Old guard files are not removed automatically; do not delete locks while old workers still run.
 
-The delivery target is only the tmux session whose name exactly matches the agent. The legacy watcher checks the editor after pasting, then submits with a separate `C-m` call. It can resume a fully visible matching notification with just Enter. It leaves other drafts and partially hidden drafts alone. The watcher records the pane before Enter so a restart can reconcile a cleared editor on the same pane. After three deferred attempts, the watcher log identifies the agent, message and reason, and logs further changes of reason. tmux calls run in timeout-controlled workers so a server stall cannot stop the entire watcher.
+The delivery target is the tmux session whose name exactly matches the agent. The legacy watcher pastes into an empty editor, checks the result, and submits with a separate `C-m` call. It leaves existing drafts in place. Before paste and Enter, it records the pane and which step it reached. When the result remains uncertain after a restart, the watcher keeps the signal pending for review and holds further delivery of that notification. After three deferred attempts, the watcher log identifies the agent, message and reason, and logs further changes of reason. Paste and Enter share a deadline, and the watcher can stop the worker and its child processes when it expires.
 
 ## Differences for Codex
 
