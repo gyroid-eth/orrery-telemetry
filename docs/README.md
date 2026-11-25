@@ -25,7 +25,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [指定スマホで状況を見る](mobile.md) — 既定オフの閲覧画面、本人認証と端末制限、手動有効化と停止。
 - [委任と child agent](delegation.md) — ORRERY /delegate、組み込み子との違いと渡す道具の選択。
 - [Launcher と identity](launchers.md) — agent-start、名前、resume、/delegate と /log、通知の流れ。
-- [子の computer use](computer-use.md)
+- [Computer use](computer-use.md) — NEW AGENT の画面操作とブラウザ、権限の確認、Cua Driver の準備。
 - [Obsidian と一緒に使う](obsidian.md) — ログ・論文ノート・タスクを vault と Daily Note に置く。
 
 ## 空のMailへの切替候補

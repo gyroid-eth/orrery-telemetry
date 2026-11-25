@@ -44,7 +44,7 @@ top-level / delegated child の起動は、選択した作業フォルダ（Git 
 
 子に渡す道具の既定は installer の `--child-default-tools`（既定は空）で選べます。明示の指定を優先し、使えない既定の項目は通知して外します。[道具の選び方](docs/delegation.md#installer-の既定の道具)を参照してください。
 
-`--tools` で子にブラウザや computer use を渡せます。[届く道具と人がやること](docs/delegation.md#ブラウザと-computer-use-何が届くか人がやること)を参照してください。
+macOS の NEW AGENT では、Claude Code・Codex CLI・dsh・Hermes・Antigravity CLI の Computer use を Off・View・Control から選べます。cockpit とスマホの NEW AGENT には Browser の選択もあります。導入済みの Antigravity は親なしでも起動できます。子を委任するときは `--tools` で道具を指定できます。[画面操作の準備と権限](docs/computer-use.md)・[ブラウザの準備と許可](docs/delegation.md#ブラウザと-computer-use-何が届くか人がやること)を参照してください。
 
 作業の区切りで子を EXIT し、`~/.agentstack/bin/agentstack-resume <NAME> --tools <spec>` で同じ会話の道具を変更できます。[resume の道具変更](docs/delegation.md#停止した子の道具を変更して-resume-する)を参照してください。
 

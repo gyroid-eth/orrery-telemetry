@@ -369,7 +369,7 @@ export AGENTSTACK_OBSIDIAN_APP="/Applications/Obsidian.app/Contents/MacOS/Obsidi
 | `AGENTSTACK_REREGISTER_PROGRAM` | `codex` | `agentstack-reregister` の第2引数を省略した場合の program |
 | `AGENTSTACK_REREGISTER_MODEL` | program ごとの既定 | `agentstack-reregister` の第3引数を省略した場合の model label |
 
-通知は相手の入力欄に直接タイプされます。子を何体も走らせていると、人間が親と会話している最中に進捗報告が挟まって話が細切れになります。`AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE=high` にすると、`normal` 以下は割り込まなくなります。**メールが消えるわけではありません。** signal はそのまま残り、次に `fetch_inbox` を呼べば普通に読めます。奪うのは割り込む権利であって、届く権利ではありません。完了報告を確実に受け取りたい場合は、子に `importance="high"` で送らせてください（`/delegate` の既定はそうなっています）。
+自動通知は相手の入力欄が空で送信できるときに入ります。作業中の Hermes への通常文の通知は保留します。`AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE=high` にすると、`normal` 以下の Mail は `fetch_inbox` で読めます。完了報告を自動通知の対象にする場合は、子に `importance="high"` で送らせてください（`/delegate` の既定）。[Mail watcher の動作](launchers.md#mail-watcher-と-repl-注入)
 
 watcher は fswatch のイベントで signal を拾い、取りこぼしを回復 scan で拾います。Linux（WSL を含む）の fswatch は inotify の再帰 watch を自分で足すため、新しくできた受信者フォルダの watch が付く前に書かれた signal は通知されません（inotify(7) の既知の制約）。受信者フォルダは配送のたびに消えて次の1通で作り直されるので、以前は WSL でほとんどの通知が30秒ごとの scan を待っていました。Linux では回復 scan を2秒にしているため、この場合も数秒で届きます。macOS（FSEvents）は30秒のままです。同じ message の再試行間隔は、scan の間隔にかかわらず30秒です。書きかけで JSON として読めない signal は、配送も記録もせずに残し、次の scan で読み直します。
 

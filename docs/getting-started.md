@@ -19,6 +19,7 @@
 | --- | --- |
 | Claude Code / Codex | 使うCLIを入れてログインし、下の[最初のagentを起動する手順](#3-最初の-agent-を起動しdashboard-で見る)へ |
 | DeepSeek / Local LLM | [APIの初期設定ガイド](native-setup.md)でdsh/Hermes・キー・接続設定を準備し、NEW AGENTから起動。Claude/Codexのログインは不要 |
+| Antigravity（macOS） | [Antigravity の導入と認証](antigravity.md)を済ませ、NEW AGENT で作業フォルダを選ぶ。親の欄は空のまま起動できる |
 
 準備済みのagentを観測するときはDECK / NETWORKを開きます。agent同士を連携させるなら、[Mailの通し確認](#5-しりとりで通しの確認をする)へ進みます。APIの[対応組合せと制限](managed-catalog.md)も確認してください。
 
@@ -97,6 +98,8 @@ open http://127.0.0.1:8770/
 ```
 
 **Claude/Codexの成功確認**: 選んだCLIが起動し、dashboardのDECKに科学者名の付いたカードが現れます。カードにはmodelとcontext残量が表示されます。
+
+macOS で NEW AGENT から起動するときは、Computer use を Off・View・Control から選べます。cockpit とスマホの NEW AGENT では Browser も選べます。[画面操作の準備と権限の確認](computer-use.md)
 
 ### 4. child を 1 体作る
 

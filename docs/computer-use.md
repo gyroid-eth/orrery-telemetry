@@ -1,6 +1,25 @@
-# 子 agent の computer use
+# Computer use
 
-標準の Claude、Codex、dsh、Hermes の子で、`--tools` に `orrery-screen` を明示すると、ORRERY が生成した stdio MCP を使えます。dsh と Hermes は Local 接続でも同じ指定です。権限は起動世代ごとに決まり、実行中は operator API から変更できます。
+[English](computer-use.en.md) · [目的別索引](README.md)
+
+<a id="new-agent"></a>
+## NEW AGENT で選ぶ
+
+macOS の dashboard の NEW AGENT では、Claude Code、Codex CLI、dsh、Hermes、Antigravity CLI で **Computer use** を選べます。同じ3段を Telemetry のスマホ画面と、Telemetry API 53 以降に接続した cockpit でも使えます。
+
+| 選択 | ORRERY から渡す画面操作 |
+| --- | --- |
+| Off | 画面の道具を付けない |
+| View | アプリ・窓の一覧と画面状態の読み取り |
+| Control | View に加え、クリック・入力などの操作 |
+
+cockpit とスマホの NEW AGENT では、**Browser** から、利用できる Off・Temporary Chrome・My Chrome を別に選びます。Temporary Chrome は一時プロファイル、My Chrome は普段の Chrome を使います。Chrome で接続許可を求められたら、人が Chrome 上で応答します。[ブラウザの準備と許可](delegation.md#ブラウザと-computer-use-何が届くか人がやること)
+
+macOS では親の欄を空にして Antigravity を起動できます。この起動でも Computer use と、対応画面での Browser を選べます。Git が必要なのは Isolation を選ぶ場合です。Antigravity の画面の道具は、選択した段に応じて、そのセッションだけ個別に許可されます。既存の Ask・Deny が優先されます。有効なグローバル Chrome MCP があると Browser の選択肢は表示されません。[Antigravity の導入と起動](antigravity.md#dashboard-new-agent)
+
+## CLI と API で選ぶ
+
+標準の Claude、Codex、dsh、Hermes の子で、`--tools` に `orrery-screen` を明示すると、ORRERY が生成した stdio MCP を使えます。dsh と Hermes は Local 接続でも同じ指定です。権限は起動世代ごとに決まり、relay を起動したセッションでは実行中も operator API から変更できます。
 
 | 起動の指定 | 初期権限 |
 | --- | --- |
@@ -8,7 +27,7 @@
 | `--tools screen:read:orrery-screen` | `view` |
 | `--tools screen:operate:orrery-screen` | `control` |
 
-`/api/spawn` では `{"tools":{"mcp":["orrery-screen"]}}` または `{"tools":{"screen":{"server":"orrery-screen","access":"read"}}}` を渡します。操作を初期値にする場合は `access` を `operate` にします。macOS の名前なし `screen:operate` も `orrery-screen` を選びます。installer の既定の道具に `orrery-screen` は追加されません。
+NEW AGENT の選択を `/api/spawn` で指定する場合、View は `{"tools":{"screen":{"access":"read"}}}`、Control は `access` を `operate` にします。Off は明示した `tools` から画面の指定を外します。対応する子で relay を付けて Off から始める場合は、`{"tools":{"mcp":["orrery-screen"]}}` を渡します。macOS の名前なし `screen:operate` も `orrery-screen` を選びます。installer の既定の道具に `orrery-screen` は追加されません。
 
 Claude を会話だけで再開するときも、`/api/jump` に同じ `tools` を渡せます。指定した回の起動に世代を作ります。再開時に追加の道具を省略すると、前の世代の画面操作資格も失効します。[再開 API の指定例](api.md#post-apijump)
 
@@ -29,13 +48,20 @@ PATH で見つからない場合は `AGENTSTACK_CUA_DRIVER` に実行ファイ�
 
 WSL の中継は普通の stdio パイプを使います。動作には起動経路の WSL interop と、Windows ユーザーの対話ログオンが必要です。interop と distro の寿命は WSL の設定に従います。ログイン中の Windows Terminal、昇格なし、Limited から先に確認します。
 
-## macOS の子の起動
+## macOS の起動設定
 
-NEW AGENT で View または Control を選ぶと、Claude Code、Codex CLI、dsh、Hermes、Antigravity CLI は `orrery-screen` から Cua Driver を呼びます。`--tools screen:read` と `--tools screen:operate` も同じ経路です。`--tools mcp:orrery-screen` は Off で公開し、起動後の切替を待ちます。
+NEW AGENT で View または Control を選ぶと、`orrery-screen` から Cua Driver を呼びます。`--tools screen:read` と `--tools screen:operate` も同じ経路です。`--tools mcp:orrery-screen` は Off で公開し、起動後の切替を待ちます。
 
 生成する Claude Code では同名の組み込み MCP を起動設定で拒否します。Codex CLI の生成ホームでは、Computer use の選択にかかわらず GUI 同梱の `node_repl` と `unified-computer-use@openai-bundled` を無効にします。Hermes の生成プロファイルでは組み込みの Cua toolset を外します。Chrome DevTools など別途選んだ Browser use は独立しています。
 
 Antigravity CLI の global MCP 設定で Cua Driver を直接有効にしている場合、生成時に対象の MCP 名を表示して起動を止めます。Antigravity の global MCP 設定は本人が管理します。 [Antigravity の MCP 設定](https://antigravity.google/docs/mcp/#global-and-workspace-server-configs)
+
+<a id="permission-status"></a>
+## 起動後の状態を確認する
+
+cockpit の agent の詳細やスマホの Reader に Computer use と Browser use が表示されます。起動の記録がある場合は保存した選択を使い、画面 relay の起動世代を照合できる場合はその実効値を表示します。Antigravity では起動の記録などから値を確定できない項目に `Unknown` と理由が付きます。
+
+起動記録のない legacy の稼働中の Claude Code／Codex CLI では、Telemetry API 52 以降がプロセスの起動引数と子孫プロセスからローカル Cua Driver、Codex の Chrome DevTools、Claude の明示的な Chrome フラグを確認します。プロセスや引数を読めない場合、relay のモードや Claude のフラグを確認できない場合は `Unknown` と理由が表示されます。この表示の対象は画面とブラウザの道具の選択・観測値です。Chrome の接続や OS の許可はそれぞれの画面で確認します。
 
 ## 起動中に権限を変える
 
@@ -60,9 +86,9 @@ operator_request "$dashboard_url/api/computer-use" \
 unset operator_capability
 ```
 
-子は、生成した `orrery-screen` の起動定義の環境で `python -I -m agentstack_mail.screen_mcp --status` を実行すると、同じ起動の project・runtime・世代・権限・由来を JSON で確認できます。生成した資格の値を表示する必要はありません。子の資格で状態を変更しようとすると HTTP 403 が返ります。
+子は、生成した `orrery-screen` の起動定義の環境で `python -I -m agentstack_mail.screen_mcp --status` を実行すると、同じ起動の project・runtime・世代・権限・由来を JSON で確認できます。生成した資格の値を表示する必要はありません。子の資格で状態を変更しようとすると HTTP 403 が返ります。relay の権限変更は、Antigravity CLI のセッションに起動時に与えた個別の許可を変更しません。
 
-引き下げは次に照会する呼び出しから有効です。すでに上流に渡った入力はそのまま実行されます。resume で新しい世代が始まると、保持した道具の指定から初期権限を作り直します。`agentstack-resume --tools` で道具を付け替える場合は、新しい指定の初期値になります。明示的に外すには、停止した子を `agentstack-resume <agent> --base default` で再開します。
+引き下げは次に照会する呼び出しから有効です。すでに上流に渡った入力はそのまま実行されます。resume で新しい世代が始まると、保持した道具の指定から初期権限を作り直します。親なしの Antigravity を Resume すると、初回の選択と前の relay 権限のうち低い方を、新しい relay と CLI の許可に使います。`agentstack-resume --tools` で道具を付け替える場合は、新しい指定の初期値になります。明示的に外すには、停止した子を `agentstack-resume <agent> --base default` で再開します。
 
 ## 一覧と応答
 
@@ -75,7 +101,7 @@ unset operator_capability
 | 確かめること | 手順と期待する結果 |
 | --- | --- |
 | 本人と権限 | operator の一覧と子の `--status` で project・runtime・世代・実効値・由来を照合する。同名で起動し直したときは古い資格が拒否される。別 project の対象に古い世代を指定しても変更できない。 |
-| 一覧と承認 | `off`、`view`、`control` で12道具の名前と schema が一致する。各 harness で偽の上流の `check_permissions` を呼び、承認待ちにならず、生成設定とモデルの道具一覧の両方に直接の Cua Driver が見えないことを確かめる。 |
+| 一覧と承認 | `off`、`view`、`control` で12道具の名前と schema が一致する。View または Control で起動し、利用者の Ask・Deny がない状態で、偽の上流の `check_permissions` が承認待ちにならず通ることを確かめる。生成設定とモデルの道具一覧で Cua Driver の直接経路も確認する。 |
 | 切替と拒否 | 同じセッションを `off` → `view` → `control` → `off` に切り替える。許可不足、不明な道具名、照会停止・時間切れのときは、偽の上流に呼び出しが届かない。 |
 | 引数 | 例として `get_window_state` に `screenshot_out_file` を渡す。引数拒否になり、ファイルも試験用の窓も変わらない。 |
 | 上限と終了 | 大きな木・画像、版不一致、stdio 切断と時間切れを偽の上流で再現する。JSON と要素番号が保たれ、必要な箇所に省略の印が付き、入力の再送なしで上流プロセスが終了する。 |

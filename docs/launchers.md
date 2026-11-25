@@ -232,9 +232,9 @@ Claude の子も正常終了後、state と owner credential を既定30日、mo
 
 ## 子の computer use
 
-Claude、Codex、dsh、Hermes の標準 launcher で `--tools mcp:orrery-screen` または `--tools screen:read:orrery-screen` を選べます。実行中の権限を変える場合は operator API を使います。 [Cua Driver の準備、権限と確認手順](computer-use.md)
+macOS の NEW AGENT は Claude Code、Codex CLI、dsh、Hermes、Antigravity CLI の Computer use を Off・View・Control から選べます。Antigravity の親なし起動も対象です。View と Control は `orrery-screen` から Cua Driver を使います。標準の子 launcher では `--tools screen:read`（View）、`--tools screen:operate`（Control）、`--tools mcp:orrery-screen`（relay を付けて Off で起動）を指定できます。macOS の `screen:operate:cua-driver` も同じ relay を選びます。実行中の relay の権限は operator API から変更します。[Cua Driver の準備、権限と確認手順](computer-use.md)
 
-macOS の子は NEW AGENT の Computer use、または `--tools screen:read`（View）、`--tools screen:operate`（Control）、`--tools mcp:orrery-screen`（Off で待機）を使います。Claude Code、Codex CLI、dsh、Hermes、Antigravity CLI のいずれも既存の `orrery-screen` から Cua Driver を呼びます。従来の `screen:operate:cua-driver` も同じ relay を選びます。Windows／WSL の名前付き MCP 指定は従来どおりです。
+Windows／WSL の名前付き MCP 指定は [子に渡す道具を選ぶ](delegation.md#子に渡す道具を選ぶ--base----tools) を参照してください。
 
 ## Codex 固有の起動
 
@@ -267,17 +267,9 @@ API key が環境にあると OAuth を上書きすることがあるため、Co
 
 ## Mail watcher と REPL 注入
 
-mail watcher は ORRERY Mail signal を見つけると、対応する tmux session の Claude / Codex REPL へ通知文を注入します。
+mail watcher は ORRERY Mail signal を受け取り、対応する tmux session の入力欄が空で送信できることを確認してから、通知文を貼り付けて送信します。作業中の Hermes への通常文の自動通知は保留します。人が cockpit の composer から送る通常文は、Hermes の作業中の入力設定に従います。
 
-text と submit は別操作です。
-
-```bash
-tmux send-keys -t "$session" -l "$text"
-sleep 0.2
-tmux send-keys -t "$session" C-m
-```
-
-Codex では `Enter` keysym が submit にならない場合があるため `C-m` を使います。watcher は bare shell への誤注入を避け、tmux call を timeout 付き worker で実行します。
+通知経路で slash command を送る場合、Enter の後に対応する画面へ切り替わったことでも受領を確認できます。cockpit の中断と手入力の詳細は [Prompt composer](https://github.com/gyroid-eth/orrery/blob/master/docs/usage.md#prompt-composer) を参照してください。
 
 ## Skills（2件）と file reservation
 

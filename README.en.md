@@ -44,7 +44,7 @@ For either route, check that the agent appears in DECK. The [standalone procedur
 
 Installer `--child-default-tools` selects default child tools (empty by default). Explicit choices win; unavailable default items are omitted with a notice. See [tool selection](docs/delegation.en.md#installer-defaults).
 
-Pass browser or computer use tools to a child with `--tools`. See [reachable tools and what a person does](docs/delegation.en.md#browser-and-computer-use-what-is-reachable-and-what-a-person-does).
+On macOS, NEW AGENT offers Off, View, and Control for Computer use with Claude Code, Codex CLI, dsh, Hermes, and Antigravity CLI. The cockpit and phone NEW AGENT forms also offer Browser choices. Once installed, Antigravity can start without a parent. Use `--tools` to select tools when delegating a child. See [screen setup and permissions](docs/computer-use.en.md) and [browser setup and approvals](docs/delegation.en.md#browser-and-computer-use-what-is-reachable-and-what-a-person-does).
 
 At a work boundary, EXIT a child and change its tools in the same conversation with `~/.agentstack/bin/agentstack-resume <NAME> --tools <spec>`. See [changing tools on resume](docs/delegation.en.md#resume-a-stopped-child-with-different-tools).
 

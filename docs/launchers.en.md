@@ -232,9 +232,9 @@ Resume never registers an alias or issues a credential. Failed Mail registration
 
 ## Computer use for children
 
-The standard launcher can give Claude, Codex, dsh and Hermes the generated relay by choosing `--tools mcp:orrery-screen` or `--tools screen:read:orrery-screen`. The operator API changes a running child’s permission. [Cua Driver setup and verification (Japanese)](computer-use.md)
+On macOS, NEW AGENT offers Off, View, and Control for Computer use with Claude Code, Codex CLI, dsh, Hermes, and Antigravity CLI, including standalone Antigravity. View and Control use Cua Driver through `orrery-screen`. With the standard child launcher, use `--tools screen:read` (View), `--tools screen:operate` (Control), or `--tools mcp:orrery-screen` (attach the relay and start in Off). On macOS, `screen:operate:cua-driver` also selects the relay. Use the operator API to change the permission of a running relay. [Cua Driver setup, permissions, and verification](computer-use.en.md)
 
-On macOS, use Computer use in NEW AGENT or choose `--tools screen:read` (View), `--tools screen:operate` (Control), or `--tools mcp:orrery-screen` (start in Off). Claude Code, Codex CLI, dsh, Hermes, and Antigravity CLI use Cua Driver through the existing `orrery-screen` relay. The older spelling `screen:operate:cua-driver` selects the same relay. Named MCP selections on Windows and WSL retain their existing behavior.
+For named MCP selections on Windows and WSL, see [Choosing the tools a child gets](delegation.en.md#choosing-the-tools-a-child-gets---base----tools).
 
 ## Codex-specific startup
 
@@ -265,17 +265,9 @@ Because an API key in the environment can override OAuth, it is removed only fro
 
 ## Mail watcher and REPL injection
 
-When the mail watcher finds an ORRERY Mail signal, it injects notification text into the corresponding tmux session's Claude / Codex REPL.
+When the mail watcher receives an ORRERY Mail signal, it checks that the corresponding tmux session has an empty input field ready for submission, then pastes and submits the notification. Automatic plain-text notifications wait while Hermes is busy. Text sent by a person from the cockpit composer follows the Hermes busy-input setting.
 
-Text and submission are separate operations.
-
-```bash
-tmux send-keys -t "$session" -l "$text"
-sleep 0.2
-tmux send-keys -t "$session" C-m
-```
-
-Codex may not treat the `Enter` keysym as submission, so the watcher uses `C-m`. It avoids accidental injection into a bare shell and runs tmux calls in workers with timeouts.
+When the delivery path submits a slash command, it can also verify acceptance from the corresponding screen after Enter. See the cockpit's [Prompt composer](https://github.com/gyroid-eth/orrery/blob/master/docs/en/usage.md#prompt-composer) for interruption and manual sends.
 
 ## Skills (2) and file reservations
 

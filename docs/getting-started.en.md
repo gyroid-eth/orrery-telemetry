@@ -19,6 +19,7 @@ First [install and verify the shared components](#standalone-installation-and-ve
 | --- | --- |
 | Claude Code / Codex | Install and sign in to the chosen CLI, then [start the first agent](#3-start-the-first-agent-and-watch-it-on-the-dashboard) |
 | DeepSeek / Local LLMs | Follow [API setup](native-setup.en.md) for dsh/Hermes, key storage and connection settings, then launch from NEW AGENT. Claude/Codex login is not required |
+| Antigravity (macOS) | Complete [Antigravity setup and sign-in](antigravity.en.md), select a working folder in NEW AGENT, and leave the parent field blank for a standalone launch |
 
 Open DECK / NETWORK to observe configured agents. To connect them, continue with the [Mail check](#5-play-shiritori-as-an-end-to-end-check). Check the [supported API combinations and limitations (Japanese)](managed-catalog.md) too.
 
@@ -97,6 +98,8 @@ open http://127.0.0.1:8770/
 ```
 
 **Claude/Codex success check**: Your chosen CLI starts and a card with a scientist's name appears in DECK, showing the model and remaining context.
+
+When launching from NEW AGENT on macOS, choose Off, View, or Control for Computer use. The cockpit and phone NEW AGENT forms also offer Browser choices. [Screen setup and permission status](computer-use.en.md)
 
 ### 4. Spawn one child
 

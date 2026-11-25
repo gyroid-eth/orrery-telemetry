@@ -188,7 +188,7 @@ scripts/canary-embed-task.sh --models opus,sonnet,haiku --places vault,outside -
 
 dsh・Hermes で `--tools mcp:chrome-devtools` を指定すると、同じ Codex の Chrome MCP 定義を使います。Codex に定義がなければ Claude のユーザーまたは起動フォルダの定義を使います。スマホの Browser もこの選択を使います。Chrome の接続許可は引き続き人が応答します。
 
-New Agent の Browser は Off、Temporary Chrome、My Chrome の3択です。Temporary Chrome は子専用の一時プロファイルを使い、Chrome を閉じると削除されます。My Chrome は普段の Chrome を使い、Claude Code は Claude in Chrome、ほかの対応ハーネスでは Chrome DevTools の `--autoConnect` を使います。Mac の Chrome で初回接続の許可を求められたら、Mac の前で応答するまでブラウザ操作が待機します。Antigravity ではグローバルの Chrome MCP が有効だと子の設定で置き換えられないため選択肢を表示しません。
+cockpit とスマホの NEW AGENT の Browser では、使える場合に Off、Temporary Chrome、My Chrome を選べます。Temporary Chrome は子専用の一時プロファイルを使い、Chrome を閉じると削除されます。My Chrome は普段の Chrome を使い、Claude Code は Claude in Chrome、ほかの対応ハーネスでは Chrome DevTools の `--autoConnect` を使います。Mac の Chrome で初回接続の許可を求められたら、Mac の前で応答するまでブラウザ操作が待機します。macOS では親なしの Antigravity でも Browser を選べます。グローバルの Chrome MCP が有効な場合は、起動ごとの設定で置き換えられないため選択肢は出ません。
 
 これは Codex の既定の MCP 継承に合わせたもので、明示 `--tools browser` の分類済み tool の公開・個別承認とは別です。native の明示 browser も Codex 定義を探しますが、dsh・Hermes がその承認条件を表現できない間は起動を止めます。既定の継承でも、Codex 固有の tool filter/approval など native に写せない項目を捨てて権限を広げず停止します。通常の stdio `command`・`args`・`env`・`cwd` と `enabled` だけの定義が対象です。CLI の表示は `Harness prepare failed: unsupported_mcp_selection`（resume の準備は `Harness resume-prepare failed: unsupported_mcp_selection`）。`native_mcp_selection_unsupported` や `native_mcp_approval_unsupported` は内部の例外理由であり、表示名ではありません。
 
@@ -255,7 +255,7 @@ MCP tool から拒否メッセージが返った場合、子は拒否された�
 - `mcp:chrome-devtools:all` は引き続き既知固定版（`chrome-devtools-mcp@1.10.1`）が必要です。Codex の browser/operate は版が固定されていなくても既知の名前を承認します
 - 承認は Codex の tool 承認だけです。`--autoConnect` の Chrome 側の接続許可は別で、Chrome の接続許可を人が答える点は変わりません
 
-[Mac の画面 relay と View／Control 権限](computer-use.md)
+[Mac の画面 relay と Off／View／Control 権限](computer-use.md)
 
 ### installer の既定の道具
 
@@ -272,6 +272,8 @@ provider と最終の作業フォルダで、既定の項目を1つずつ確認�
 - Claude は `--allowed-tools`、Codex は tool ごとの `approval_mode = "approve"` で渡します。Claude in Chrome 自身の操作確認は別で、人が Allow を押す必要があります
 - `mcp:<server>`（`:all` なし）で選んだ server と、版の分からない server は、写す・有効にするだけです。その tool を呼ぶには、利用者が自分の設定で承認します（Codex なら installer の overlay）。承認が無いと、無人の child は最初の呼び出しで止まります（WSL の Claude で、許可が無いと拒否され、`--allowed-tools` で許可すると呼べることを確かめました）
 - 承認は起動・resume のたびに、その時の server の版と表から決め直します。resume の前に server が表に無い版へ上がっていれば、承認は起動時より狭くなり（`screen:read` と `:all` は止まり）、広がることはありません
+
+macOS の Antigravity は、親なし・委任ともに、管理された ORRERY Mail の個別の道具（`whois` など）を起動時にそのセッション内で許可します。管理された Mail に解決できる場合だけ適用され、利用者の Ask・Deny が優先されます。[Antigravity の権限](antigravity.md)
 
 ### 写せる server と検査（Claude）
 
@@ -320,9 +322,9 @@ WSL から起動した Windows のプロセスは、その WSL が動く Windows
 
 `mail-only` が絞るのは MCP・ブラウザ・computer use です。Claude Code や Codex に組み込みの tool（shell・ファイル・WebFetch など）と、利用者の hooks・skills はそのまま残ります。
 
-これは child への方針であって、技術的な隔離ではありません。child は利用者と同じ権限で動き、自分の設定ファイルや記録を書き換えられます。dashboard の API にも呼び出し元の認証はありません。computer use の本当の歯止めは、Mac の computer use のアプリごとの許可（人が画面で出す）と、Windows-MCP を起動する側（公開する tool を絞る）に置いてください。
+この方針が適用されるのは ORRERY が生成する道具の経路です。child は利用者と同じ OS 権限を持ちます。macOS のアプリの許可は利用者が管理し、追加 MCP の公開範囲は提供元で設定します。
 
-道具変更は EXIT と resume で行います。動作中の process への追加や UI の道具欄はありません。
+渡す道具は EXIT と Resume で変更できます。稼働中に用意済みの画面 relay の権限を変える場合は、operator capability を使います。[Computer use API](api.md#computer-use-api)
 
 ## ブラウザと computer use: 何が届くか、人がやること
 
@@ -340,9 +342,9 @@ ORRERY から起動した agent（child・NEW AGENT）に、ブラウザと comp
 | 経路 | 届き方 |
 |---|---|
 | `/delegate` の child | `--tools`・`--claude-chrome(-device)`・overlay が効く |
-| NEW AGENT（親なし、`--standalone`） | Codex は child と同じ生成 home を使い、overlay と `--tools` の記録が効きます。承認方針は Codex の設定に従います。Claude は NEW AGENT のフォームで指定した値だけを使い、`AGENTSTACK_CLAUDE_CHILD_CHROME` の env は使いません。macOS の Computer use 欄では Off／View／Control を選べます |
+| NEW AGENT（親なし、`--standalone`） | Codex は child と同じ生成 home を使い、overlay と `--tools` の記録が効きます。承認方針は Codex の設定に従います。Claude は NEW AGENT のフォームで指定した値だけを使い、`AGENTSTACK_CLAUDE_CHILD_CHROME` の env は使いません。macOS の Computer use 欄では Claude Code・Codex CLI・dsh・Hermes・Antigravity CLI で Off／View／Control を選べます。Antigravity は親なしでも画面操作を選べ、cockpit とスマホでは Browser も選べます |
 | resume | Codex は起動と resume のたびに home を作り直すので overlay が効きます。Claude は起動の記録から同じ設定を復元します（記録が無い child は ORRERY の選択を復元せず、利用者の Claude 設定をそのまま継承します。ブラウザや computer use が付かないことを意味しません） |
-| 人が端末で直接起動した `claude` / `codex` | 対象外です。実際の `~/.claude`・`~/.codex` の設定だけで決まり、ORRERY は変えません |
+| 人が端末で直接起動した `claude` / `codex` | 道具の設定は利用者が管理します。ORRERY に表示される稼働中の agent では、起動記録がなくても確認できた値を表示します。[権限の表示](computer-use.md#permission-status) |
 
 人が端末で直接 Codex を起動する場合に同じ許可が欲しければ、利用者自身が `~/.codex/config.toml` の `[mcp_servers.chrome-devtools]` に `default_tools_approval_mode = "approve"`（または tool ごとの `approval_mode`）を書きます。この許可は server の全 tool を含み、任意のページスクリプトを動かす `evaluate_script` も承認なしになります。人が画面を見ている対話の起動なら、書かずに承認を画面で出すほうが安全です。
 
@@ -374,9 +376,13 @@ child agent が要るのは次のような場合です。
 
 **コンテキストを取っておきたいときも child が向きます。** 終了した agent も dashboard の検索から呼び出して resume できるので、「この文脈を持った相手」を残しておいて必要なときに再開する使い方ができます。組み込み subagent は呼び出しが閉じた時点で消えるので、これができません。
 
+## 子が人の操作を待つとき
+
+legacy dashboard は、親付きの tmux の子が、承認・フォルダの信頼・ログインなどの認識できる画面で20秒以上止まると、子の既存の ORRERY Mail で親に1通通知します。通知には子の名前、画面の種類、固定の画面文言が含まれます。子が通常の作業状態に戻ると、次の停止も通知できます。親を確認できる子と有効な Mail が対象です。[Dashboard の DECK](dashboard.md#deck)
+
 ## 通知が会話に割り込むとき
 
-子の報告は親の入力欄に直接タイプされます。子を何体も抱えていると、人間が親と話している最中に進捗報告が挟まります。
+子からの報告の通知は、親の入力欄が空で送信できるときに入ります。作業中の Hermes への通常文の自動通知は保留されます。[Mail watcher の動作](launchers.md#mail-watcher-と-repl-注入)
 
 ```bash
 export AGENTSTACK_MAIL_NOTIFY_MIN_IMPORTANCE=high
