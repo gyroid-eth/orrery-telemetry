@@ -119,6 +119,7 @@ fi
 # expire first or the periodic scan can start a duplicate bot delivery.
 LEASE_TTL=$((HEADLESS_REPLY_TIMEOUT + 30))
 PERSISTENT_DELIVER="${AGENTSTACK_PERSISTENT_DELIVER:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/agentstack-persistent-deliver}"
+GEMINI_INTERACTIVE_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gemini_interactive.py"
 mkdir -p "$STATE_DIR" "$LEASE_DIR"
 
 log() { echo "[mail-watcher $(date '+%H:%M:%S')] $*"; }
@@ -697,6 +698,19 @@ deliver_worker() {
         return 0
     fi
 
+    local gemini_interactive gemini_identity=""
+    gemini_interactive=$(run_to "$TMUX_TIMEOUT" tmux show-environment -t "=$session_name" AGENTSTACK_GEMINI_INTERACTIVE 2>/dev/null) || gemini_interactive=""
+    if [[ "$gemini_interactive" == "AGENTSTACK_GEMINI_INTERACTIVE=1" ]]; then
+        gemini_identity=$(run_to "$TMUX_TIMEOUT" tmux display-message -t "=$session_name:" -p \
+            '#{session_name}|#{session_id}|#{session_created}|#{pid}' 2>/dev/null) || gemini_identity=""
+        if [[ -z "$gemini_identity" ]] || ! AGENTSTACK_RUNTIME_DIR="$STATE_DIR" run_to "$TMUX_TIMEOUT" \
+            "${AGENTSTACK_PYTHON:-python3}" "$GEMINI_INTERACTIVE_HELPER" wake-ready "$agent_name" "$gemini_identity"; then
+            state_mark_result "$agent_name" "$msg_key" "gemini_not_ready" "watcher"
+            release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+            return 0
+        fi
+    fi
+
     # bare shell には inject しない (Claude REPL でないため)。
     # busy 判定はあえて行わない: 2026-05-22 に busy-skip を入れたところ、busy な
     # agent (特に game 進行役の NavyMaxwell は "Running scheduled task" 等で常時
@@ -738,6 +752,11 @@ deliver_worker() {
     # before constructing/injecting a notification into the resumed conversation.
     mail_disabled=$(run_to "$TMUX_TIMEOUT" tmux show-environment -t "=$session_name" AGENTSTACK_MAIL_DISABLED 2>/dev/null) || mail_disabled=""
     if [[ "$mail_disabled" == "AGENTSTACK_MAIL_DISABLED=1" ]]; then
+        release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
+        return 0
+    fi
+    if [[ -n "$gemini_identity" && "$gemini_identity" != "$(run_to "$TMUX_TIMEOUT" tmux display-message -t "=$session_name:" -p \
+        '#{session_name}|#{session_id}|#{session_created}|#{pid}' 2>/dev/null)" ]]; then
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi

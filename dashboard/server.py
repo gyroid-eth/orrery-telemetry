@@ -2126,6 +2126,22 @@ def _card_claude_screen_mode(screen_launch, definition, project):
 
 def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None):
     name, program = row["name"], row.get("program")
+    if program == "antigravity" and registration and _valid(name):
+        children = Path(RUNTIME_DIR) / "child-agents"
+        state = _card_child_state(children, name, registration)
+        plan = state.get("gemini_launch")
+        if isinstance(plan, dict):
+            identity = f'{name}|{session.get("session_id")}|{session.get("created")}|{session.get("tmux_pid")}'
+            status = _card_private_mapping(children / f"{name}.agy-status.json") if row.get("running") else {}
+            if status.get("tmux") != identity:
+                status = {}
+            return {"cwd": agent_card.absolute_cwd(plan.get("cwd")),
+                    "model_id": agent_card.native_model_id(status.get("model_id")) or plan.get("model"),
+                    "effort": status.get("effort") or plan.get("effort"),
+                    "act_state": status.get("activity"),
+                    "parent_state": "child", "parent_agent": state.get("parent_agent"),
+                    "harness_kind": "antigravity", "computer_use": None, "browser_use": None,
+                    "ctx_window_tokens": None}
     kind = agent_card.HARNESS_KIND.get(program)
     cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
     candidate_parent = agent_card.parent_name(session.get("parent_agent"), name) if kind else None
@@ -4116,13 +4132,7 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     if program in harness_runtime.HARNESSES:
         return _do_resume_native(session, program, open_terminal=open_terminal, replace_husk=replace_husk)
     if program.startswith("antigravity"):
-        return {
-            "ok": False,
-            "error": (
-                "Antigravity resume is not supported by ORRERY; "
-                "start a new Antigravity session instead"
-            ),
-        }
+        return _do_resume_gemini(session, open_terminal=open_terminal, replace_husk=replace_husk)
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
     if program.startswith("codex"):
@@ -5486,6 +5496,101 @@ def _do_resume_native(session, program, *, open_terminal=None, replace_husk=Fals
             **({'warning': launched['warning']} if launched.get('warning') else {})}
 
 
+@functools.lru_cache(maxsize=4)
+def _gemini_interactive_module(path):
+    return _runtime_runpy.run_path(path, init_globals={"child_resume": _child_resume_module()})
+
+
+def _gemini_resume_material(session):
+    module = _child_resume_module()
+    runtime = Path(RUNTIME_DIR)
+    helper = Path(HOOKS_DIR) / "gemini_interactive.py"
+    registration = _resume_registration(session, {"antigravity"})
+    if sys.platform != "darwin" or not registration or not helper.is_file():
+        raise _ResumeCapabilityError("unsupported_provider", "Managed Antigravity resume is unavailable")
+    current = _card_child_state(runtime / "child-agents", session, registration)
+    if not current.get("gemini_launch"):
+        raise _ResumeCapabilityError("unsupported_provider", "No managed Antigravity launch was recorded")
+    try:
+        state = module.inspect_retained(runtime, session, agent_id=registration["agent_id"],
+                                        project_key=registration["project_key"], program="antigravity")
+        interactive = _gemini_interactive_module(str(helper))
+        cwd = interactive["validate_plan"](state["gemini_launch"])
+        sid = interactive["saved_conversation"](runtime, session, registration)
+    except module.ResumeStateError as exc:
+        raise _ResumeCapabilityError(exc.code, str(exc)) from None
+    except (OSError, ValueError, KeyError, TypeError):
+        raise _ResumeCapabilityError("config_unrestorable", "Antigravity launch settings are unavailable") from None
+    if not isinstance(sid, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", sid):
+        raise _ResumeCapabilityError("no_history", "Antigravity conversation could not be verified")
+    return registration, state, helper, cwd, sid
+
+
+def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False):
+    module = _child_resume_module()
+    runtime = Path(RUNTIME_DIR)
+    started = mail_changed = was_retired = False
+    try:
+        registration, state, helper, cwd, sid = _gemini_resume_material(session)
+        owner_id = registration["agent_id"]
+        project = registration["project_key"]
+        module.begin_resume(runtime, session, agent_id=owner_id, project_key=project,
+                            program="antigravity")
+        started = True
+        auth = _mcp_call("register_agent", {
+            "existing_agent_id": owner_id, "project_key": project, "name": session,
+            "program": "antigravity", "model": state["gemini_launch"]["model"],
+            "registration_token": state["registration_token"],
+        })
+        data = auth.get("data") or {}
+        if (not auth.get("ok") or data.get("id") != owner_id or data.get("name") != session
+                or data.get("program") != "antigravity"):
+            raise _ResumeCapabilityError("credential_missing", "Antigravity owner authentication failed")
+        was_retired = bool(data.get("retired_at"))
+        _set_claude_mail_retired(session, registration, retired=False)
+        mail_changed = True
+        environment = {
+            "AGENTSTACK_HOME": str(Path(HOOKS_DIR).parent), "AGENTSTACK_HOOKS_DIR": HOOKS_DIR,
+            "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": project,
+            "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
+            "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
+            "AGENT_NAME": session, "PARENT_AGENT": state["parent_agent"],
+            "AGENTSTACK_RESERVED_IDENTITY": "1", "AGENTSTACK_GEMINI_INTERACTIVE": "1",
+        }
+        context = Path(HOOKS_DIR) / "project-context.sh"
+        command = (
+            ". " + shlex.quote(str(context)) + ' && agentstack_apply_workspace_context "$PWD" "$AGENTSTACK_PROJECT_KEY" && exec '
+            + shlex.join([state["gemini_launch"]["python"], str(helper), "run", "--conversation", sid])
+        )
+        launched = _launch_claude_resume_tmux(
+            ["tmux", "new-session", "-A", "-s", session, "-c", str(cwd),
+             *[value for key, item in environment.items() for value in ("-e", key + "=" + item)],
+             # The launcher prepends the wait gate to the Bash command. Split
+             # argv keeps tmux from running it through the user's default shell.
+             "/bin/bash", "-c", command],
+            title=session, open_terminal=open_terminal, replace_husk=replace_husk)
+        if not launched.get("ok"):
+            raise _ResumeCapabilityError("config_unrestorable", "Antigravity tmux resume could not be started")
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        result = _resume_unavailable(getattr(exc, "code", "config_unrestorable"))
+        if isinstance(exc, _ResumeCapabilityError):
+            result["error"] = str(exc)
+        if started:
+            try:
+                module.cancel_resume(runtime, session, agent_id=owner_id, project_key=project)
+            except (OSError, ValueError):
+                result.setdefault("rollback_errors", []).append("Antigravity retained state could not be restored")
+        if mail_changed and was_retired:
+            try:
+                _set_claude_mail_retired(session, registration, retired=True)
+            except (OSError, ValueError):
+                result.setdefault("rollback_errors", []).append("Antigravity Mail retirement could not be restored")
+        return result
+    _invalidate_resume_capability_cache(session)
+    return {"ok": True, "action": "resumed", "resume_capability": "ready", "terminal": launched.get("adapter")}
+
+
 def _resume_capability(
     session: str,
     program: str,
@@ -5507,18 +5612,25 @@ def _resume_capability(
         return "invalid_identity"
     normalized_program = (program or "").strip().lower()
     if (
-        normalized_program.startswith("antigravity")
-        or normalized_program == "codex-app"
+        normalized_program == "codex-app"
     ):
         return "unsupported_provider"
     if not (
         normalized_program.startswith("claude")
+        or normalized_program.startswith("antigravity")
         or normalized_program in _CODEX_PROGRAMS
         or normalized_program in harness_runtime.HARNESSES
     ):
         return "unsupported_provider"
     if _resume_opens_terminal(open_terminal) and _terminal_adapter() == "none":
         return "terminal_unavailable"
+
+    if normalized_program.startswith("antigravity"):
+        try:
+            _gemini_resume_material(session)
+        except _ResumeCapabilityError as exc:
+            return exc.code
+        return "ready"
 
     if normalized_program in harness_runtime.HARNESSES:
         try:
@@ -9716,18 +9828,19 @@ def _spawn_argv(request: dict, spec: SpawnLaunchSpec,
     return args
 
 
-def _codex_self_update_on_screen(session: str) -> bool:
-    """Whether the session shows Codex replacing itself (`npm install -g`).
+def _codex_self_update_on_screen(session: str) -> bool | None:
+    """Whether Codex is replacing itself, or None if the pane is unreadable.
 
     A global npm install renames directories as it goes; killing it midway
     left neither the old nor the new codex usable on the machine (#60).
     """
     try:
         result = _tmux_run(['capture-pane', '-t', f'={session}', '-p'], capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    pane = getattr(result, "stdout", "")
-    return isinstance(pane, str) and "Updating Codex via" in pane
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not isinstance(result.stdout, str):
+        return None
+    return "Updating Codex via" in result.stdout
 
 
 def _failed_spawn_cleanup(script: str, child_name: str, environment: dict) -> bool:
@@ -9862,7 +9975,8 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         result.update(extra)
         return result
 
-    if provider in {"claude", "codex"} and (
+    requires_child_binding = provider in {"claude", "codex"} or (provider == "gemini" and sys.platform == "darwin")
+    if requires_child_binding and (
         type(registered_agent_id) is not int or registered_agent_id <= 0
     ):
         return retained_registration_error(
@@ -10030,19 +10144,25 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                 "[spawn_child] creation unconfirmed; recovery state and worktree retained")):
             # The launcher never acknowledged ownership of this session.
             return False
-        if provider == "codex" and _codex_self_update_on_screen(child_name):
-            print(f"spawn {child_name}: Codex is updating itself; session left running (#60)", file=sys.stderr)
-            return False
         try:
-            probe = _tmux_run(['has-session', '-t', f'={child_name}'], capture_output=True, text=True)
-            if probe.returncode:
-                # A transport refusal (also exit 1) is not proof of absence.
-                spawn_stop_confirmed = "can't find session" in (getattr(probe, 'stderr', '') or '')
-            else:
-                killed = _tmux_run(['kill-session', '-t', f'={child_name}'], capture_output=True, text=True)
-                spawn_stop_confirmed = killed.returncode == 0
-        except (OSError, subprocess.SubprocessError):
+            probe = _tmux_run(['has-session', '-t', f'={child_name}'], capture_output=True, text=True, timeout=5)
+            if probe.returncode == 0:
+                updating = _codex_self_update_on_screen(child_name) if provider == "codex" else False
+                if updating is True:
+                    print(f"spawn {child_name}: Codex is updating itself; session left running (#60)", file=sys.stderr)
+                    return False
+                if updating is False:
+                    killed = _tmux_run(['kill-session', '-t', f'={child_name}'], capture_output=True, text=True, timeout=5)
+                    spawn_stop_confirmed = killed.returncode == 0
+            elif (getattr(probe, 'stderr', '') or '').startswith("can't find session:"):
+                spawn_stop_confirmed = True
+        except (OSError, RuntimeError, subprocess.SubprocessError):
             pass
+        if not spawn_stop_confirmed:
+            # A failed capture or guarded target refusal can mean the session
+            # disappeared mid-cleanup. Confirm absence without targeting it.
+            listed = _tmux_observed(['list-sessions', '-F', '#{session_name}'])
+            spawn_stop_confirmed = listed is not None and child_name not in listed.splitlines()
         return spawn_stop_confirmed
 
     def failed_spawn_result(error, **fields):
@@ -10085,7 +10205,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             f.flush()
             os.fsync(f.fileno())
         os.chmod(token_file, 0o600)
-        if provider in {"claude", "codex"} or program in harness_runtime.HARNESSES:
+        if requires_child_binding or program in harness_runtime.HARNESSES:
             binding_file = f"{token_file}.binding.json"
             binding_fd = os.open(binding_file, open_flags, 0o600)
             with os.fdopen(binding_fd, "w") as f:
@@ -10450,6 +10570,7 @@ def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
         target["category"] == "agent"
         and program.startswith("antigravity")
         and _tmux_session_env(session, "AGENTSTACK_RESERVED_IDENTITY") == "1"
+        and _tmux_session_env(session, "AGENTSTACK_GEMINI_INTERACTIVE") != "1"
     ):
         provider_pid = _fresh_agent_process_pid(session, program)
         if provider_pid is None:
@@ -11709,10 +11830,10 @@ def _tmux_observed(args: list[str]) -> str | None:
         return None
     if out.returncode == 0:
         return out.stdout
-    err = (out.stderr or "").lower()
+    err = (out.stderr or "").strip().lower()
     # Only "there is no server" is a measurement of nothing running. A socket
     # that exists but cannot be opened (permission denied, ...) is not.
-    if err.startswith("no server running on ") or (
+    if err == "no sessions" or err.startswith("no server running on ") or (
         err.startswith("error connecting to ") and "(no such file or directory)" in err
     ):
         return ""

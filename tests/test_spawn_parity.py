@@ -1,6 +1,7 @@
 """Standard spawn contracts, using fixture catalogs and no live runtimes."""
 import json
 from pathlib import Path
+from subprocess import CompletedProcess
 from types import SimpleNamespace
 
 import pytest
@@ -185,7 +186,8 @@ def test_cleanup_result_preserves_canonical_state(preview, monkeypatch, tmp_path
         def wait(self, timeout=None):
             return 2
     monkeypatch.setattr(server.subprocess, 'Popen', lambda *a, **k: Proc())
-    monkeypatch.setattr(server, '_tmux_run', lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(server, '_tmux_run',
+                        lambda args, **kwargs: CompletedProcess(args, 0, stdout='', stderr=''))
     owner = runtime / 'agent_token_FixtureAgent'
     state = runtime / 'child-agents/FixtureAgent.json'
     def cleanup(script, name, environment):
