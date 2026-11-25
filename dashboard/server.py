@@ -10064,7 +10064,9 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             "project_key": project_key,
             "sender_name": parent,
             "to": [child_name],
-            "cc": [parent],
+            # The parent's audit copy. Mail signals to/cc recipients only, so
+            # bcc keeps the parent from being notified of its own task mail.
+            "bcc": [parent],
             "subject": subject,
             "body_md": "\n".join(body_lines),
             "importance": "high",
