@@ -52,7 +52,7 @@ API 起動は legacy mode です。macOS の Keychain と Linux の明示した 
 
 ## Telemetry 単独の導入と確認
 
-macOS と Windows で同じ手順です。必要なのは Python 3.11 以上、`git`、`tmux`、`uv` で、macOS なら `brew install tmux uv` で揃います。
+Python 3.11 以上と `git`・`tmux`・`uv` が必要です。[OS ごとの前提](https://github.com/gyroid-eth/orrery/blob/master/README.md#始める前に)で `curl`・`lsof`・`xz` も確認します。macOS では `brew install uv` で uv を追加できます。公式スクリプトで入れた場合は `export PATH="$HOME/.local/bin:$PATH"` を同じシェルで実行して、`uv --version` で確認します。
 
 **Windowsの人へ**: WSL2のUbuntuの中に入れます。以下のコマンドはUbuntuで実行し、dashboardはWindowsのブラウザで開きます。[WSL2の準備](install.md#windowswsl2で入れる)を済ませてから、Claude/Codexを選ぶ場合はCLIのログイン、DeepSeek/Localを選ぶ場合は[APIの初期設定](native-setup.md)へ進みます。
 

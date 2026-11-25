@@ -10,6 +10,13 @@ from collections import OrderedDict, deque
 from copy import deepcopy
 from typing import Callable
 
+if __package__:
+    from .agent_process import UNKNOWN_REASONS
+    from .agent_card import AGY_BROWSER_UNRECORDED, AGY_LAUNCH_UNRECORDED
+else:
+    from agent_process import UNKNOWN_REASONS
+    from agent_card import AGY_BROWSER_UNRECORDED, AGY_LAUNCH_UNRECORDED
+
 WINDOWS = {'all': None, 'day': 86400, '15m': 900,
            **{'m'+str(n): n*60 for n in range(15, 43201, 15)}}
 NAME = re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,95}\Z')
@@ -19,6 +26,12 @@ STATES = {'run', 'idle', 'finished', 'gone', 'retired', 'unknown'}
 ACTS = {'work', 'wait', 'ask', 'question'}
 PHASE_ELAPSED = re.compile(
     r'(?:[0-9]{1,4}h(?: [0-9]{1,3}m)?(?: [0-9]{1,2}s)?|[0-9]{1,3}m(?: [0-9]{1,2}s)?|[0-9]{1,2}s)')
+
+
+PERMISSION_UNKNOWN_REASONS = {
+    'process': UNKNOWN_REASONS,
+    'launch': frozenset({AGY_BROWSER_UNRECORDED, AGY_LAUNCH_UNRECORDED}),
+}
 
 
 def png_image(data):
@@ -86,6 +99,25 @@ def project_agent(row):
     # task/group metadata or the remaining annotation dictionary.
     if isinstance(role, str) and role.strip() and not any(ord(c) < 32 or ord(c) == 127 for c in role):
         result['role'] = role.strip()[:40]
+    # Only status and fixed reasons cross this boundary. Inactive rows do
+    # not show a running process's permission.
+    if running is True:
+        if row.get('computer_use') in ('off', 'view', 'control'):
+            result['computer_use'] = row['computer_use']
+        if type(row.get('browser_use')) is bool:
+            result['browser_use'] = row['browser_use']
+        if 'computer_use' in result and row.get('computer_use_source') in ('launch', 'relay'):
+            result['computer_use_source'] = row['computer_use_source']
+        if 'browser_use' in result and row.get('browser_use_source') == 'launch':
+            result['browser_use_source'] = 'launch'
+        permission_source = row.get('permission_source')
+        reason_allowlist = PERMISSION_UNKNOWN_REASONS.get(permission_source) if isinstance(permission_source, str) else None
+        if reason_allowlist:
+            for key in ('computer_use', 'browser_use'):
+                reason_key = key + '_reason'
+                reason = row.get(reason_key)
+                if key not in result and isinstance(reason, str) and reason in reason_allowlist:
+                    result[reason_key] = reason
     duration = row.get('work_disp')
     if (act == 'work' and isinstance(duration, str)
             and re.fullmatch(r'[0-9]{1,6}(?:s|m[0-9]{2}s|h[0-9]{2}m)', duration)):

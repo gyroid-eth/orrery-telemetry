@@ -24,13 +24,13 @@ class ThinInstall(unittest.TestCase):
             root = Path(temporary) / 'runtime'
             root.mkdir()
             calls, paths = [], {}
-            def acquire(argv, *, cwd, env):
+            def acquire(argv, *, cwd, env, progress=False):
                 calls.append(argv)
                 if '-p' in argv:
                     return json.dumps({'version': 'v26.7.0', 'execPath': argv[0]})
                 if len(argv) > 1 and argv[1].endswith('/scripts/build/tui.mjs'):
                     make_product(root, ca.target)
-                if argv[:2] == ['git', 'clone']:
+                if argv[:2] == ['git', 'init']:
                     (root / 'source').mkdir()
                     ca.source(root / 'source')
                 elif argv[:2] == ['git', 'rev-parse']:

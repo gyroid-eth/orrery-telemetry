@@ -52,7 +52,7 @@ These six terms help you read this standalone procedure and the reference guides
 
 ## Standalone installation and verification
 
-The steps are the same on macOS and Windows. You need Python 3.11 or newer, `git`, `tmux`, and `uv`; on macOS, `brew install tmux uv` covers the last two.
+Use Python 3.11 or later, `git`, `tmux`, and `uv`. Check the [OS prerequisites](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#before-you-start) for `curl`, `lsof`, and `xz`. On macOS you can add uv with `brew install uv`. If you use uv's official installer, run `export PATH="$HOME/.local/bin:$PATH"` in the same shell and verify with `uv --version`.
 
 **On Windows**: install inside WSL2 Ubuntu and run the commands below there. Open the dashboard in your Windows browser. Complete the [WSL2 preparation](install.en.md#installing-on-windows-wsl2), then sign in to the chosen CLI for Claude/Codex or follow [API setup](native-setup.en.md) for DeepSeek/Local.
 

@@ -4,7 +4,7 @@ upstream Issue #395 の第1段階です。公開ツールは `orrery_status`、`
 
 ## 互換性と公開範囲
 
-Python 3.11以上と、明示した `ORRERY_MCP_MODE=legacy` または `fresh` が必要です。受け付けるDashboard API世代はlegacyが37・38・39・40・41・42・43・44・45・46・47・48・49、freshが34・35・36・37・38・39・40・41・42・43・44・45・46・47・48・49です。世代番号と応答の形を両方検証します。方式は番号から推測せず、legacyはruntime_modeのない契約、freshはruntime_mode=freshとinstance/capabilityの契約を必要とします。未知の世代、global、方式不一致は一覧を読む前、または待受を開く前に拒否します。
+Python 3.11以上と、明示した `ORRERY_MCP_MODE=legacy` または `fresh` が必要です。受け付けるDashboard API世代はlegacyが37・38・39・40・41・42・43・44・45・46・47・48・49・50・52・53、freshが34・35・36・37・38・39・40・41・42・43・44・45・46・47・48・49・50・52・53です。世代番号と応答の形を両方検証します。方式は番号から推測せず、legacyはruntime_modeのない契約、freshはruntime_mode=freshとinstance/capabilityの契約を必要とします。未知の世代、global、方式不一致は一覧を読む前、または待受を開く前に拒否します。
 
 legacyでは `ORRERY_MCP_PROJECT_KEY` に、Dashboardが使用しているproject keyを1つ、完全一致で指定します。外部MCP引数からは変更できません。応答全体のproject_keyと設定を照合し、各行のproject_keyも一致するものだけを返します。従来APIには行の所属情報がないため、API 37で読み取り用の所属fieldを追加しています。旧APIを推測で通すことはせず、アダプターと同じ版のDashboardが必要です。Dashboardの導入・更新は通常の手順で別途行い、アダプターから実サービスを切り替えません。
 
@@ -30,7 +30,7 @@ export PYTHONPATH="$PWD/integrations/chatgpt_mcp/src"
 export ORRERY_MCP_MODE=legacy
 export ORRERY_MCP_PROJECT_KEY='/actual/dashboard/project-key'
 export ORRERY_MCP_DASHBOARD_URL=http://127.0.0.1:8770
-export ORRERY_MCP_PORT=8791
+export ORRERY_MCP_PORT=8792
 python3 -m orrery_chatgpt_mcp pair --show-url
 python3 -m orrery_chatgpt_mcp check
 python3 -m orrery_chatgpt_mcp serve
@@ -40,13 +40,15 @@ freshを実際に使う環境ではORRERY_MCP_MODE=freshにし、`unset ORRERY_M
 
 「読み取り専用」は、MCPにORRERY設定変更・エージェント登録・spawn・Mail送信の操作を公開しない、というAPI上の意味です。freshの `GET /api/agents` は、既存のDashboard実装からMailの `owner_transaction`（`write=True` / `BEGIN IMMEDIATE`）を通り、DBの読み取り専用transactionではありません。この経路は本アダプター導入前からの挙動で変更しておらず、DBへの書き込みが一切ないことや、書き込み用ロックを取らないことを保証する意味ではありません。
 
-運用者用のpairとpair --rotateは、アダプター自身の秘密保管先を作成・更新します。既定は `~/.config/orrery-mcp-readonly/pairing.json`、directory/fileは0700/0600です。秘密URLをIssue・共有資料に貼らず、再発行後はTunnel転送先も新URLへ変更します。稼働中アダプターは次の要求から旧URLを拒否します。
+アダプターの既定ポートは **8792** です。cockpit は既定で 8791 を使います。`ORRERY_MCP_PORT` を指定するとその値を優先します。使用中なら、空いている別のポートを指定し、ペアリングで表示するローカル URL と Tunnel の転送先に同じポートを使ってください。
+
+運用者用のpairとpair --rotateは、アダプター自身の秘密保管先を作成・更新します。既定は `~/.config/orrery-mcp-readonly/pairing.json`、directory/file は0700/0600です。保存ディレクトリを変更するには `ORRERY_MCP_STATE_DIR` に絶対パスを指定し、`pair`・`check`・`serve` で同じ設定を使います。秘密URLをIssue・共有資料に貼らず、再発行後はTunnel転送先も新URLへ変更します。稼働中アダプターは次の要求から旧URLを拒否します。
 
 ## Secure MCP Tunnelの設定
 
 別端末・ChatGPTへの転送は運用者が用意した専用の [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) を使います。アダプターはTunnelや認証設定を作成しません。既存の別サービス用Tunnelを上書きしたり、同じTunnelへ二重接続したりしないでください。
 
-`tunnel-client` のHTTP転送先 `MCP_SERVER_URL`（またはprofileのmcp.server_urls[].url）には、`http://127.0.0.1:8791/mcp/<pairで発行した秘密>` を末尾まで指定します。/mcpで止めたり秘密部分を落としたりしません。Tunnelクライアントが固定のローカルURLへ新しいHTTP要求を作るため、アダプターが受け取るHostは127.0.0.1:8791です。外向きHostの許可やHost検査の解除は不要です。対応する非ブラウザクライアントはOriginを送りません。Originを送るブラウザからの直接接続は403です。
+`tunnel-client` のHTTP転送先 `MCP_SERVER_URL`（またはprofileのmcp.server_urls[].url）には、`http://127.0.0.1:8792/mcp/<pairで発行した秘密>` を末尾まで指定します。/mcpで止めたり秘密部分を落としたりしません。Tunnelクライアントが固定のローカルURLへ新しいHTTP要求を作るため、アダプターが受け取るHost は `127.0.0.1:8792` です（上の例の場合）。外向きHostの許可やHost検査の解除は不要です。対応する非ブラウザクライアントはOriginを送りません。Originを送るブラウザからの直接接続は403です。
 
 通常のreverse proxyを間に置く場合も、入口で認証・アクセス制御を行ったうえで、Hostを固定のローカルauthorityに設定し、秘密pathをそのまま保持してください。利用者が送ったForwarded-Hostを信用したり、不特定ブラウザのOriginを単に削除して通したりしないでください。外向きHostをそのまま転送する設定では403になるのが正しい動作です。
 

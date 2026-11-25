@@ -4,6 +4,16 @@
 
 Claude Code・Codex・DeepSeek・Local LLMのagentが直接話し、仕事を分担し、結果を確かめ合う。その働きとMailの往復を一枚の画面で見渡せるのがORRERY Telemetryです。Claude CodeとCodexは各CLI、DeepSeekとLocal LLMはdshまたはHermesを使います。使いたい系統を選んで準備でき、DeepSeek・LocalのためにClaude CodeやCodexを先に入れる必要はありません。ターミナルも同じ画面で使う[ORRERY cockpit](https://github.com/gyroid-eth/orrery)と組み合わせて使えます。
 
+## 両方入れるなら（orrery の 1 行）
+
+はじめての導入は **ブラウザー版 cockpit** から始めます。[OS ごとの準備](https://github.com/gyroid-eth/orrery/blob/master/README.md#始める前に)を済ませ、次の1行で cockpit と Telemetry をまとめて入れます。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh | bash
+```
+
+表示される計画を確認して自分で承認し、`ORRERY's base is ready` とブラウザーの **Your first flight** を確認します。[完了条件と追加機能の表](https://github.com/gyroid-eth/orrery/blob/master/README.md#共通部分の完了)・[利用中の agent と導入を進める](https://github.com/gyroid-eth/orrery/blob/master/docs/install-with-agent.md)
+
 ![Telemetry の NETWORK で Mail の線を選んで、2体の間のメッセージを読む](docs/img/network-mail.gif)
 
 ## 目的から始める
@@ -25,7 +35,7 @@ provider は接続先、model はそこで使うモデル、harness は道具や
 
 ## Telemetry だけを入れる
 
-この repository だけで入る、裏で動く側です。Python 3.11 以上、`git`、`tmux`、`uv` が要ります（Mac なら `brew install tmux uv`）。Windows は WSL2 の Ubuntu 内で実行します。
+この repository だけで入る、裏で動く側です。Python 3.11 以上と `git`・`tmux`・`uv` が要ります。[OS ごとの前提](https://github.com/gyroid-eth/orrery/blob/master/README.md#始める前に)で `curl`・`lsof`・`xz` もそろえ、公式スクリプトで uv を入れた場合は現在の PATH へ反映します。Windows は WSL2 Ubuntu の中で実行します。
 
 ```bash
 git clone https://github.com/gyroid-eth/orrery-telemetry.git
@@ -59,16 +69,6 @@ top-level / delegated child の起動は、選択した作業フォルダ（Git 
 - **Telemetry** は、agent・Mail・dashboard を動かす裏方と、その状態を見る Telemetry 画面です。
 - **[cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md)** は、ターミナルを並べて操作する画面です。agent の起動・Mail・Telemetry 画面は Telemetry が担うので、cockpit は Telemetry と組み合わせて使います（ターミナルだけなら Telemetry が止まっていても開けます）。
 - cockpit 側から入れると、**両方まとめて入ります。**
-
-## 両方入れるなら（orrery の 1 行）
-
-Mac のターミナル、または WSL2 Ubuntu 内で、次の 1 行です。cockpit と Telemetry を一緒に入れます。
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh | bash
-```
-
-入る場所（`~/orrery`・`~/orrery-telemetry`・`~/.agentstack`・`~/orrery-work`）と port、作業 folder の変え方、完全に消す手順は、[orrery の README](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)にあります。単独で入れた Telemetry の取り除き方は[Uninstall](docs/install.md#uninstall)です。
 
 ## 画面のガイドで始める
 
@@ -106,6 +106,7 @@ global network の稼働状態・本人照合と unknown の境界は [観測の
 | Telemetry 単独で始める・言葉を調べる | [Getting started](docs/getting-started.md) |
 | install・update・要件を確認する | [インストール](docs/install.md) |
 | 指定したスマホで状況だけを見る | [スマホ閲覧用画面](docs/mobile.md)（既定オフ） |
+| ChatGPT から読み取り専用で参照する | [ChatGPT MCP](integrations/chatgpt_mcp/README.md) |
 | 困ったところを調べる | [トラブルシューティング](docs/troubleshooting.md) |
 | 決定的daemonのlocal helperを開発する | [専用bindingと通知](docs/daemon-agents.md)（配備は別承認） |
 | 絶対 path の予約候補を検証する | [候補の契約と試験](docs/absolute-reservations.md)（既定は旧 mode） |

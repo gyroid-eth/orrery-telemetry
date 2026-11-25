@@ -25,6 +25,12 @@ NETWORK may omit nodes outside its selected time window. Absence from the curren
 
 ## DECK
 
+### Parent notifications for human input (legacy)
+
+When a Claude, Codex CLI, dsh, Hermes, or Antigravity tmux child stays on a recognized approval, folder trust, sign-in or setup, usage consent, model selection, or update screen for at least 20 seconds, the dashboard sends ORRERY Mail to its parent. The notice uses the child's existing Mail identity, identifies itself as automatic, and names the screen type. It quotes only fixed labels from the screen. This works with the browser closed.
+
+Each screen is reported once. After the dashboard sees normal work or the ordinary input editor again, it can report the next stop. `AGENTSTACK_RUNTIME_DIR/human-waits.json` records send attempts across dashboard restarts and prevents resends when Mail acceptance is uncertain. The worker verifies the parent and the child's Mail credential before sending.
+
 ### Provider-stop notifications (legacy)
 
 The dashboard displays `MODEL CAPACITY` on DECK and `CAPACITY` on NETWORK when a running Codex CLI is waiting after `Selected model is at capacity. Please try a different model.` A background worker checks approximately every five seconds even with no browser open, confirms two distinct captures, and sends one ORRERY Mail notice to the child's verified `PARENT_AGENT`. The sender is the existing child identity; the message identifies itself as telemetry's automatic observation and includes the time in JST and the error line. It never resumes the child, changes models, or sends pane keystrokes.
@@ -283,7 +289,7 @@ Scientist-rail `available` means that at least one pairing with the 134 adjectiv
 
 - provider tabs built from the server catalog; configured environments also list DeepSeek / Local
 - model cards and usage guidance per provider
-- Claude: Sonnet / Opus / Haiku
+- Claude: Sonnet, Opus, Haiku, and Fable when offered by the catalog
 - Codex defaults to `gpt-6.1-sol` when the selected CLI is 0.159.0 or later (fresh catalog evidence is used if its version is unknown), otherwise `gpt-6-sol`; prior generations remain available through formal IDs such as `gpt-6-sol`
 - Codex effort choices follow `model_efforts` / `model_effort_defaults`; Codex CLI makes the final decision for an explicit effort
 - DeepSeek / Local show Model and Harness (dsh / Hermes) choices from the configured catalog. Select a model, then an available harness; unavailable choices are disabled and labeled “Coming soon”. Helper and Effort follow that model and harness's capabilities. See the [setup guide](install.en.md) and [API reference](api.en.md).
@@ -317,13 +323,13 @@ Task is required and limited to 4,000 characters. ADVANCED open/closed state is 
 - group: optional, at most 24 characters
 - isolation: isolated worktree and base revision
 
-With no parent, the request sends `standalone: true` and starts an independent agent without `PARENT_AGENT`. Selecting a parent creates a normal child, sends the task to the child's inbox, and leaves a CC audit trail for the parent.
+With no parent, the request sends `standalone: true` and starts an independent agent without `PARENT_AGENT`. For a normal delegated launch, the child receives the task in its inbox and the parent gets a BCC copy. For Antigravity, the dedicated launcher passes the task directly to the CLI.
 
 ### Spawn sequence
 
 1. Create child identity and dedicated token with `register_agent`
 2. Apply role / group annotation best-effort
-3. For a normal child only, create a task message with parent as sender and a CC audit trail
+3. For a normal delegated launch, create task Mail with the parent as sender and BCC. The Antigravity launcher passes the task directly
 4. Save the token in a mode-`0600` one-shot file
 5. Start `spawn_child.sh --pre-registered` in the background
 6. Wait up to 120 seconds for launcher readiness verdict

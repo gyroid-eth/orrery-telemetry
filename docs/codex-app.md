@@ -100,6 +100,9 @@ launchd の可否はログイン情報から推測せず、`gui/$UID` への boo
 | --- | --- |
 | `--install-dir PATH` | integration source と manifest の配置先 |
 | `--runtime-dir PATH` | private socket、binding、snapshot、delivery DB、log の配置先 |
+| `--agent-mail-env PATH` | 既存の Mail bearer を参照する絶対パス。token の値はコピーしない |
+| `--signals-dir PATH` | ORRERY Mail の信号ディレクトリの絶対パス |
+| `--python-bin PATH` | Bridge が使う実行可能な Python |
 | `--no-service` | launchd と supervised background のどちらも起動しない。macOS 以外では既定（指定しなくても service は入れない） |
 | `--no-plugin` | marketplace は構築するが Codex plugin を登録しない |
 | `--refresh-plugin-only` | 配置済み payload から、既存の有効な Codex plugin だけを再導入。Bridge state は変更しない |

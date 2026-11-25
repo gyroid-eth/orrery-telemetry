@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hmac
 import json
 import os
@@ -18,6 +19,7 @@ from .model import Dashboard, DashboardError, TOOL_DEFINITIONS, ToolError, invok
 
 SECRET_CHARS = 43
 MAX_BODY = 128 * 1024
+DEFAULT_PORT = 8792
 PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26")
 
 
@@ -50,7 +52,7 @@ class Config:
         if env.get("ORRERY_MCP_AUTH", "pairing") != "pairing":
             raise ConfigurationError("this adapter supports pairing only")
         try:
-            port = int(env.get("ORRERY_MCP_PORT", "8791"))
+            port = int(env.get("ORRERY_MCP_PORT", str(DEFAULT_PORT)))
         except ValueError:
             raise ConfigurationError("invalid port") from None
         if not 1 <= port <= 65535:
@@ -330,7 +332,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         # An incompatible dashboard must fail before any MCP listener is opened.
         snapshot(Dashboard(config.dashboard_url), config.mode, project_key=config.project_key)
-        with Server(("127.0.0.1", config.port), handler(Gateway(config))) as service:
+        try:
+            service = Server(("127.0.0.1", config.port), handler(Gateway(config)))
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            raise ConfigurationError(
+                f"port {config.port} is already in use. Set ORRERY_MCP_PORT to a free "
+                "loopback port, then use that port in the client or tunnel URL."
+            ) from None
+        with service:
             print(f"read-only MCP listening on 127.0.0.1:{config.port}", flush=True)
             try:
                 service.serve_forever(poll_interval=0.3)

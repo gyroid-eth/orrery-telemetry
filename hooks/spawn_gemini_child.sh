@@ -257,6 +257,7 @@ if [[ "$(uname -s)" == Darwin ]]; then
   fi
   ( umask 077 && printf '%s' "$TASK" > "$TASK_RAW_FILE" )
   adapter_args=(--pre-registered "$CHILD_NAME" --child-token-file "$TOKEN_FILE" --model "$MODEL")
+  adapter_args+=(${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"})
   if [[ -n "$WORKTREE_BASE_REV" ]]; then
     adapter_args+=(--worktree-base "$WORKTREE_BASE_REV")
   fi

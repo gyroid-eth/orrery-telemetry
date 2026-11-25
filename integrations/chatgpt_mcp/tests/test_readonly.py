@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from orrery_chatgpt_mcp.model import Dashboard, DashboardError, ToolError, invoke, snapshot
+from orrery_chatgpt_mcp import server
 from orrery_chatgpt_mcp.server import Config, ConfigurationError, Gateway, Server, handler, pair, read_secret
 
 
@@ -171,6 +172,29 @@ def test_invalid_configuration_refused(values):
         Config.from_env(values)
 
 
+def test_default_separate_from_cockpit_and_override_wins():
+    assert Config.from_env({"ORRERY_MCP_MODE": "fresh"}).port == 8792
+    assert Config.from_env({"ORRERY_MCP_MODE": "fresh", "ORRERY_MCP_PORT": "8791"}).port == 8791
+
+
+def test_serve_guides_operator_when_port_is_occupied(tmp_path, monkeypatch, capsys):
+    config_dir = tmp_path / "state"
+    monkeypatch.setenv("ORRERY_MCP_MODE", "fresh")
+    monkeypatch.setenv("ORRERY_MCP_STATE_DIR", str(config_dir))
+    monkeypatch.delenv("ORRERY_MCP_PROJECT_KEY", raising=False)
+    monkeypatch.setattr(server, "snapshot", lambda *args, **kwargs: None)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        monkeypatch.setenv("ORRERY_MCP_PORT", str(port))
+        pair(Config.from_env())
+        assert server.main(["serve"]) == 2
+    err = capsys.readouterr().err
+    assert f"port {port} is already in use" in err
+    assert "Set ORRERY_MCP_PORT to a free loopback port" in err
+
+
 def test_pair_private_file_and_explicit_rotation(tmp_path):
     config = Config("fresh", "http://127.0.0.1:8770", 8791, tmp_path / "state")
     pair(config)
@@ -319,7 +343,7 @@ def test_http_legacy_mode_and_mode_mismatch(tmp_path):
             assert response[1]["result"]["structuredContent"]["error"]["code"] == "dashboard_unavailable"
 
 
-@pytest.mark.parametrize("api", [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49])
+@pytest.mark.parametrize("api", [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 52, 53])
 def test_supported_fresh_generations_still_require_fresh_contract(api):
     version = {**FRESH, "api": api}
     data = snapshot(FakeDashboard(version, AGENTS_FRESH), "fresh")
@@ -328,7 +352,7 @@ def test_supported_fresh_generations_still_require_fresh_contract(api):
     assert data.scope["includes_unobserved"] is True
 
 
-@pytest.mark.parametrize("api", [999, 50, 33, True, "39", None])
+@pytest.mark.parametrize("api", [999, 54, 51, 33, True, "39", None])
 def test_unknown_fresh_generations_are_rejected_before_roster_read(api):
     backend = FakeDashboard({**FRESH, "api": api}, AGENTS_FRESH)
     with pytest.raises(DashboardError):

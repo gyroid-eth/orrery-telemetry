@@ -45,6 +45,17 @@ env AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_CLIENT_CONFIG= AGENTSTACK_GLOBAL_SE
   "$orrery_source/scripts/install.sh" --dry-run
 ```
 
+## Dashboard service の log と再起動
+
+| 環境変数 | 既定値 | 用途 |
+| --- | --- | --- |
+| `AGENTSTACK_DASHBOARD_LOG` | `$AGENTSTACK_RUNTIME_DIR/dashboard.log` | 常駐 dashboard の log の保存先 |
+| `AGENTSTACK_DASHBOARD_LOG_MAX_BYTES` | `5242880`（5 MiB） | ローテーション前の log サイズ上限（byte） |
+| `AGENTSTACK_DASHBOARD_LOG_BACKUPS` | `3` | 保存する世代数 |
+| `AGENTSTACK_DASHBOARD_RESTART_DELAY` | `5` | dashboard の再起動までの待ち時間（秒） |
+
+installer はこれらの値を保存し、通常の更新で引き継ぎます。
+
 ## Dashboard / `server.py`
 
 `server.py` が直接参照する `AGENTSTACK_*` は次のとおりです。

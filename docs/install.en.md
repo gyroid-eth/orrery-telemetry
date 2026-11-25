@@ -53,7 +53,7 @@ When a standard catalog manifest is configured, dsh installation/update extracts
 
 `--disable-dsh` / `--disable-hermes` disable the selection and retain installed files. Normal uninstall removes receipt-owned runtime generations and adapters, retaining memories/skills in `harnesses/<harness>/profiles`. Manual `hermes-managed` and Hermes homes are neither read nor modified. External Node and supplied caches remain untouched. Credentials and logins are never installed or migrated. Each harness's `current.json` records its runtime references. Configure backend URL/model and Keychain service/account separately; startup performs static configuration validation. Installation alone does not make the catalog available.
 
-Once configured, check catalog availability, then [exchange Mail through cockpit New Agent / Harness / Lineage](getting-started.en.md#5-play-shiritori-as-an-end-to-end-check). The bundled dashboard NEW AGENT does not send a harness and cannot launch DeepSeek / Local children. See the [API reference](api.en.md) for a launch without the screen. Catalog visibility does not test credentials, connections, tools or Mail delivery.
+After setup, select the model and an available harness (dsh or Hermes) in the bundled dashboard's NEW AGENT form or in the cockpit. The bundled dashboard sends the selected harness in its spawn request. See the [Mail round-trip check](getting-started.en.md#5-play-shiritori-as-an-end-to-end-check) and the [API reference](api.en.md).
 
 New Hermes children use a stable, separate HOME for each project and canonical name. Standard resume checks the saved pin and exact native session ID and reuses that HOME. Old shared-HOME pins stop with `native_resume_legacy_profile`; old data and pins are not migrated automatically. Real CLI checks with a synthetic provider confirmed storage, same-HOME/ID restoration and separation between children. Resume does not reinject the latest memory into the initial system prompt, and real-provider/full-Mail end-to-end acceptance remains incomplete. A common Telegram entry point is in design, and manual Local effort has not passed real Local server acceptance. See [current limitations (Japanese)](managed-catalog.md#現在の制限).
 
@@ -76,6 +76,7 @@ Required:
 - `tmux`
 - `git`
 - `uv` (used to create the Python environment for the bundled ORRERY Mail)
+- `lsof` for identifying which process owns a running dashboard port, `curl`, and `xz` for extracting Node tarballs
 - Claude Code or Codex CLI. Keep Codex CLI current (`npm install -g @openai/codex@latest`). An old release (seen with 0.153.4) has GPT-6 models rejected for a ChatGPT account with `model is not supported when using Codex with a ChatGPT account` (0.158.0 worked). `agentstack-doctor` prints a note for releases older than 0.157
 
 Optional:
@@ -99,19 +100,13 @@ cd orrery-telemetry
 
 Pass the absolute path of the project where agents will work to `--project-key`, not the checkout of this repository. It is required on first install, and the installer stops without writing anything if it is omitted. Later installations inherit the previous value from `~/.agentstack/env.sh`, so it can be omitted.
 
-The installer previews three changes and asks for `yes` for each.
-
-1. Claude Code MCP registration (add `orrery-mail` to `~/.claude.json`)
-2. Claude Code settings (append hooks and permissions to `~/.claude/settings.json`)
-3. Managed instruction blocks (between markers in the project's `CLAUDE.md` and `~/.codex/AGENTS.md`)
-
-All existing content is preserved, and a backup from before each merge is stored in `~/.agentstack/backups`. An item answered with `no` can be installed separately later with a helper; see [Using ORRERY Mail from Claude Code](#using-agent-mail-from-claude-code).
+When changes are needed, the installer has up to four confirmation points: Claude MCP registration and settings, Codex user instructions, and Claude user instructions. The instruction files are `$CODEX_HOME/AGENTS.md` and `$CLAUDE_CONFIG_DIR/CLAUDE.md` (defaults `~/.codex/AGENTS.md` and `~/.claude/CLAUDE.md`). Text outside the markers is preserved and changed files are backed up. See the [consent contract](instruction-migration.en.md#consent) for interactive and non-interactive behavior, and [Using ORRERY Mail from Claude Code](#using-orrery-mail-from-claude-code) to add skipped settings later.
 
 The installer places:
 
 - the dashboard, launchers, hooks, skills, bundled ORRERY Mail, `env.sh`, `VERSION`, and `install-state.json` under `~/.agentstack/`
 - `~/.claude/skills/{delegate,log}` and `${CODEX_HOME:-~/.codex}/skills/{delegate,log}`, as symlinks into `~/.agentstack/skills/`
-- two resident services: the dashboard on port 8770 and ORRERY Mail at `http://127.0.0.1:18765/mcp`, with state under `~/.agentstack/mail`. Each is registered with launchd on macOS or started in supervised-background mode when registration is unavailable
+- The default resident components are the dashboard (port 8770), the ORRERY Mail autostart (fresh-install default `http://127.0.0.1:18765/mcp`), and the Mail watcher. The installer uses launchd on macOS or a systemd user manager on Linux when available. The dashboard uses supervised background mode if registration is unavailable. If the installer reuses an existing Mail service, the listener can differ from the default autostart job. See [ORRERY Mail service](#orrery-mail-service-handling).
 
 `env.sh` uses mode `0600` and contains no token. Shell dotfiles are not changed.
 
@@ -156,9 +151,12 @@ On Windows, install inside a WSL2 Ubuntu. Inside Ubuntu it is Linux, so the step
    ```
 3. **Install the prerequisites** (inside Ubuntu).
    ```bash
-   sudo apt update && sudo apt install -y git tmux python3 curl fswatch
+   sudo apt update && sudo apt install -y ca-certificates curl git tmux python3 python3-venv lsof xz-utils
    curl -LsSf https://astral.sh/uv/install.sh | sh
+   export PATH="$HOME/.local/bin:$PATH"
+   uv --version
    ```
+   If you plan to use Hermes, also run `sudo apt install libatomic1`.
    `fswatch` is optional. Without it the mail watcher falls back to polling every 2 seconds and notifications still arrive.
 4. **Clone and run the installer** (inside Ubuntu). Keep the project on the WSL side (`~/work/...`): `/mnt/c` is slow and handles permissions differently.
    ```bash
@@ -166,7 +164,7 @@ On Windows, install inside a WSL2 Ubuntu. Inside Ubuntu it is Linux, so the step
    cd orrery-telemetry
    ./scripts/install.sh --project-key ~/work/your-project
    ```
-   The questions are the same three as above, and each only changes files under the Ubuntu home. Answer each with `yes` and one press of Enter (over Remote Desktop a key can register as repeated, so press once and wait for the output). It is done when `dashboard healthy: http://127.0.0.1:8770/api/agents` appears.
+   Review and approve the changes shown in the interactive previews. `dashboard healthy` means the dashboard responds. Continue with the doctor and selftest in [Verification](#verification).
 5. **Open the dashboard.** In a Windows browser open `http://127.0.0.1:8770/`. WSL2 forwards localhost to Windows, so it just works.
 6. **Install Claude Code or the Codex CLI inside Ubuntu and log in.** A copy installed on the Windows side is not used: agents run inside Ubuntu's tmux.
    ```bash
@@ -264,7 +262,7 @@ The Codex examples above assume `CODEX_HOME` is unset. When set, links go into i
 
 On systems where an old installer added `~/.agentstack/skills` to `skillsDirectories`, a reinstall with the Tier 1 settings merge approved removes only that old ORRERY Telemetry entry. Other user values in the same array and all other settings are preserved.
 
-The installer does not change shell dotfiles. Within the project, it updates only content between managed markers in `CLAUDE.md`, and only after a Tier 1 preview is approved; it changes no other file. The default location for Claude Code user settings is `~/.claude/settings.json` and can be changed with `AGENTSTACK_CLAUDE_SETTINGS`.
+The installer leaves shell dotfiles alone. It writes the managed Claude instructions between markers in `$CLAUDE_CONFIG_DIR/CLAUDE.md` (default `~/.claude/CLAUDE.md`). See [instruction migration](instruction-migration.en.md#legacy-blocks) for older project blocks. The Claude Code user settings default to `~/.claude/settings.json` and can be changed with `AGENTSTACK_CLAUDE_SETTINGS`.
 
 ## Using ORRERY Mail from Claude Code
 

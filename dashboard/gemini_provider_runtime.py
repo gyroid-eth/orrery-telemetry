@@ -18,6 +18,7 @@ import selectors
 import signal
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -42,7 +43,6 @@ CAPABILITIES = {
     "resume": False,
     "runtime": True,
     "transcript": False,
-    "standalone": False,
     "worktree_required": True,
     "resources_required": True,
 }
@@ -216,7 +216,7 @@ def _catalog_item(models: list[str]) -> dict:
         "model_efforts": model_efforts,
         "effort_default": "" if CAPABILITIES["effort_required"] else "high",
         "provider_key": "google",
-        "capabilities": dict(CAPABILITIES),
+        "capabilities": {**CAPABILITIES, "standalone": sys.platform == "darwin"},
     }
 
 
@@ -615,28 +615,29 @@ def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
     ):
         if not _which(command, path):
             return {}, f"{label} not found for provider gemini"
-    git = _which("git", path)
-    if not git:
-        return {}, "git not found for provider gemini"
-
-    base_rev = request["worktree_base"] or "HEAD"
-    if base_rev.startswith("-"):
-        return {}, f"worktree base must not start with '-': {base_rev}"
     work_dir = request["work_dir"]
     if not os.path.isdir(work_dir):
         return {}, f"dir does not exist: {work_dir}"
-    source_repo = _git(git, "-C", work_dir, "rev-parse", "--show-toplevel")
-    if not source_repo:
-        return {}, "provider gemini requires a git repository"
-    if not _git(git, "-C", source_repo, "rev-parse", "--verify", "--quiet",
-                f"{base_rev}^{{commit}}"):
-        return {}, f"could not resolve worktree base for provider gemini: {base_rev}"
-    boundary = resource_boundary_error(source_repo, resources)
-    if boundary:
-        return {}, boundary
+    if not request["standalone"] or request["worktree"]:
+        git = _which("git", path)
+        if not git:
+            return {}, "git not found for provider gemini"
+        base_rev = request["worktree_base"] or "HEAD"
+        if base_rev.startswith("-"):
+            return {}, f"worktree base must not start with '-': {base_rev}"
+        source_repo = _git(git, "-C", work_dir, "rev-parse", "--show-toplevel")
+        if not source_repo:
+            return {}, "provider gemini requires a git repository"
+        if not _git(git, "-C", source_repo, "rev-parse", "--verify", "--quiet",
+                    f"{base_rev}^{{commit}}"):
+            return {}, f"could not resolve worktree base for provider gemini: {base_rev}"
+        if resources:
+            boundary = resource_boundary_error(source_repo, resources)
+            if boundary:
+                return {}, boundary
     if not base._project_key():
         return {}, "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"
-    if not request["dry_run"] and not base._runtime_agent_token(request["parent"]):
+    if not (request["standalone"] or request["dry_run"]) and not base._runtime_agent_token(request["parent"]):
         return {}, f"parent registration token unavailable for '{request['parent']}'"
     return {"adapter": adapter, "hooks_dir": hooks_dir, "home": home}, ""
 
@@ -750,7 +751,8 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
         request, error = base._spawn_request(payload)
         if error:
             return error
-        if request["standalone"] and not CAPABILITIES["standalone"]:
+        standalone_supported = sys.platform == "darwin"
+        if request["standalone"] and not standalone_supported:
             return {"ok": False, "error": "standalone not supported for provider gemini"}
         tools_args, tools_error = base._spawn_tools_args(payload, PROVIDER_ID, False, "")
         if tools_error:
@@ -789,10 +791,15 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
                     f"model not allowed for provider gemini at effort {effort}: {resolved_model}"
                 )}
             model = resolved_model
-        try:
-            resources = normalize_resources(payload.get("resources"))
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+        if request["standalone"]:
+            if payload.get("resources") not in (None, ""):
+                return {"ok": False, "error": "resources require a parent for provider gemini"}
+            resources = ""
+        else:
+            try:
+                resources = normalize_resources(payload.get("resources"))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
         context, error = _preflight(base, request, resources)
         if error:
             return {"ok": False, "error": error}
@@ -807,8 +814,8 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
                 script=context["adapter"],
                 provider_args=tools_args,
                 effort=effort,
-                standalone_supported=CAPABILITIES["standalone"],
-                worktree_required=CAPABILITIES["worktree_required"],
+                standalone_supported=standalone_supported,
+                worktree_required=not request["standalone"],
                 # The adapter hands the full task to Antigravity and reports the
                 # result itself; a task mail would be a second, conflicting copy.
                 task_mail=False,

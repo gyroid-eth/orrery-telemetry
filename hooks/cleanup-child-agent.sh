@@ -356,6 +356,7 @@ if [[ -d "$CODEX_HOME_DIR/sessions" && ! -L "$CODEX_HOME_DIR/sessions" ]]; then
     echo "[cleanup-child-agent] WARNING: deleting unshared Codex sessions at $CODEX_HOME_DIR/sessions; conversation history may be lost (expected a symlink to the user's Codex home)." >&2
 fi
 rm -rf "$CODEX_HOME_DIR"
+rm -rf "$STATE_DIR/$AGENT_NAME.agy-config"
 case "$CHILD_RESUME_RETENTION_DAYS" in
     ''|*[!0-9]*)
         echo "[cleanup-child-agent] invalid AGENTSTACK_CHILD_RESUME_RETENTION_DAYS; using 30" >&2

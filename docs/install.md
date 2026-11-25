@@ -54,7 +54,7 @@ Nodeの絶対pathは `AGENTSTACK_DSH_NODE` としてenv.shに保存され、通�
 
 `--disable-dsh` / `--disable-hermes` は選択を無効化し、導入済みfileは保持します。通常のuninstallは所有receiptに記録したruntime世代とadapterを削除し、`harnesses/<harness>/profiles` の記憶・skillsは保持します。既存の手動 `hermes-managed` / Hermes homeは読まず触れず、外部Node、提供したcacheも保持します。鍵やログインは導入/移行しません。各harnessの `current.json` がruntimeの絶対参照を記録します。backend URL・model・Keychain service/accountは別途利用者が設定し、起動前に静的に検査します。導入のみでcatalogを利用可にはしません。
 
-設定後に catalog の利用可否を確認し、[cockpit の New Agent / Harness / Lineage から Mail を往復](getting-started.md#5-しりとりで通しの確認をする)させます。同梱 dashboard の NEW AGENT は harness を送らないため、DeepSeek / Local の子の起動には使えません。画面を使わない起動の詳細は [API reference](api.md) を参照してください。catalog の候補表示は、資格・接続・tool・Mail の成功を確かめる試験ではありません。
+設定後は、同梱 dashboard の NEW AGENT または cockpit で Model と利用可能な Harness（dsh／Hermes）を選びます。同梱 dashboard も選んだ harness を spawn API に送ります。[Mail の通し確認](getting-started.md#5-しりとりで通しの確認をする)・[API reference](api.md)
 
 Hermes の新しい子は project と canonical 名ごとの安定した独立 HOME を使い、正規 resume では保存 pin と exact native session ID を照合して同じ HOME を使います。旧共有 HOME の pin は `native_resume_legacy_profile` で停止し、旧データや pin を自動移行しません。合成 provider を使う実 CLI で保存・同 HOME / ID の復帰・別子との非共有を確認していますが、resume 時に最新 memory を初回 system prompt へ再注入するものではなく、実 provider・full Mail の通し受け入れは未完です。共通 Telegram 入口は設計中、Local の手動 effort は実 Local server での受け入れ前です（[現在の制限](managed-catalog.md#現在の制限)）。
 
@@ -77,6 +77,7 @@ installer は完全な repository checkout または source archive から実行
 - `tmux`
 - `git`
 - `uv`（同梱の ORRERY Mail 用の Python 環境を作るために使います）
+- `lsof`（稼働中の dashboard がポートを所有しているか確認するときに使用）、`curl`、`xz`（Node の tarball を展開するときに使用）
 - Claude Code または Codex CLI。Codex CLI は最新版にしてください（`npm install -g @openai/codex@latest`）。古い版（0.153.4 で確認）では、ChatGPT アカウントで GPT-6 系のモデルが `model is not supported when using Codex with a ChatGPT account` で拒否されます（0.158.0 では通りました）。`agentstack-doctor` は 0.157 より古い版に note を出します
 
 任意:
@@ -104,19 +105,13 @@ cd orrery-telemetry
 
 `--project-key` には、agent たちに作業させる project の絶対パスを渡します（この repository の checkout ではありません）。初回は必須で、未指定なら installer は何も書かずに停止します。2 回目以降は前回の値を `~/.agentstack/env.sh` から引き継ぐので省略できます。
 
-installer は途中で 3 つの変更を preview し、それぞれ `yes` を求めます。
-
-1. Claude Code の MCP 登録（`~/.claude.json` に `orrery-mail` を追加）
-2. Claude Code の settings（hooks と permissions を `~/.claude/settings.json` に追記）
-3. managed instruction block（project の `CLAUDE.md` と `~/.codex/AGENTS.md` の marker 間）
-
-いずれも既存の内容は保持し、merge 前の backup を `~/.agentstack/backups` に置きます。`no` と答えた項目は後から helper で個別に入れられます（[Claude Code から使えるようにする](#claude-code-から-agent-mail-を使えるようにする)）。
+installer は変更がある場合に、Claude の MCP 登録と settings、Codex の利用者指示、Claude の利用者指示の最大4項目を確認します。指示の保存先は `$CODEX_HOME/AGENTS.md` と `$CLAUDE_CONFIG_DIR/CLAUDE.md`（既定 `~/.codex/AGENTS.md` と `~/.claude/CLAUDE.md`）です。既存の内容は marker の外に保持し、変更前の backup を残します。確認の条件と非対話時の扱いは [同意](instruction-migration.md#consent)、後から個別に入れるには [Claude Code から ORRERY Mail を使う](#claude-code-から-orrery-mail-を使えるようにする) を参照してください。
 
 installer が置くもの:
 
 - `~/.agentstack/` に dashboard、launcher、hook、skill、同梱の ORRERY Mail、`env.sh`、`VERSION`、`install-state.json`
 - `~/.claude/skills/{delegate,log}` と `${CODEX_HOME:-~/.codex}/skills/{delegate,log}`（`~/.agentstack/skills/` への symlink）
-- 常駐 service 2 つ: dashboard（port 8770）と ORRERY Mail（`http://127.0.0.1:18765/mcp`、state は `~/.agentstack/mail`）。それぞれ launchd（macOS）に登録し、できなければ supervised background mode で起動します
+- 既定の常駐構成は dashboard（port 8770）、ORRERY Mail の自動起動（新規の既定 `http://127.0.0.1:18765/mcp`）、Mail watcher です。対応する環境では launchd（macOS）または systemd user（Linux）に登録します。dashboard は登録できない場合、supervised background mode で動きます。既存 Mail を再利用する場合、実際の listener は既定の自動起動 job と異なることがあります。[Mail service の扱い](#orrery-mail-service-の扱い)
 
 `env.sh` は mode `0600` で、token は書き込みません。shell の dotfile は変更しません。
 
@@ -161,9 +156,12 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
    ```
 3. **前提を入れる**（Ubuntu の中）。
    ```bash
-   sudo apt update && sudo apt install -y git tmux python3 curl fswatch
+   sudo apt update && sudo apt install -y ca-certificates curl git tmux python3 python3-venv lsof xz-utils
    curl -LsSf https://astral.sh/uv/install.sh | sh
+   export PATH="$HOME/.local/bin:$PATH"
+   uv --version
    ```
+   Hermes を入れる場合は `sudo apt install libatomic1` も実行します。
    `fswatch` は任意です。無くても mail watcher は 2 秒間隔の polling で通知を届けます。
 4. **clone して installer を走らせる**（Ubuntu の中）。project は WSL 側のパス（`~/work/...`）にしてください。`/mnt/c` 配下は遅く、権限の扱いも違います。
    ```bash
@@ -171,7 +169,7 @@ Windows では WSL2 の Ubuntu の中に入れます。Ubuntu の中は Linux �
    cd orrery-telemetry
    ./scripts/install.sh --project-key ~/work/your-project
    ```
-   途中の質問は上の 3 つと同じで、どれも Ubuntu の home の中を変えるだけです。質問ごとに `yes` と打って Enter を 1 回ずつ押します（Remote Desktop 越しだとキーが連打扱いになることがあるので、1 回押して表示を待ちます）。最後に `dashboard healthy: http://127.0.0.1:8770/api/agents` が出れば完了です。
+   対話で出た変更だけ、それぞれの preview に従って承認します。`dashboard healthy` は dashboard が応答することを示します。次に [確認](#確認) の doctor と selftest を実行します。
 5. **dashboard を開く。** Windows のブラウザで `http://127.0.0.1:8770/` を開きます。WSL2 の localhost は Windows 側に転送されるので、そのまま届きます。
 6. **Claude Code か Codex CLI を Ubuntu の中に入れてログインする。** Windows 側に入れたものは使えません（agent は Ubuntu の tmux の中で動きます）。
    ```bash
@@ -269,7 +267,7 @@ installer が置いた skill（`~/.agentstack/skills` と、そこを指す `~/.
 
 旧 installer が `skillsDirectories` に `~/.agentstack/skills` を追加していた環境では、Tier 1 の settings merge を承認した再インストール時にその旧 ORRERY Telemetry entry だけを削除します。同じ配列の他の user value と、それ以外の settings は保持します。
 
-installer は shell dotfile を変更しません。project 内では、Tier 1 の preview 後に承認した場合だけ `CLAUDE.md` の managed marker 間を更新し、それ以外の file は変更しません。Claude Code user settings の既定位置は `~/.claude/settings.json` で、`AGENTSTACK_CLAUDE_SETTINGS` で変更できます。
+installer は shell dotfile を変更しません。Claude の管理された指示は利用者の `$CLAUDE_CONFIG_DIR/CLAUDE.md`（既定 `~/.claude/CLAUDE.md`）の marker 内に置きます。旧 project の block の扱いは [指示の移行](instruction-migration.md#legacy-blocks) に従います。Claude Code user settings の既定位置は `~/.claude/settings.json` で、`AGENTSTACK_CLAUDE_SETTINGS` で変更できます。
 
 ## Claude Code から ORRERY Mail を使えるようにする
 

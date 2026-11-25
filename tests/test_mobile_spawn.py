@@ -135,6 +135,59 @@ def test_read_only_relay_denies_spawn_before_upstream():
         assert request(port,'POST','/view/spawn',{})[0] == 405
 
 
+def test_standalone_antigravity_forwards_only_offered_managed_tools():
+    provider = {'id':'gemini','label':'Antigravity','efforts':['low','high'],
+                'capabilities':{'standalone':True, 'resources_required':True, 'effort_required':True},
+                'models':[{'id':'gemini-fixture','default':True}],
+                'harnesses':[{'id':'antigravity','available':True,'default':True}]}
+    submitted = []
+    def launch(body):
+        submitted.append(body)
+        return {'ok':True,'child_name':'FixtureCurie'}
+
+    source = {**CATALOG, 'providers':[provider], 'computer_modes':['off','view','control'],
+              'browser_modes':{'antigravity':['off','temporary','personal']}}
+    store = MobileSpawn(lambda: source, launch, lambda _: {})
+    catalog = store.catalog('a'*32, configurable=True)
+    route = catalog['models'][0]['harnesses'][0]
+    assert route['browser_modes'] == ['off','temporary','personal'] and not route.get('launch_blocked')
+    value = dict(payload(catalog), harness='antigravity', computer=False)
+    value.pop('browser')
+    for tools in ({'computer':True}, {'computer':'invalid'}, {'browser':True}, {'browser_mode':'invalid'}):
+        with pytest.raises(relay.mobile_spawn.SpawnError, match='invalid_launch'):
+            store.launch('a'*32, {**value, **tools})
+    assert not submitted
+    assert store.launch('a'*32, value) == {'state':'ready','name':'FixtureCurie'}
+    assert submitted == [{
+        'task':value['task'],'model':'gemini-fixture','provider':'gemini','dir':'/workspace',
+        'standalone':True,'headless':True,'async':True,'effort':'high','role':'Review',
+    }]
+    assert store.launch('a'*32, {**value, 'receipt':'c'*32, 'computer':'view', 'browser_mode':'temporary'})['state'] == 'ready'
+    assert submitted[1]['tools'] == {'screen':{'access':'read'}, 'browser_mode':'temporary'}
+
+
+@pytest.mark.parametrize('harness', ['claude-code', 'codex-cli', 'dsh', 'hermes', 'antigravity'])
+@pytest.mark.parametrize(('mode', 'access'), [('off', None), ('view', 'read'), ('control', 'operate')])
+def test_computer_modes_forward_consistently_for_five_harnesses(harness, mode, access):
+    provider = 'gemini' if harness == 'antigravity' else 'codex'
+    source = {**CATALOG, 'computer_modes':['off','view','control'], 'browser_modes':{},
+              'providers':[{'id':provider,'capabilities':{'standalone':True},
+                            'models':[{'id':'fixture-model'}],
+                            'harnesses':[{'id':harness,'available':True}]}]}
+    submitted = []
+
+    def launch(body):
+        submitted.append(body)
+        return {'ok':True,'child_name':'FixtureCurie'}
+
+    store = MobileSpawn(lambda: source, launch, lambda _: {})
+    catalog = store.catalog('a'*32, configurable=True)
+    value = dict(payload(catalog), harness=harness, effort=None, computer=mode)
+    value.pop('browser')
+    assert store.launch('a'*32, value)['state'] == 'ready'
+    assert submitted[0].get('tools', {}).get('screen') == ({'access':access} if access else None)
+
+
 def test_antigravity_models_are_listed_without_forwarding_an_invalid_standalone_launch():
     catalog_source = {**CATALOG, 'providers': [*CATALOG['providers'],
         {'id': 'gemini', 'label': 'Antigravity',
