@@ -2633,6 +2633,7 @@ OPTIONAL_PROVIDER_PAYLOAD=(
   "dashboard/gemini_provider_runtime.py"
   "hooks/spawn_gemini_child.sh"
   "hooks/spawn_gemini_preregistered.sh"
+  "hooks/gemini_interactive.py"
 )
 
 is_optional_provider_payload() {

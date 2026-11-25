@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -1275,12 +1276,24 @@ def test_killed_cleanup_keeps_handoff_when_owner_path_is_not_ours_to_replace(mon
     else:
         assert owner.read_text() == "someone-elses-token"
         assert f"{owner} is holding a different value" in result["error"]
-    handoffs = list((runtime / "spawn-tokens").iterdir())
-    assert len(handoffs) == 1
-    assert handoffs[0].read_text() == _OWNER_TOKEN
-    assert result["recovery_credential"] == str(handoffs[0])
+    token_dir = runtime / "spawn-tokens"
+    handoff, = token_dir.glob("*.token")
+    assert handoff.read_text() == _OWNER_TOKEN
+    assert result["recovery_credential"] == str(handoff)
+    expected_files = {handoff}
+    # Managed Antigravity on macOS needs the matching registration receipt.
+    if sys.platform == "darwin":
+        binding = handoff.with_name(handoff.name + ".binding.json")
+        assert json.loads(binding.read_text(encoding="utf-8")) == {
+            "agent_id": 73,
+            "agent_name": "QuietCurie",
+            "project_key": "/project",
+            "program": "antigravity",
+        }
+        expected_files.add(binding)
+    assert set(token_dir.iterdir()) == expected_files
     assert result["cleanup_child_agent_can_recover"] is False
-    assert f"unconsumed one-shot handoff kept at {handoffs[0]}" in result["error"]
+    assert f"unconsumed one-shot handoff kept at {handoff}" in result["error"]
     assert "cannot retire this child" in result["error"]
     assert "cleanup-child-agent.sh QuietCurie can" not in result["error"]
 

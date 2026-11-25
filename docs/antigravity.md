@@ -115,10 +115,15 @@ PARENT_AGENT=<parent-name> \
   /path/to/project
 ```
 
-The launcher pre-registers the child, creates an isolated git worktree, reserves
-declared resources, sends the task to Antigravity over stream-json stdin, and
-uses the session-bound MCP wrapper. Owner-token values are not placed in the
-task, argv, or Antigravity MCP configuration.
+launcher は子を事前登録し、専用の worktree を作り、宣言したファイルを予約します。
+Mail はその子に紐付いた MCP wrapper を通ります。owner token は private な runtime に保持します。
+
+macOS では `agy` の対話画面を開き、最初の仕事を `-i` で渡します。
+子は Mail の `send_message` で報告したあとも待機し、追加 Mail は共通 watcher が入力欄へ届けます。
+サンドボックスを有効にし、その子の worktree だけを起動時の `trustedWorkspaces` に渡します。
+ネイティブ編集は共通の登録・予約確認を通ります。macOS の対話子には Antigravity Reader の payload が必要です。
+
+Linux／WSL の既存経路は最初の task を stream-json の標準入力に流し、自動報告して終了します。
 
 A nominal Antigravity `SUCCESS` is not enough when required actions were denied
 or the textual response is empty. Those cases are reported to the parent as
@@ -202,23 +207,16 @@ cannot be loaded.
 
 ## Dashboard controls
 
-The Dashboard uses the same provider-aware process-tree measurement for Claude,
-Codex, and Antigravity. For a delegated Antigravity child, `EXIT` re-reads the
-process tree immediately, sends `SIGINT` only to the measured `agy` process, and
-leaves the launcher-owned shell runner alive so report/release/retire/cleanup can
-finish. For a top-level interactive Antigravity session, `EXIT` keeps the normal
-interactive `/exit` path.
+macOS の対話子は `EXIT` で終了し、予約を解放して保持期間に入ります。
+`Resume` は確認できた同じ登録・worktree・会話 ID を使います。
+再開後に編集するときは必要な予約を取り直します。履歴を照合できない場合は理由を返します。
 
-ORRERY does not currently implement Antigravity conversation resume or native
-transcript history. Gone or retired Antigravity entries therefore fail closed
-instead of falling through to Claude/Codex transcript lookup. A top-level
-Antigravity session whose `agy` process has exited but whose human shell remains
-is kept attachable as `finished`; Dashboard jump does not kill that shell to
-attempt an unsupported resume.
+stream-json の子には、直前に確認した `agy` に `SIGINT` を送り、runner が報告・予約解放・退役を行います。
+親なしの対話 Antigravity は通常の `/exit` を使い、人のシェルが残った場合は `finished` から端末を開けます。
 
 ## Headless permission caveat
 
-`agent-start-gemini` と Gemini child の launcher は `--mode` を指定しません。
+`agent-start-gemini` と stream-json の子は `--mode` を指定しません。
 CLI の `/config` にある実行モードと `toolPermission` が適用されます。1.5.7 以降、
 `agentMode` が未設定なら、利用可能な環境で Auto、それ以外は `default` になります。
 `accept-edits` は作業領域の編集を自動承認し、`plan` は調査と計画に使います。
