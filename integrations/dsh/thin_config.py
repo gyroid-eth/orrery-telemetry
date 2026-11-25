@@ -1,4 +1,4 @@
-"""Write an ordinary native dsh profile. No keys, provider imports or requests.
+"""Write an ordinary native dsh profile. No keys, model providers or requests.
 
 Ordinary config mistakes can launch the wrong route or expose credentials;
 validate references and representability before writing the launch plan.
@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import stat
+import subprocess
 import sys
 from urllib.parse import urlsplit
 
@@ -206,38 +208,45 @@ def link(source, target):
     target.symlink_to(source, target_is_directory=source.is_dir())
 
 
-def skill_name(path):
-    """The frontmatter name dsh lists a skill under, else None."""
+def skill_root_stamp(root):
+    info = root.stat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise NotADirectoryError(root)
+    return info.st_dev, info.st_ino, info.st_mtime_ns
+
+
+def personal_skills(document, facts, product_root):
+    """Read the optional root before changing any product skill links."""
+    personal = document.get('personal_skills_home')
+    if personal is None:
+        return None, document.get('personal_skills_reason'), set()
+    if not isinstance(personal, str) or '\0' in personal or not Path(personal).is_absolute():
+        return None, 'claude_config_dir_unresolved', set()
+    root = Path(personal) / 'skills'
     try:
-        text = Path(path).read_text(encoding='utf-8', errors='replace')
+        before = skill_root_stamp(root)
     except OSError:
-        return None
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != '---' or '---' not in (line.strip() for line in lines[1:]):
-        return None
-    header = '\n'.join(lines[1:[line.strip() for line in lines].index('---', 1)])
+        return None, 'personal_skills_root_unavailable', set()
+
+    provider = facts['runtime'] / 'node_modules/@deepseek-ai/dsh-skill-filesystem/lib/index.js'
+    inventory = Path(__file__).with_name('skill_inventory.mjs').resolve()
     try:
-        import yaml
-        data = yaml.safe_load(header)
-        name = data.get('name') if isinstance(data, dict) else None
-    except ImportError:
-        match = re.search(r'^name:\s*(.*?)\s*(?:\s#.*)?$', header, re.MULTILINE)
-        name = match.group(1).strip('\'"') if match else None
-    except Exception:  # A header dsh cannot parse lists no skill.
-        return None
-    return name if isinstance(name, str) and name else None
+        result = subprocess.run(
+            [str(facts['node']), str(inventory), str(provider), str(root), str(product_root)],
+            env={}, capture_output=True, text=True, check=True, timeout=5,
+        )
+        shadowed = json.loads(result.stdout)
+        if not isinstance(shadowed, list) or not all(isinstance(name, str) for name in shadowed):
+            return None, 'personal_skills_scan_failed', set()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, 'personal_skills_scan_failed', set()
 
-
-def skill_names(root):
-    """Every name a skill root offers: bundle and flat-file names and their frontmatter names."""
-    names = set()
-    for entry in Path(root).iterdir():
-        if entry.is_dir() and (entry / 'SKILL.md').is_file():
-            names.update({entry.name, skill_name(entry / 'SKILL.md')})
-        elif entry.is_file() and entry.suffix == '.md':
-            names.update({entry.stem, skill_name(entry)})
-    names.discard(None)
-    return names
+    try:
+        if skill_root_stamp(root) != before:
+            return None, 'personal_skills_root_changed', set()
+    except OSError:
+        return None, 'personal_skills_root_unavailable', set()
+    return personal, None, set(shadowed)
 
 
 def generate(document):
@@ -287,19 +296,15 @@ def generate(document):
     # The personal skills a Claude child reads (harness_child.personal_skill_home).
     # dsh-tui's preset owns skill discovery and ignores host patch rows, so they
     # are offered as $DSH_AGENTS_HOME/skills, searched after DSH_HOME/skills.
-    personal = document.get('personal_skills_home')
-    if personal is not None:
-        personal = absolute(personal, directory=True)
-        absolute(str(personal / 'skills'), directory=True)
-    personal_names = skill_names(personal / 'skills') if personal else set()
-    shadowed = []
     skills = facts['root'] / 'skills'
+    personal, personal_reason, personal_shadows = personal_skills(document, facts, skills)
+    shadowed = []
     if skills.is_dir():
         # Native scanner walks one level <name>/SKILL.md: link each skill.
         for skill in skills.iterdir():
             if skill.is_dir() and (skill / 'SKILL.md').is_file():
                 target = home / 'skills' / skill.name
-                if {skill.name, skill_name(skill / 'SKILL.md')} & personal_names:
+                if skill.name in personal_shadows:
                     # As the installer does for Claude, leave the name to the
                     # personal skill; drop only the link an earlier launch made.
                     if target.is_symlink() and target.resolve() == skill.resolve():
@@ -307,9 +312,9 @@ def generate(document):
                     shadowed.append(skill.name)
                     continue
                 link(skill, target)
-    if personal or document.get('personal_skills_reason'):
-        save(state / 'personal-skills.json', {'agents_home': str(personal) if personal else None,
-            'reason': document.get('personal_skills_reason'), 'shadowed_product_skills': sorted(shadowed)})
+    if personal or personal_reason:
+        save(state / 'personal-skills.json', {'agents_home': personal,
+            'reason': personal_reason, 'shadowed_product_skills': sorted(shadowed)})
     else:
         (state / 'personal-skills.json').unlink(missing_ok=True)
     backend = facts['backend']

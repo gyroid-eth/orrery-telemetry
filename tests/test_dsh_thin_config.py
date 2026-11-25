@@ -1,4 +1,4 @@
-"""Thin generator: no upstream import, provider request or key retrieval."""
+"""Thin generation, local skill discovery and static route admission."""
 import hashlib
 import importlib.util
 import json
@@ -117,7 +117,9 @@ class ThinTests(unittest.TestCase):
                 # so the product links under personal names are removed.
                 own = home / 'skills/elsewhere'
                 own.symlink_to(self.root)
-                plan = thin.generate({**self.doc, 'personal_skills_home': str(personal)})
+                with patch.object(thin.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        [], 0, stdout='["delegate", "log"]')):
+                    plan = thin.generate({**self.doc, 'personal_skills_home': str(personal)})
                 self.assertEqual(plan['env']['DSH_AGENTS_HOME'], str(personal))
                 self.assertEqual(sorted(path.name for path in (home / 'skills').iterdir()), ['elsewhere', 'extra'])
                 self.assertEqual(thin.read(self.state / 'personal-skills.json'), {
@@ -131,8 +133,10 @@ class ThinTests(unittest.TestCase):
                                  ['delegate', 'elsewhere', 'extra', 'log'])
                 self.assertEqual(thin.read(self.state / 'personal-skills.json')['reason'], 'unreadable_skill: log')
                 own.unlink()
-                with self.assertRaisesRegex(ValueError, '^missing_file$'):
-                    thin.generate({**self.doc, 'personal_skills_home': str(self.root / 'absent')})
+                plan = thin.generate({**self.doc, 'personal_skills_home': str(self.root / 'absent')})
+                self.assertNotIn('DSH_AGENTS_HOME', plan['env'])
+                self.assertEqual(thin.read(self.state / 'personal-skills.json')['reason'],
+                                 'personal_skills_root_unavailable')
 
     def test_preset_skill_provider_returns_the_personal_skills(self):
         # The real dsh-tui preset provider, not the host patch rows it ignores.
@@ -149,15 +153,93 @@ class ThinTests(unittest.TestCase):
                                     env=env, capture_output=True, text=True, timeout=60, check=True)
             return [tuple(row) for row in json.loads(result.stdout)]
 
-        plan = thin.generate({**self.doc, 'personal_skills_home': str(personal)})
-        real = lambda path: os.path.realpath(path)
-        self.assertEqual(candidates(plan), [
-            ('delegate', 'user-agents', real(personal / 'skills/delegate/SKILL.md')),
-            ('extra', 'user-dsh', real(self.product / 'skills/extra/SKILL.md')),
-            ('log', 'user-agents', real(personal / 'skills/daily-log/SKILL.md'))])
-        plan = thin.generate({**self.doc, 'personal_skills_home': None})
-        self.assertEqual([row[:2] for row in candidates(plan)],
-                         [('delegate', 'user-dsh'), ('extra', 'user-dsh'), ('log', 'user-dsh')])
+        facts = thin.validate_input(self.doc)
+        real = os.path.realpath
+        personal_delegate = personal / 'skills/delegate/SKILL.md'
+        product_delegate = self.product / 'skills/delegate/SKILL.md'
+        with patch.object(thin, 'validate_input', return_value={
+            **facts, 'runtime': Path(runtime), 'node': Path(node),
+        }):
+            plan = thin.generate({**self.doc, 'personal_skills_home': str(personal)})
+            self.assertEqual(candidates(plan), [
+                ('delegate', 'user-agents', real(personal_delegate)),
+                ('extra', 'user-dsh', real(self.product / 'skills/extra/SKILL.md')),
+                ('log', 'user-agents', real(personal / 'skills/daily-log/SKILL.md'))])
+            for title, metadata in {
+                'missing description': 'name: delegate',
+                'wrong type': 'name: delegate\ndescription: [a, b]',
+                'bad YAML': 'name: delegate\ndescription: [a',
+                'duplicate key': 'name: delegate\ndescription: one\ndescription: two',
+                'invalid invocation policy': 'name: delegate\ndescription: personal\nuser-invocable: [bad]',
+                'different declared name': 'name: other\ndescription: personal',
+            }.items():
+                with self.subTest(title=title):
+                    personal_delegate.write_text(f'---\n{metadata}\n---\n')
+                    plan = thin.generate({**self.doc, 'personal_skills_home': str(personal)})
+                    self.assertIn(('delegate', 'user-dsh', real(product_delegate)), candidates(plan))
+                    self.assertEqual(plan['env']['DSH_AGENTS_HOME'], str(personal))
+            personal_delegate.unlink()
+            flat = personal / 'skills/custom.md'
+            flat.write_text('---\nname: delegate\ndescription: personal flat skill\n---\n')
+            plan = thin.generate({**self.doc, 'personal_skills_home': str(personal)})
+            self.assertIn(('delegate', 'user-agents', real(flat)), candidates(plan))
+            plan = thin.generate({**self.doc, 'personal_skills_home': None})
+            self.assertEqual([row[:2] for row in candidates(plan)],
+                             [('delegate', 'user-dsh'), ('extra', 'user-dsh'), ('log', 'user-dsh')])
+
+    def test_actual_generator_recovers_if_root_vanishes_before_start_or_resume(self):
+        from hooks import harness_child
+
+        personal = self.personal_fixture()
+        personal_root = personal / 'skills'
+        parked = personal / 'parked-skills'
+        run = subprocess.run
+
+        def remove_after_check(argv, **kwargs):
+            source = thin.read(argv[argv.index('--input') + 1])
+            self.assertEqual(source['personal_skills_home'], str(personal))
+            personal_root.rename(parked)
+            return run(argv, **kwargs)
+
+        document = {**self.doc, 'program': 'dsh', 'runtime_dir': str(self.root.resolve()),
+                    'tools': {'base': 'mail-only', 'tools': {}}}
+        with patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': str(personal)}), \
+                patch.object(harness_child.subprocess, 'run', side_effect=remove_after_check):
+            for session in (None, 'resume-fixture'):
+                with self.subTest(resume=bool(session)):
+                    if session is not None:
+                        document = thin.read(self.state / 'input.json')
+                        document['resume_session_id'] = session
+                    harness_child.generate_plan(document, {'python': sys.executable})
+                    plan = thin.read(self.state / 'launch.json')
+                    self.assertNotIn('DSH_AGENTS_HOME', plan['env'])
+                    self.assertEqual(thin.read(self.state / 'personal-skills.json'), {
+                        'agents_home': None, 'reason': 'personal_skills_root_unavailable',
+                        'shadowed_product_skills': [],
+                    })
+                    self.assertTrue((Path(plan['env']['DSH_HOME']) / 'skills/delegate').is_symlink())
+                    if session is not None:
+                        self.assertEqual(plan['argv'][-2:], ['--resume', session])
+                    parked.rename(personal_root)
+
+    def test_inventory_failure_or_root_replacement_keeps_product_links(self):
+        personal = self.personal_fixture()
+        document = {**self.doc, 'personal_skills_home': str(personal)}
+
+        def switch_root(*args, **kwargs):
+            (personal / 'skills').rename(personal / 'parked-skills')
+            (personal / 'skills').mkdir()
+            return subprocess.CompletedProcess([], 0, stdout='["delegate"]')
+
+        for failure, reason in (
+            (PermissionError('optional scan denied'), 'personal_skills_scan_failed'),
+            (switch_root, 'personal_skills_root_changed'),
+        ):
+            with self.subTest(reason=reason), patch.object(thin.subprocess, 'run', side_effect=failure):
+                plan = thin.generate(document)
+                self.assertNotIn('DSH_AGENTS_HOME', plan['env'])
+                self.assertTrue((Path(plan['env']['DSH_HOME']) / 'skills/delegate').is_symlink())
+                self.assertEqual(thin.read(self.state / 'personal-skills.json')['reason'], reason)
 
     def test_native_plan_omits_trial_policy_preserves_proxy_and_instructions(self):
         with patch('subprocess.run', side_effect=AssertionError('subprocess forbidden')):
