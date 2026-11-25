@@ -255,10 +255,11 @@ PY
 }
 
 state_mark_result() {
-    python3 - "$STATE_FILE" "$1" "$2" "$3" "$4" <<'PY'
+    local waiting
+    waiting=$(python3 - "$STATE_FILE" "$1" "$2" "$3" "$4" "${5:-}" <<'PY'
 import fcntl, json, sys, time
 from pathlib import Path
-path, agent, msg_key, result, source = sys.argv[1:6]
+path, agent, msg_key, result, source, reason = sys.argv[1:]
 compound = f"{agent}:{msg_key}"
 p = Path(path)
 p.parent.mkdir(parents=True, exist_ok=True)
@@ -288,14 +289,27 @@ try:
         entry["last_success_ts"] = entry["last_attempt_ts"]
     if result == "session_not_found":
         entry["terminal"] = True
+    waiting = None
+    if reason:
+        count = entry.get("wait_count", 0) + 1
+        if count == 3 or (count > 3 and reason != entry.get("wait_reason")):
+            waiting = f"attempts={count} reason={reason}"
+        entry.update(wait_count=count, wait_reason=reason)
+    else:
+        entry.pop("wait_count", None)
+        entry.pop("wait_reason", None)
     data[compound] = entry
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(p)  # atomic swap so a reader never sees a half-written file
+    if waiting:
+        print(waiting)
 finally:
     fcntl.flock(lock, fcntl.LOCK_UN)
     lock.close()
 PY
+    ) || return $?
+    if [[ -n "$waiting" ]]; then log "  Waiting: agent=$1 message=$2 $waiting"; fi
 }
 
 acquire_delivery_lease() {
@@ -669,7 +683,7 @@ deliver_worker() {
 
     # Exit 10 allows the ordinary tmux checks, including for interactive persistent agents.
     if [[ "$headless_rc" -ne 10 ]]; then
-        state_mark_result "$agent_name" "$msg_key" "headless_reply_failed" "persistent-headless"
+        state_mark_result "$agent_name" "$msg_key" "headless_reply_failed" "persistent-headless" "headless_reply_failed"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
@@ -687,7 +701,7 @@ deliver_worker() {
     # successful inventory proves absence; timeout or denied lookup does not.
     local sessions
     if ! sessions=$(run_to "$TMUX_TIMEOUT" tmux list-sessions -F '#{session_name}' 2>/dev/null); then
-        state_mark_result "$agent_name" "$msg_key" "session_lookup_failed" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "session_lookup_failed" "watcher" "session_lookup_failed"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
@@ -722,13 +736,13 @@ deliver_worker() {
     last_lines=$(run_to "$TMUX_TIMEOUT" tmux capture-pane -t "$session_name" -p -S -5 2>/dev/null) || rc=$?
     if [ "$rc" -ne 0 ]; then
         # capture が時間内に返らない = server stall。inject せず後で再試行。
-        state_mark_result "$agent_name" "$msg_key" "capture_timeout" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "capture_timeout" "watcher" "capture_timeout"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
     if echo "$last_lines" | grep -qE '(\$ ?$|% ?$)' && \
        ! echo "$last_lines" | grep -qE '(❯|Claude|claude|ctx:|Sonnet|Opus|Haiku|›)'; then
-        state_mark_result "$agent_name" "$msg_key" "bare_shell" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "bare_shell" "watcher" "bare_shell"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
@@ -765,26 +779,38 @@ deliver_worker() {
     local pane_id
     pane_id=$(run_to "$TMUX_TIMEOUT" tmux display-message -p -t "=$session_name" '#{pane_id}' 2>/dev/null) || pane_id=""
     if [[ ! "$pane_id" =~ ^%[0-9]+$ ]]; then
-        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher" "pane_not_found"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
-    local paste_file submit_rc=0
+    local paste_file submit_rc=0 diagnostic_file submit_reason=""
     paste_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify.XXXXXX") || paste_file=""
     if [[ -z "$paste_file" ]] || ! printf '%s' "$prompt" > "$paste_file"; then
         [[ -n "$paste_file" ]] && rm -f "$paste_file"
-        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher"
+        state_mark_result "$agent_name" "$msg_key" "inject_failed" "watcher" "input_file_unavailable"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi
     # The helper shares the pane lock with Cockpit and checks the visible
     # input before Enter. A refused or unknown send leaves the signal pending.
-    run_to "$((TMUX_TIMEOUT + 2))" tmux submit-input "$pane_id" "$paste_file" 2>/dev/null || submit_rc=$?
+    # A terminated wrapper can leave a child holding stderr open. A file
+    # captures its diagnostic without making the watcher wait for pipe EOF.
+    diagnostic_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify-reason.XXXXXX") || diagnostic_file=""
+    run_to "$((TMUX_TIMEOUT + 2))" tmux submit-input "$pane_id" "$paste_file" \
+        2>"${diagnostic_file:-/dev/null}" || submit_rc=$?
     rm -f "$paste_file"
+    if [[ -n "$diagnostic_file" ]]; then
+        IFS= read -r submit_reason < "$diagnostic_file" || true
+        rm -f "$diagnostic_file"
+    fi
     if (( submit_rc != 0 )); then
         local result="submit_failed"
         if (( submit_rc == 3 )); then result="submit_deferred"; fi
-        state_mark_result "$agent_name" "$msg_key" "$result" "watcher"
+        case "$submit_reason" in
+            input_not_found|pane_locked|pane_changed|editor_not_empty|editor_waiting|editor_changed|paste_unavailable|load_buffer_failed|paste_failed|draft_not_confirmed|enter_failed|enter_not_confirmed|terminal_unavailable|submission_deadline|completion_mismatch|completion_unverified) ;;
+            *) submit_reason="$result" ;;
+        esac
+        state_mark_result "$agent_name" "$msg_key" "$result" "watcher" "$submit_reason"
         release_delivery_lease "$agent_name" "$msg_key" "$lease_owner"
         return 0
     fi

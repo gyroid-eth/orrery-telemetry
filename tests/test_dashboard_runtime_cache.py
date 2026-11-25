@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from time import perf_counter
 
 import pytest
 
+from dashboard import harness_activity
 import dashboard.server as server
 
 
@@ -668,6 +670,61 @@ def test_current_claude_edit_approval_with_cancel_footer_is_ask(history, footer)
 ])
 def test_claude_edit_approval_footer_does_not_promote_old_or_incomplete_ui(text):
     assert server._parse_runtime(text)["act_state"] == "wait"
+
+
+_CLAUDE_SCROLLED_HOOK = (
+    "Hook PreToolUse:Bash requires confirmation\n"
+    "Do you want to proceed?\n"
+    "❯ 1. Yes\n"
+    "  2. No\n"
+    "↑ 58 more lines\n"
+    "Esc to cancel · Tab to amend\n"
+)
+
+
+@pytest.mark.parametrize("text,expected", [
+    (_CLAUDE_SCROLLED_HOOK, "ask"),
+    (_CLAUDE_SCROLLED_HOOK.replace("↑ 58 more lines", "↓ 1 more line"), "ask"),
+    (_CLAUDE_SCROLLED_HOOK + _CLAUDE_INPUT, "wait"),
+    (_CLAUDE_SCROLLED_HOOK + "⏺ The command finished.\n", "wait"),
+    (_CLAUDE_SCROLLED_HOOK.replace("↑ 58 more lines", "↑ 58 more lines of output"), "wait"),
+    (_CLAUDE_SCROLLED_HOOK.replace("❯ 1. Yes\n  2. No\n", ""), "wait"),
+])
+def test_scrolled_claude_hook_requires_a_current_menu(text, expected):
+    assert server._parse_runtime(text)["act_state"] == expected
+
+
+_APPROVAL_CAPTURES = json.loads(
+    (Path(__file__).parent / "fixtures/native_activity/approval-captures.json").read_text()
+)["cases"]
+
+
+@pytest.mark.parametrize("case", _APPROVAL_CAPTURES, ids=lambda case: case["id"])
+def test_real_approval_captures_only_mark_a_current_modal(case):
+    program = case["program"]
+    if program in {"dsh", "hermes"}:
+        def activity(text):
+            return harness_activity.parse_activity(text, program)
+    else:
+        def activity(text):
+            return server._parse_runtime(text)["act_state"]
+
+    assert activity(case["active"]) == "ask"
+    assert activity(case["dismissed"]) == "wait"
+    assert activity(case["active"] + "\n" + case["dismissed"]) == "wait"
+
+
+@pytest.mark.parametrize("missing", [
+    "Run this command?",
+    "> 1. Yes, run command",
+    "  4. No, cancel",
+    "  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command",
+])
+def test_antigravity_approval_requires_the_native_menu(missing):
+    screen = next(case["active"] for case in _APPROVAL_CAPTURES if case["program"] == "agy")
+    changed = screen.replace(missing + "\n", "")
+    assert changed != screen
+    assert server._parse_runtime(changed)["act_state"] == "wait"
 
 
 def test_current_work_after_claude_edit_approval_remains_work():

@@ -67,6 +67,8 @@ Keep entries sorted by time when there are existing entries.
 
 Use fallback mode when Obsidian is not configured or the current work is outside a vault.
 
+Check each Obsidian-mode condition before choosing fallback, and name only the one that is not met. For example, say that `AGENTSTACK_OBSIDIAN_APP` is unset while `AGENTSTACK_PROJECT_KEY` is set. Do not call a variable unset without checking it.
+
 Destination:
 
 ```text

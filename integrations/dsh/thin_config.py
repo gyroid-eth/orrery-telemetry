@@ -1,4 +1,4 @@
-"""Write an ordinary native dsh profile. No keys, provider imports or requests.
+"""Write an ordinary native dsh profile. No keys, model providers or requests.
 
 Ordinary config mistakes can launch the wrong route or expose credentials;
 validate references and representability before writing the launch plan.
@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import stat
+import subprocess
 import sys
 from urllib.parse import urlsplit
 
@@ -206,6 +208,47 @@ def link(source, target):
     target.symlink_to(source, target_is_directory=source.is_dir())
 
 
+def skill_root_stamp(root):
+    info = root.stat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise NotADirectoryError(root)
+    return info.st_dev, info.st_ino, info.st_mtime_ns
+
+
+def personal_skills(document, facts, product_root):
+    """Read the optional root before changing any product skill links."""
+    personal = document.get('personal_skills_home')
+    if personal is None:
+        return None, document.get('personal_skills_reason'), set()
+    if not isinstance(personal, str) or '\0' in personal or not Path(personal).is_absolute():
+        return None, 'claude_config_dir_unresolved', set()
+    root = Path(personal) / 'skills'
+    try:
+        before = skill_root_stamp(root)
+    except OSError:
+        return None, 'personal_skills_root_unavailable', set()
+
+    provider = facts['runtime'] / 'node_modules/@deepseek-ai/dsh-skill-filesystem/lib/index.js'
+    inventory = Path(__file__).with_name('skill_inventory.mjs').resolve()
+    try:
+        result = subprocess.run(
+            [str(facts['node']), str(inventory), str(provider), str(root), str(product_root)],
+            env={}, capture_output=True, text=True, check=True, timeout=5,
+        )
+        shadowed = json.loads(result.stdout)
+        if not isinstance(shadowed, list) or not all(isinstance(name, str) for name in shadowed):
+            return None, 'personal_skills_scan_failed', set()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, 'personal_skills_scan_failed', set()
+
+    try:
+        if skill_root_stamp(root) != before:
+            return None, 'personal_skills_root_changed', set()
+    except OSError:
+        return None, 'personal_skills_root_unavailable', set()
+    return personal, None, set(shadowed)
+
+
 def generate(document):
     facts = validate_input(document)
     manifest = read(document['manifest_file'])
@@ -250,12 +293,30 @@ def generate(document):
         raise ValueError('invalid_skill_roots')
     for skill in skill_roots:
         absolute(skill, directory=True)
+    # The personal skills a Claude child reads (harness_child.personal_skill_home).
+    # dsh-tui's preset owns skill discovery and ignores host patch rows, so they
+    # are offered as $DSH_AGENTS_HOME/skills, searched after DSH_HOME/skills.
     skills = facts['root'] / 'skills'
+    personal, personal_reason, personal_shadows = personal_skills(document, facts, skills)
+    shadowed = []
     if skills.is_dir():
         # Native scanner walks one level <name>/SKILL.md: link each skill.
         for skill in skills.iterdir():
             if skill.is_dir() and (skill / 'SKILL.md').is_file():
-                link(skill, home / 'skills' / skill.name)
+                target = home / 'skills' / skill.name
+                if skill.name in personal_shadows:
+                    # As the installer does for Claude, leave the name to the
+                    # personal skill; drop only the link an earlier launch made.
+                    if target.is_symlink() and target.resolve() == skill.resolve():
+                        target.unlink()
+                    shadowed.append(skill.name)
+                    continue
+                link(skill, target)
+    if personal or personal_reason:
+        save(state / 'personal-skills.json', {'agents_home': personal,
+            'reason': personal_reason, 'shadowed_product_skills': sorted(shadowed)})
+    else:
+        (state / 'personal-skills.json').unlink(missing_ok=True)
     backend = facts['backend']
     ref = 'ORRERY_DSH_PROVIDER_KEY'
     provider = {'apiKeyEnv': ref, 'baseURL': backend['base_url']}
@@ -347,6 +408,7 @@ def generate(document):
         protected.extend([str(settings_file), str(definitions)])
     return {'argv': argv, 'cwd': str(cwd), 'config_dir': str(config_dir),
             'env': {'DSH_HOME': str(home), 'DSH_TUI_DATA_DIR': str(tui_data), 'DSH_TUI_LANG': language,
+                    **({'DSH_AGENTS_HOME': str(personal)} if personal else {}),
                     **facts['credential_context'],
                     'AGENTSTACK_LLM_KEY_FILES': json.dumps(protected),
                     'AGENTSTACK_LLM_KEY_DEFINITIONS': str(definitions)},

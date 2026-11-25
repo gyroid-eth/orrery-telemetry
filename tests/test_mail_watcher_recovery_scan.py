@@ -276,6 +276,46 @@ def test_a_lease_freed_by_a_finished_worker_does_not_start_a_second_one(tmp_path
     assert not (leases / "ProbeAgent-777.lock").exists(), "the handler kept a lease it did not use"
 
 
+def test_the_watcher_logs_repeated_submission_reasons_once(tmp_path):
+    source = WATCHER.read_text(encoding="utf-8")
+    script = _function(source, "state_mark_result") + _function(source, "deliver_worker") + r'''
+set -euo pipefail
+STATE_FILE="$1/state.json"
+STATE_DIR="$1"
+TMPDIR="$1"
+PERSISTENT_DELIVER="$1/missing-headless-helper"
+TMUX_TIMEOUT=5
+run_to() { shift; "$@"; }
+release_delivery_lease() { :; }
+log() { printf '%s\n' "$*"; }
+tmux() {
+    case "$1" in
+        list-sessions) echo ProbeAgent ;;
+        capture-pane) echo 'Claude Code' ;;
+        display-message) printf '%%1\n' ;;
+        show-environment) : ;;
+        submit-input)
+            if [[ -z "$REASON" ]]; then return 0; fi
+            printf '%s\n' "$REASON" >&2
+            return 3
+            ;;
+    esac
+}
+for REASON in editor_not_empty editor_not_empty editor_not_empty editor_not_empty input_not_found ""; do
+    deliver_worker "$1/777.signal" ProbeAgent 777 Sender "fixture" normal 0
+done
+'''
+    result = subprocess.run(["/bin/bash", "-c", script, "fixture", str(tmp_path)],
+                            capture_output=True, text=True, check=True, timeout=20)
+    waiting = [line.strip() for line in result.stdout.splitlines() if "Waiting:" in line]
+    assert waiting == [
+        "Waiting: agent=ProbeAgent message=777 attempts=3 reason=editor_not_empty",
+        "Waiting: agent=ProbeAgent message=777 attempts=5 reason=input_not_found",
+    ]
+    row = json.loads((tmp_path / "state.json").read_text())["ProbeAgent:777"]
+    assert row["last_result"] == "success" and "wait_count" not in row
+
+
 # --- real fswatch on Linux -------------------------------------------------------
 
 def _inotify_watches(pid: int) -> set[int]:

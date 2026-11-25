@@ -887,7 +887,7 @@ Success:
 }
 ```
 
-With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a CC audit trail; the registration summary / launcher prompt uses the first 80 characters.
+With `standalone: true`, `parent` is fixed as empty and `PARENT_AGENT` is removed from subprocess environment. No synthetic self-mail is created; the first 4,000 task characters are passed directly to the launcher. A normal child creates an inbox message with the parent as sender plus a BCC audit copy for the parent (BCC raises no notification, so the parent is not woken by its own task); the registration summary / launcher prompt uses the first 80 characters.
 
 In API 50, the `gemini` entry from `/api/spawn-names` on macOS advertises `capabilities.standalone: true`. A standalone launch uses `dir` as its working folder. Git is required only when `worktree: true` is selected. Delegated launches still require a worktree and `resources`.
 
