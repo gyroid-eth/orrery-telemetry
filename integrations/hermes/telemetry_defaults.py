@@ -1,4 +1,4 @@
-"""Project native telemetry answers, MCP selection and personal skill roots without rewriting other YAML bytes.
+"""Project native telemetry answers and MCP selection without rewriting other YAML bytes.
 
 Called only for the selected product profile while thin_config holds its lock.
 This uses configuration data; it never imports Hermes or runs a helper.
@@ -29,7 +29,6 @@ def _edits(text, node, fields):
     if node.tag == 'tag:yaml.org,2002:null':
         return [(node.start_mark.index, node.end_mark.index, json.dumps(fields))]
     children = _mapping(node)
-    keys = {key.value: key for key, _value in node.value}
     edits, missing = [], {}
     for key, value in fields.items():
         if key not in children:
@@ -38,14 +37,7 @@ def _edits(text, node, fields):
             edits.extend(_edits(text, children[key], value))
         else:
             child = children[key]
-            start, end = child.start_mark.index, child.end_mark.index
-            if child.tag in ('tag:yaml.org,2002:seq', 'tag:yaml.org,2002:map') and not child.flow_style:
-                # A block collection starts on a later line and its span runs
-                # into the next key's indentation: rewrite it after the key.
-                edits.append((keys[key].end_mark.index, start + len(text[start:end].rstrip()),
-                               ': ' + json.dumps(value)))
-            else:
-                edits.append((start, end, json.dumps(value)))
+            edits.append((child.start_mark.index, child.end_mark.index, json.dumps(value)))
     if missing:
         if node.flow_style:
             end = node.end_mark.index - 1
@@ -139,52 +131,15 @@ def project_mcp(profile, servers):
     expected = {**config, 'mcp_servers': servers}
     if config == expected:
         return False
-    return _write_fields(path, parser, text, {'mcp_servers': servers}, expected, 'invalid_mcp_config')
-
-
-def project_skill_dirs(profile, state, roots):
-    """Put the personal skill roots first in raw skills.external_dirs.
-
-    Only the roots a previous launch added are replaced; any other entry stays
-    after them. With no personal roots now or before, nothing is written.
-    """
-    ledger = Path(state) / 'personal-skill-dirs.json'
-    previous = json.loads(ledger.read_text(encoding='utf-8')) if ledger.exists() else []
-    if not roots and not previous:
-        return False
-    parser = _yaml_parser()
-    path = Path(profile) / 'config.yaml'
-    if path.is_symlink():
-        raise ValueError('owned_link_conflict')
-    text = path.read_bytes().decode('utf-8') if path.exists() else ''
-    config = parser.load(text) or {}
-    skills = config.get('skills') if isinstance(config, dict) else None
-    current = (skills or {}).get('external_dirs', []) if isinstance(skills, (dict, type(None))) else None
-    current = [current] if isinstance(current, str) else current
-    if not isinstance(config, dict) or not isinstance(current, list) or not isinstance(previous, list):
-        raise ValueError('invalid_skills_config')
-    dirs = [*roots, *(entry for entry in current if entry not in previous and entry not in roots)]
-    expected = {**config, 'skills': {**(skills or {}), 'external_dirs': dirs}}
-    changed = config != expected and _write_fields(
-        path, parser, text, {'skills': {'external_dirs': dirs}}, expected, 'invalid_skills_config')
-    if roots:
-        Path(state).mkdir(parents=True, exist_ok=True, mode=0o700)
-        ledger.write_text(json.dumps(roots), encoding='utf-8')
-    else:
-        ledger.unlink(missing_ok=True)
-    return changed
-
-
-def _write_fields(path, parser, text, fields, expected, error):
     try:
-        edits = _edits(text, parser.compose(text), fields)
+        edits = _edits(text, parser.compose(text), {'mcp_servers': servers})
     except ValueError:
-        raise ValueError(error) from None
+        raise ValueError('invalid_mcp_config') from None
     revised = text
     for start, end, value in sorted(edits, reverse=True):
         revised = revised[:start] + value + revised[end:]
     if parser.load(revised) != expected:
-        raise ValueError(error)
+        raise ValueError('invalid_mcp_config')
     temporary = path.with_name(path.name + '.' + str(os.getpid()) + '.tmp')
     try:
         with temporary.open('xb') as handle:

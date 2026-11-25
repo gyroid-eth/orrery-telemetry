@@ -223,6 +223,77 @@ def _link(path, target):
     path.symlink_to(target)
 
 
+PERSONAL_LEDGER = '.orrery-personal-skills.json'
+
+
+def _skill_name(skill_md):
+    """The frontmatter name Hermes lists a skill under, else its directory name."""
+    try:
+        text = skill_md.read_text(encoding='utf-8', errors='replace')[:8192]
+    except OSError:
+        return skill_md.parent.name
+    if text.startswith('---'):
+        match = re.search(r'^name:\s*["\']?([^"\'\n#]+?)["\']?\s*$', text.split('\n---', 1)[0], re.MULTILINE)
+        if match:
+            return match.group(1).strip()
+    return skill_md.parent.name
+
+
+def _personal_skills(roots):
+    """{link name: (directory, skill name)} for the personal skills, first root first."""
+    found = {}
+    for root in roots:
+        for skill_md in sorted(Path(root).glob('*/SKILL.md')):
+            found.setdefault(skill_md.parent.name, (skill_md.parent, _skill_name(skill_md)))
+    return found
+
+
+def _project_skills(profile, product, personal):
+    """Link product skills, and the personal skills a Claude child reads, into the profile.
+
+    Profile skills outrank skills.external_dirs, so a personal skill linked here
+    wins over the same-named product skill, as the installer arranges for
+    Claude. config.yaml is not written. The ledger lives in the profile, with
+    the same lifetime as the links, and names the personal links to replace.
+    """
+    skills, ledger = profile / 'skills', profile / PERSONAL_LEDGER
+    previous = read(ledger) if ledger.exists() else []
+    if (not isinstance(previous, list) or not all(isinstance(name, str) and name not in ('', '.', '..')
+                                                    and '/' not in name for name in previous)):
+        raise ValueError('invalid_skill_ledger')
+    product_dirs = {source.parent.resolve() for source in product.glob('*/SKILL.md')}
+    names = set(personal) | {name for _source, name in personal.values()}
+    if personal:
+        # Record the intent first so an interrupted launch is cleaned next time.
+        _save(ledger, sorted({*previous, *personal}))
+    for name in previous:
+        if name not in personal and (skills / name).is_symlink():
+            (skills / name).unlink()
+    linked = []
+    for name, (source, _skill) in personal.items():
+        path = skills / name
+        if path.is_symlink() and path.resolve() == source.resolve():
+            linked.append(name)
+            continue
+        if path.is_symlink() and (name in previous or path.resolve() in product_dirs):
+            path.unlink()
+        elif path.exists() or path.is_symlink():
+            continue  # The profile's own skill of this name stays.
+        _link(path, source)
+        linked.append(name)
+    for source in product.glob('*/SKILL.md'):
+        path = skills / source.parent.name
+        if source.parent.name in names or _skill_name(source) in names:
+            if path.is_symlink() and path.resolve() == source.parent.resolve():
+                path.unlink()
+            continue
+        _link(path, source.parent)
+    if linked:
+        _save(ledger, linked)
+    else:
+        ledger.unlink(missing_ok=True)
+
+
 @contextmanager
 def _profile_lock(profile):
     profile.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -349,7 +420,7 @@ def generate(document):
             or any(not isinstance(root, str) or not Path(root).is_absolute() or not Path(root).is_dir()
                    for root in personal_skills)):
         raise ValueError('invalid_skill_roots')
-    personal_names = {source.parent.name for root in personal_skills for source in Path(root).glob('*/SKILL.md')}
+    personal = _personal_skills(personal_skills)
     servers = read(document['mcp_config'])['mcpServers']
     if not isinstance(servers, dict):
         raise ValueError('unsupported_mcp_selection')
@@ -415,16 +486,7 @@ def generate(document):
             target = profile / 'plugins/orrery-telegram'
             for name in ('__init__.py', 'managed_guard.py', 'settings.py', 'plugin.yaml'):
                 _link(target / name, product / 'integrations/hermes/telegram' / name)
-        skills = Path(document.get('skills_root') or product / 'skills').resolve()
-        for source in skills.glob('*/SKILL.md'):
-            target = profile / 'skills' / source.parent.name
-            if source.parent.name in personal_names:
-                # Profile skills outrank skills.external_dirs. Like the
-                # installer for Claude, the same-named personal skill wins.
-                if target.is_symlink() and target.resolve() == source.parent.resolve():
-                    target.unlink()
-                continue
-            _link(target, source.parent)
+        _project_skills(profile, Path(document.get('skills_root') or product / 'skills').resolve(), personal)
         auxiliary = existing.get('auxiliary')
         auxiliary = auxiliary if isinstance(auxiliary, dict) else {}
         tasks = list(dict.fromkeys([*_auxiliary_tasks(Path(facts['source'])),
@@ -497,8 +559,6 @@ def generate(document):
         spec.loader.exec_module(defaults)
         defaults.settle_unanswered(profile, state)
         defaults.project_mcp(profile, raw_mcp)
-        # Native skill discovery reads skills.external_dirs from raw config only.
-        defaults.project_skill_dirs(profile, state, personal_skills)
         if search:
             # native の dotenv 入口は secrets だけ raw config から読む。
             # 非秘密の helper 参照をここにも写す（overlay のみでは起動時に読まれない）。

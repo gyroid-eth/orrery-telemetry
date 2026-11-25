@@ -131,6 +131,10 @@ def test_generation_reads_personal_skills_at_each_launch(tmp_path, monkeypatch, 
     (skills / 'log').mkdir(parents=True)
     document = dict(state_dir=str(tmp_path), cwd=str(tmp_path), program=program,
                     mcp_config=str(mail), tools={'base': 'default', 'tools': {}})
+    # A child saved before the opt-in, such as a persistent agent's, is unchanged.
+    child.generate_plan(document, {'python': sys.executable})
+    assert child.read(tmp_path / 'input.json')['skill_roots'] == []
+    document['personal_skills'] = True
     child.generate_plan(document, {'python': sys.executable})
     assert child.read(tmp_path / 'input.json')['skill_roots'] == [str(skills)]
     # A resume regenerates from saved input and follows the current directory.
@@ -139,6 +143,35 @@ def test_generation_reads_personal_skills_at_each_launch(tmp_path, monkeypatch, 
     document = child.read(tmp_path / 'input.json')
     child.generate_plan(document, {'python': sys.executable})
     assert child.read(tmp_path / 'input.json')['skill_roots'] == []
+
+
+@pytest.mark.parametrize('persistent', [None, {'telegram': {'fixture': True}}])
+def test_fresh_children_opt_in_and_persistent_agents_do_not(tmp_path, monkeypatch, persistent):
+    from agentstack_mail import fresh_proxy
+    spec = importlib.util.spec_from_file_location('agentstack_mail.fresh_harness',
+        ROOT / 'packages/agentstack_mail/src/agentstack_mail/fresh_harness.py')
+    fresh_harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh_harness)
+    captured = {}
+    def generate(document, runner):
+        captured.update(document)
+        (Path(document['state_dir']) / 'launch.json').write_text(json.dumps({'env': {}}))
+    def instructions(state, root):
+        (state / 'instructions.md').write_text('fixture')
+        return state / 'instructions.md'
+    api = {'fresh_instructions': instructions, 'dynamic_prelaunch': lambda d: None,
+           'generate_plan': generate, 'read': lambda p: json.loads(Path(p).read_text()),
+           'validate_plan': lambda *a: None}
+    monkeypatch.setattr(fresh_harness, 'helper', lambda root: api)
+    async def owner(client): return {'agent_name': 'FixtureAgent'}
+    monkeypatch.setattr(fresh_proxy, 'verified_owner', owner)
+    base = tmp_path / 'client'; base.mkdir(mode=0o700)
+    run = tmp_path / 'run'; run.mkdir(mode=0o700)
+    settings = {'model': 'fixture-model', 'runner': {'connection_kind': 'strata'},
+                'spec': {'selection': {'manifest_file': '/fixture/manifest.json', 'backend_id': 'strata'}}}
+    fresh_harness.plan(SimpleNamespace(path=base / 'context.json'), ROOT, 'hermes', settings, run, tmp_path,
+                       'fixture', None, persistent=persistent)
+    assert captured['personal_skills'] is (persistent is None)
 
 
 @pytest.mark.parametrize('program', ['dsh','hermes'])
@@ -169,6 +202,7 @@ os.chmod(a.out,0o600)
     assert selected['chrome-devtools']['env'] == {'npm_config_cache': '/fixture/cache'}
     assert source['program'] == program and source['backend_id'] == 'strata'
     assert source['parent_agent'] is None
+    assert source['personal_skills'] is True
     assert not ({'effort','task_timeout_seconds','task','allowed_paths','expected'} & source.keys())
     assert Path(source['prompt_file']).read_text() == Path(args.prompt_file).read_text()
     spec=importlib.util.spec_from_file_location('expected_instruction_renderer', ROOT/'bin/lib/instruction_blocks.py')
