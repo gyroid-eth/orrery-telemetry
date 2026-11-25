@@ -13,6 +13,7 @@ import secrets
 import socket
 import threading
 import time
+from urllib.parse import quote
 
 CONTRACT='orrery-mobile-pane-v1'
 MAX_JSON_BYTES=16384
@@ -40,6 +41,10 @@ def request_fields(operation,payload,*,fresh=None):
         fields|={'mail_instance_id','mail_agent_id'}
         if (not _matches(EPOCH,payload.get('mail_instance_id')) or type(payload.get('mail_agent_id')) is not int
                 or payload['mail_agent_id']<=0):return False
+    if operation in ATTACHMENT_JSON_LIMITS and 'label' in payload:
+        if payload.get(operation) is None or not isinstance(payload['label'],str) or not 1<=len(payload['label'])<=256:
+            return False
+        fields.add('label')
     if set(payload)!=fields:return False
     if operation=='file' and payload['file'] is not None:
         file=payload['file']
@@ -101,10 +106,14 @@ class InputClient:
         if not request_fields(operation,payload,fresh=fresh):
             raise InputUnavailable('input_request_invalid')
         request=dict(payload,contract=CONTRACT,owner=self.owner,reader_epoch=self.reader_epoch)
-        try: data=json.dumps(request,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode('utf-8')
+        name=request.pop('label',None)
+        try:
+            data=json.dumps(request,separators=(',',':'),ensure_ascii=False,allow_nan=False).encode('utf-8')
+            label=quote(name,safe='') if name is not None else None
         except (ValueError,UnicodeError): raise InputUnavailable('input_request_invalid') from None
         if len(data)>ATTACHMENT_JSON_LIMITS.get(operation,MAX_JSON_BYTES): raise InputUnavailable('input_request_invalid')
-        value=self._post(operation,data)
+        # The request JSON is unchanged for older Cockpit versions.
+        value=self._post(operation,data,attachment_label=label) if label else self._post(operation,data)
         if value.get('contract')!=CONTRACT or not _matches(EPOCH,value.get('epoch')):
             raise InputUnavailable('input_capability_incompatible')
         if operation=='capability':
@@ -165,7 +174,7 @@ class InputClient:
                 raise InputUnavailable('input_response_invalid')
         return value
 
-    def _post(self,operation,data):
+    def _post(self,operation,data,*,attachment_label=None):
         # Every operation has one fixed path. This is not the cockpit proxy or
         # terminal WebSocket. No redirects, environment proxy or auto-retry.
         timeout=25 if operation in ATTACHMENT_JSON_LIMITS else 7
@@ -178,6 +187,7 @@ class InputClient:
                 except OSError: pass
             timer=threading.Timer(max(.001,deadline-time.monotonic()),expire); timer.daemon=True; timer.start()
             headers={'X-ORRERY-Mobile-Preview':f'{MAX_PREVIEW_LINES}/{MAX_PREVIEW_BYTES}'} if operation=='preview' else {}
+            if attachment_label:headers['X-ORRERY-Attachment-Label']=attachment_label
             connection.request('POST','/_mobile/terminal/'+operation,body=data,headers={
                 'Host':f'127.0.0.1:{self.port}','Origin':f'http://127.0.0.1:{self.port}',
                 'X-ORRERY-Mobile-Contract':CONTRACT,'Content-Type':'application/json','Connection':'close',**headers})

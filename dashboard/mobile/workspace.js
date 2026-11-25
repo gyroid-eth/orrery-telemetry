@@ -660,7 +660,7 @@
       if (!previous) morph(true,origin);
       if (focus) {
         const text = field();
-        (text?.disabled ? input.querySelector('.reader-input-target') : text)?.focus({preventScroll:true});
+        (text?.disabled ? input.querySelector('.reader-input-target,.reader-pane-recovery') : text)?.focus({preventScroll:true});
       }
     }
 

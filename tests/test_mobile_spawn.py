@@ -49,7 +49,7 @@ def request(port, method, path, body=None, headers=HEADERS):
         connection.close()
 
 
-def fixture(log):
+def fixture(log, *, catalog=CATALOG, launch_result=None, status_result=None):
     class Upstream(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -65,16 +65,17 @@ def fixture(log):
         def do_GET(self):
             log.append(self.path)
             if self.path == '/telemetry/spawn-catalog':
-                self.respond(CATALOG)
+                self.respond(catalog)
             elif self.path == '/api/spawn-status?name=FixtureCurie':
-                self.respond({'ok':True,'name':'FixtureCurie','state':'ready','detail':'internal'})
+                self.respond(status_result or {'ok':True,'name':'FixtureCurie','state':'ready','detail':'internal'})
             else:
                 self.respond({'ok':False}, 404)
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             log.append((self.path, body))
-            self.respond({'ok':True,'child_name':'FixtureCurie','pending':True}, 202)
+            result = launch_result or {'ok':True,'child_name':'FixtureCurie','pending':True}
+            self.respond(result, 202 if result['ok'] else 400)
 
     return ThreadingHTTPServer(('127.0.0.1', 0), Upstream)
 
@@ -134,10 +135,9 @@ def test_read_only_relay_denies_spawn_before_upstream():
         assert request(port,'POST','/view/spawn',{})[0] == 405
 
 
-@pytest.mark.parametrize('supported', [False, True])
-def test_antigravity_needs_standalone_capability_and_forwards_its_native_options(supported):
+def test_standalone_antigravity_forwards_launch_without_optional_tools():
     provider = {'id':'gemini','label':'Antigravity','efforts':['low','high'],
-                'capabilities':{'standalone':supported, 'resources_required':True, 'effort_required':True},
+                'capabilities':{'standalone':True, 'resources_required':True, 'effort_required':True},
                 'models':[{'id':'gemini-fixture','default':True}],
                 'harnesses':[{'id':'antigravity','available':True,'default':True}]}
     submitted = []
@@ -145,16 +145,168 @@ def test_antigravity_needs_standalone_capability_and_forwards_its_native_options
         submitted.append(body)
         return {'ok':True,'child_name':'FixtureCurie'}
 
-    store = MobileSpawn(lambda: {**CATALOG,'providers':[provider]}, launch, lambda _: {})
+    source = {**CATALOG, 'providers':[provider], 'browser_modes':{'antigravity':['off','temporary','personal']}}
+    store = MobileSpawn(lambda: source, launch, lambda _: {})
     catalog = store.catalog('a'*32, configurable=True)
-    assert bool(catalog['models']) is supported
-    if supported:
-        value = dict(payload(catalog), harness='antigravity', browser=False, computer=False)
-        assert store.launch('a'*32, value) == {'state':'ready','name':'FixtureCurie'}
-        assert submitted == [{
-            'task':value['task'],'model':'gemini-fixture','provider':'gemini','dir':'/workspace',
-            'standalone':True,'headless':True,'async':True,'effort':'high','role':'Review',
-        }]
+    route = catalog['models'][0]['harnesses'][0]
+    assert route['browser_modes'] == [] and not route.get('launch_blocked')
+    value = dict(payload(catalog), harness='antigravity', computer=False)
+    value.pop('browser')
+    for tools in ({'computer':True}, {'browser':True}, *({'browser_mode':mode} for mode in ('off', 'temporary', 'personal'))):
+        with pytest.raises(relay.mobile_spawn.SpawnError, match='invalid_launch'):
+            store.launch('a'*32, {**value, **tools})
+    assert not submitted
+    assert store.launch('a'*32, value) == {'state':'ready','name':'FixtureCurie'}
+    assert submitted == [{
+        'task':value['task'],'model':'gemini-fixture','provider':'gemini','dir':'/workspace',
+        'standalone':True,'headless':True,'async':True,'effort':'high','role':'Review',
+    }]
+
+
+def test_antigravity_models_are_listed_without_forwarding_an_invalid_standalone_launch():
+    catalog_source = {**CATALOG, 'providers': [*CATALOG['providers'],
+        {'id': 'gemini', 'label': 'Antigravity',
+         'capabilities': {'effort_required': True, 'standalone': False, 'resources_required': True},
+         'models': [{'id': f'gemini-fixture-{i}'} for i in range(17)],
+         'harnesses': [{'id': 'antigravity', 'available': True, 'default': True}], 'efforts': ['low', 'high']},
+        {'id': 'deepseek', 'label': 'DeepSeek',
+         'models': [{'id': 'deepseek-fixture', 'harnesses': [{'id': 'dsh', 'available': True},
+                                                             {'id': 'hermes', 'available': True}]}]},
+        {'id': 'local', 'label': 'Local', 'locality': 'local',
+         'models': [{'id': 'local-fixture', 'url_index': 1, 'url_key': 'fixture-key',
+                     'harnesses': [{'id': 'hermes', 'available': True}]}]},
+    ]}
+    submitted = []
+    store = MobileSpawn(lambda: catalog_source, submitted.append, lambda _: {})
+    catalog = store.catalog('a'*32, configurable=True)
+    models = catalog['models']
+    gemini = [model for model in models if model['provider'] == 'gemini']
+    assert len(gemini) == 17
+    assert all(model['harnesses'][0]['launch_blocked'] for model in gemini)
+    assert [(m['provider'], [h['key'] for h in m['harnesses']]) for m in models[-2:]] == [
+        ('deepseek', ['dsh', 'hermes']), ('local', ['hermes'])]
+    assert models[-1]['locality'] == 'local' and 'url_key' not in models[-1]
+    with pytest.raises(relay.mobile_spawn.SpawnError, match='invalid_launch'):
+        store.launch('a'*32, {**payload(catalog), 'model': models.index(gemini[0]), 'harness': 'antigravity'})
+    assert not submitted
+
+
+def local_catalog():
+    return {
+        'providers': [{
+            'id': 'strata-epyc', 'label': 'Fixture connection', 'locality': 'local',
+            'models': [{'id': 'inkling-2-mini', 'url_index': 0, 'url_key': 'a' * 64}],
+            'harnesses': [{'id': 'hermes', 'label': 'Hermes', 'available': True, 'default': True},
+                          {'id': 'dsh', 'label': 'dsh', 'available': True}],
+        }],
+        'dirs': [{'path': '/workspace', 'label': 'Workspace'},
+                 {'path': '/workspace/browser', 'label': 'Browser workspace'}],
+        'native_browser_dirs': ['/workspace/browser'],
+    }
+
+
+@pytest.mark.parametrize('mode', ['off', 'temporary', 'personal'])
+def test_mobile_receipt_forwards_only_modes_offered_for_that_harness(mode):
+    source = {**local_catalog(), 'browser_modes': {'hermes': ['off', 'temporary', 'personal'], 'dsh': ['off']}}
+    submitted = []
+    def launch(values):
+        submitted.append(values)
+        return {'ok': True, 'child_name': 'FixtureCurie'}
+    store = MobileSpawn(lambda:source, launch, lambda _: {})
+    catalog = store.catalog('a'*32, configurable=True)
+    value = payload(catalog)
+    value.pop('browser')
+    value.update(harness='hermes', effort=None, browser_mode=mode)
+    with pytest.raises(relay.mobile_spawn.SpawnError, match='invalid_launch'):
+        store.launch('a'*32, {**value, 'harness':'dsh', 'browser_mode':'personal'})
+    assert store.launch('a'*32, value)['state'] == 'ready'
+    assert submitted[0]['tools'] == {'mcp':['cua-driver'],'browser_mode':mode}
+    assert 'base' not in submitted[0]
+
+
+@pytest.mark.parametrize('harness', ['dsh', 'hermes'])
+@pytest.mark.parametrize('directory,desired,expected', [
+    (0, None, ['cua-driver']),
+    (0, True, ['cua-driver']),
+    (1, True, ['cua-driver', 'chrome-devtools']),
+    (1, False, ['cua-driver']),
+])
+def test_local_launch_forwards_only_tools_available_in_the_selected_directory(harness, directory, desired, expected):
+    calls = []
+    with serving(fixture(calls)) as dashboard, serving(fixture(calls, catalog=local_catalog())) as desktop:
+        config = relay.Config(OWNER, ORIGIN, upstream_port=dashboard, cockpit_port=desktop,
+                              input_enabled=True, phone_policy_reviewed=True)
+        with serving(relay.make_server(config,store=Store(),input_client=Input(31),test_port=0)) as port:
+            status, catalog = request(port, 'GET', '/view/spawn')
+            assert status == 200 and catalog['models'][0]['provider'] == 'strata-epyc'
+            assert [item.get('native_browser') for item in catalog['directories']] == [None, True]
+            value = {**payload(catalog), 'directory': directory, 'harness': harness, 'effort': None}
+            if desired is None:
+                value.pop('browser')
+            else:
+                value['browser'] = desired
+            assert request(port, 'POST', '/view/spawn', value) == (200, {'state':'launching','name':'FixtureCurie'})
+            path, submitted = calls[-1]
+            assert path == '/api/spawn' and submitted['harness'] == harness
+            assert submitted['provider'] == 'strata-epyc' and submitted['model'] == 'inkling-2-mini'
+            assert submitted['url_index'] == 0 and submitted['url_key'] == 'a' * 64
+            expected_tools = {'mcp': expected}
+            if 'chrome-devtools' not in expected:
+                expected_tools['browser_off'] = True
+            assert submitted['tools'] == expected_tools
+            assert 'base' not in submitted
+
+
+@pytest.mark.parametrize('codex_browser', [False, True])
+def test_catalog_probes_the_same_native_browser_copy_as_the_launcher(tmp_path, monkeypatch, codex_browser):
+    from dashboard import server
+
+    plain, allowed, blocked = [tmp_path / name for name in ('plain', 'allowed', 'blocked')]
+    for directory in (plain, allowed, blocked):
+        directory.mkdir()
+    definition = {'command':'/usr/bin/true', 'args':[]}
+    settings = tmp_path / 'harness-settings.json'
+    settings.write_text(json.dumps({'projects': {
+        str(allowed): {'mcpServers': {'chrome-devtools': definition}},
+        str(blocked): {'mcpServers': {'chrome-devtools': {**definition, 'env': {'KEY':'private'}}}},
+    }}))
+    monkeypatch.setenv('AGENTSTACK_SPAWN_ROOTS', str(tmp_path))
+    monkeypatch.setenv('AGENTSTACK_CLAUDE_JSON', str(settings))
+    codex = tmp_path / 'codex'
+    codex.mkdir()
+    monkeypatch.setenv('CODEX_HOME', str(codex))
+    if codex_browser:
+        (codex / 'config.toml').write_text('''
+[mcp_servers.chrome-devtools]
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]
+''')
+    dirs = [str(plain), str(allowed), str(blocked)]
+    assert server._native_browser_directories(dirs) == (dirs if codex_browser else [str(allowed)])
+
+
+@pytest.mark.parametrize('asynchronous', [False, True])
+def test_mobile_launch_returns_only_a_safe_failure_reason(asynchronous):
+    calls = []
+    failure = {'ok':False, 'error':'spawn launcher exited with status 1',
+               'detail':'local log /fixture/private\nHarness prepare failed: unsupported_mcp_selection\n'}
+    status_result = {'ok':True, 'name':'FixtureCurie', 'state':'failed', 'result':failure} if asynchronous else None
+    dashboard_api = fixture(calls, launch_result=None if asynchronous else failure, status_result=status_result)
+    with serving(dashboard_api) as dashboard, serving(fixture(calls)) as desktop:
+        config = relay.Config(OWNER, ORIGIN, upstream_port=dashboard, cockpit_port=desktop,
+                              input_enabled=True, phone_policy_reviewed=True)
+        with serving(relay.make_server(config,store=Store(),input_client=Input(31),test_port=0)) as port:
+            _, catalog = request(port, 'GET', '/view/spawn')
+            expected = {'state':'failed','failure_reason':'unsupported_tools'}
+            result = request(port, 'POST', '/view/spawn', payload(catalog))
+            if asynchronous:
+                assert result == (200, {'state':'launching','name':'FixtureCurie'})
+                expected['name'] = 'FixtureCurie'
+            else:
+                assert result == (200, expected)
+            for _ in range(2):
+                assert request(port, 'GET', '/view/spawn/status?receipt=' + RECEIPT) == (200, expected)
+            assert sum(call == '/api/spawn-status?name=FixtureCurie' for call in calls) == int(asynchronous)
 
 
 def test_lost_acknowledgement_stays_unknown_even_if_confirmation_is_repeated():

@@ -4,14 +4,32 @@
   const $ = id => document.getElementById(id);
   const entry = $('mobile-new-agent'), sheet = $('spawn-sheet'), title = $('spawn-title');
   const editor = $('spawn-editor'), review = $('spawn-review'), result = $('spawn-result'), notice = $('spawn-notice');
-  const task = $('spawn-task'), role = $('spawn-role'), model = $('spawn-model'), harness = $('spawn-harness');
+  const task = $('spawn-task'), role = $('spawn-role'), harness = $('spawn-harness');
+  const providerTabs = $('spawn-provider-tabs'), modelSearch = $('spawn-model-search'), modelList = $('spawn-model-list');
+  const modelNotice = $('spawn-model-notice'), modelEmpty = $('spawn-model-empty');
   const directory = $('spawn-directory'), effort = $('spawn-effort'), reviewButton = $('spawn-review-button');
   const settings = $('spawn-settings'), modelChip = $('spawn-model-chip');
   const modelName = $('spawn-model-name'), effortMark = $('spawn-model-effort');
   const computer = $('spawn-computer'), browser = $('spawn-browser');
+  const browserTool = browser.closest('.spawn-tool');
+  const browserMenu = $('spawn-browser-menu');
+  const browserLabels = {off:'Off', temporary:'Temporary Chrome', personal:'My Chrome'};
+  let browserMode = 'off';
+  const browserChoices = Object.entries(browserLabels).map(([mode, label]) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.onclick = () => {
+      browserMode = mode;
+      syncBrowser(chosenRoute());
+      browserMenu.hidePopover();
+      browser.focus({preventScroll:true});
+    };
+    browserMenu.append(button);
+    return [mode, button];
+  });
   const mobileControls = window.OrrerySpawnControls;
   const selects = new Map([
-    [model, mobileControls?.mountDropdown(model, {inline:true})],
     [harness, mobileControls?.mountDropdown(harness, {inline:true})],
     [directory, mobileControls?.mountDropdown(directory, {selectedLabel:option => option?.dataset.shortLabel})],
   ]);
@@ -44,6 +62,17 @@
   }
 
   const receiptKey = 'orrery-mobile-launch-receipt';
+  const providerIcons = new Map([['claude', 'anthropic'], ['codex', 'openai'], ['gemini', 'google'], ['deepseek', 'deepseek']]);
+  const providerOrder = [...providerIcons.keys(), 'local'];
+  const failureReasons = new Map([
+    ['unsupported_tools', 'Turn off optional tools or choose another harness.'],
+    ['browser_setup', 'Turn off Browser or set up Chrome on your computer.'],
+    ['model_unavailable', 'Choose another model or harness.'],
+    ['launch_directory', 'Choose another launch folder.'],
+    ['check_graph', 'Check the graph before trying again.'],
+  ]);
+  const modelGroups = new Map();
+  let modelIndex = -1;
   let catalog, route, selection, receipt = '', submitting = false, timer = 0, catalogRequest;
 
   try {
@@ -66,7 +95,10 @@
     notice.hidden = !message;
     notice.textContent = message;
     title.textContent = view === 'review' ? 'Review launch' : 'New agent';
-    if (view !== 'editor') {
+    if (view === 'editor') {
+      canReview();
+    } else {
+      if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
       if (settings.open) settings.close();
       for (const control of selects.values()) control?.close();
       dismissToolHelp();
@@ -91,22 +123,147 @@
     return value ? value.charAt(0).toUpperCase() + value.slice(1) : 'Default';
   }
 
-  function modelChoices(models) {
-    const groups = new Map();
-    for (const [index, item] of models.entries()) {
-      if (!groups.has(item.provider)) {
-        const group = document.createElement('optgroup');
-        group.label = item.provider_label;
-        groups.set(item.provider, group);
+  const selectedModel = () => catalog?.models[modelIndex];
+  const providerFor = item => item.locality === 'local' ? 'local' : item.provider;
+  const modelLabel = item => item.model + (Number.isInteger(item.url_index) ? ' (URL ' + (item.url_index + 1) + ')' : '');
+  const modelSource = item => providerFor(item) === 'local' && item.provider !== 'local' ? item.provider_label : '';
+
+  function renderModels() {
+    const group = modelGroups.get(providerFor(selectedModel()));
+    const query = modelSearch.value.trim().toLowerCase();
+    const list = document.createDocumentFragment();
+    for (const index of group.indices) {
+      const item = catalog.models[index], name = modelLabel(item), source = modelSource(item);
+      if (query && !`${name} ${source}`.toLowerCase().includes(query)) continue;
+      const row = document.createElement('label');
+      row.className = 'spawn-model-choice';
+      row.title = source ? `${name} — ${source}` : name;
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'spawn-model-choice';
+      input.value = String(index);
+      input.checked = index === modelIndex;
+      input.addEventListener('change', () => {
+        modelIndex = index;
+        updateModel();
+      });
+      const label = document.createElement('span');
+      label.className = 'spawn-model-label';
+      label.textContent = name;
+      row.append(input, label);
+      if (source) {
+        const detail = document.createElement('span');
+        detail.className = 'spawn-model-source';
+        detail.textContent = source;
+        row.append(detail);
       }
-      const endpoint = Number.isInteger(item.url_index) ? ' (URL ' + (item.url_index + 1) + ')' : '';
-      groups.get(item.provider).append(new Option(item.model + endpoint, index));
+      list.append(row);
     }
-    model.replaceChildren(...groups.values());
+    modelList.setAttribute('aria-label', group.label + ' models');
+    modelEmpty.hidden = list.childElementCount !== 0;
+    modelList.replaceChildren(list);
+    modelList.scrollTop = 0;
+  }
+
+  function renderProviders() {
+    modelGroups.clear();
+    for (const [index, item] of catalog.models.entries()) {
+      const key = providerFor(item);
+      if (!modelGroups.has(key)) modelGroups.set(key, {label:key === 'local' ? 'Local' : item.provider_label, indices:[]});
+      modelGroups.get(key).indices.push(index);
+    }
+    const order = [...providerOrder.filter(key => modelGroups.has(key)),
+      ...[...modelGroups.keys()].filter(key => !providerOrder.includes(key))];
+    const current = providerFor(selectedModel());
+    const fragment = document.createDocumentFragment();
+    for (const key of order) {
+      const group = modelGroups.get(key);
+      const tab = document.createElement('button');
+      tab.className = 'spawn-provider-tab';
+      tab.type = 'button';
+      tab.title = group.label;
+      tab.setAttribute('aria-label', group.label);
+      tab.setAttribute('aria-controls', modelList.id);
+      tab.setAttribute('aria-pressed', String(key === current));
+      if (providerIcons.has(key)) {
+        const img = document.createElement('img');
+        img.alt = '';
+        img.src = '/assets/' + providerIcons.get(key) + '.svg';
+        tab.append(img);
+      } else if (key === 'local') {
+        tab.append(spawnIcon('launch-local'));
+      } else {
+        tab.textContent = group.label;
+      }
+      tab.onclick = () => {
+        if (key === providerFor(selectedModel())) return;
+        providerTabs.querySelector('[aria-pressed=true]')?.setAttribute('aria-pressed', 'false');
+        tab.setAttribute('aria-pressed', 'true');
+        modelIndex = group.indices.find(index => catalog.models[index].default) ?? group.indices[0];
+        modelSearch.value = '';
+        renderModels();
+        updateModel();
+      };
+      fragment.append(tab);
+    }
+    providerTabs.replaceChildren(fragment);
+    modelSearch.value = '';
+    renderModels();
   }
 
   function chosenRoute() {
-    return catalog?.models[Number(model.value)]?.harnesses.find(item => item.id === harness.value);
+    return selectedModel()?.harnesses.find(item => item.id === harness.value);
+  }
+
+  function browserAvailable(next = chosenRoute()) {
+    return catalog?.configurable && next && next.key !== 'antigravity' &&
+      (!['dsh', 'hermes'].includes(next.key) || catalog.directories[Number(directory.value)]?.native_browser === true);
+  }
+
+  function browserModes(next = chosenRoute()) {
+    return catalog?.configurable && next?.key !== 'antigravity' && Array.isArray(next?.browser_modes)
+      ? next.browser_modes : null;
+  }
+
+  function syncBrowser(next, reset = false) {
+    const modes = browserModes(next);
+    if (modes) {
+      if (reset || !modes.includes(browserMode)) browserMode = modes.includes('personal') ? 'personal' : 'off';
+      browserTool.hidden = false;
+      browser.dataset.browserMode = browserMode;
+      browser.removeAttribute('role');
+      browser.removeAttribute('aria-checked');
+      browser.removeAttribute('aria-describedby');
+      browser.setAttribute('aria-controls', browserMenu.id);
+      browser.setAttribute('aria-expanded', String(browserMenu.matches(':popover-open')));
+      browser.setAttribute('aria-disabled', String(!modes.length));
+      const extra = next.launch_blocked ? 'Antigravity needs a parent agent and declared resources.'
+        : !modes.length ? 'Browser modes are unavailable for this harness.' : '';
+      browser.title = extra || 'Browser: ' + browserLabels[browserMode]
+        + (modes.length < browserChoices.length ? '. Other modes need a compatible Chrome setup.' : '');
+      browser.setAttribute('aria-label', browser.title);
+      for (const [mode, button] of browserChoices) {
+        button.hidden = !modes.includes(mode);
+        button.setAttribute('aria-pressed', String(mode === browserMode));
+      }
+      if (!modes.length && browserMenu.matches(':popover-open')) browserMenu.hidePopover();
+      return;
+    }
+    if ('browserMode' in browser.dataset) {
+      delete browser.dataset.browserMode;
+      browser.setAttribute('role', 'switch');
+      browser.setAttribute('aria-label', 'Browser');
+      browser.setAttribute('aria-describedby', 'spawn-browser-help');
+      for (const attr of ['aria-expanded', 'aria-controls', 'aria-disabled', 'title']) browser.removeAttribute(attr);
+      if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
+      reset = true;
+    }
+    const available = Boolean(browserAvailable(next));
+    if (reset || browserTool.hidden === available) {
+      browser.setAttribute('aria-checked', String(available && next.key !== 'dsh'));
+      toggleMotion[1]?.sync(false);
+    }
+    browserTool.hidden = !available;
   }
 
   function enabled() {
@@ -117,7 +274,8 @@
 
   function canReview() {
     const next = chosenRoute();
-    const name = model.selectedOptions[0]?.label || 'Model';
+    const item = selectedModel();
+    const name = item ? modelLabel(item) : 'Model';
     modelName.textContent = name;
     effortMark.hidden = !next?.efforts.length;
     const value = next && (effort.value || next.default_effort);
@@ -126,22 +284,31 @@
     [...effortMark.children].forEach((mark, index) => mark.classList.toggle('active', index < filled));
     modelChip.title = level < 0 ? name : name + ' · ' + effortLabel(value);
     modelChip.setAttribute('aria-label', 'Model settings: ' + modelChip.title);
-    reviewButton.disabled = !task.value.trim() || !next || !catalog?.directories.length
+    if (!editor.hidden) {
+      const message = next?.launch_blocked ? 'Antigravity needs a parent agent and declared resources. Set these in the Telemetry dashboard.' : '';
+      for (const destination of [notice, modelNotice]) {
+        if (destination.textContent !== message) destination.textContent = message;
+        destination.hidden = !message;
+      }
+    }
+    reviewButton.disabled = !task.value.trim() || !next || next.launch_blocked || !catalog?.directories.length
       || (next.effort_required && !effort.value);
   }
 
   function updateRoute() {
     const next = chosenRoute();
     if (!next) return;
-    const provider = catalog.models[Number(model.value)].provider;
+    const provider = selectedModel().provider;
     const key = provider + '/' + next.key;
     tools.hidden = !catalog.configurable || next.key === 'antigravity';
-    if (route !== key) {
+    const changed = route !== key;
+    if (changed) {
       dismissToolHelp();
       const on = !tools.hidden && next.key !== 'dsh';
-      for (const control of [computer, browser]) control.setAttribute('aria-checked', String(on));
-      for (const motion of toggleMotion) motion?.sync(false);
+      computer.setAttribute('aria-checked', String(on));
+      toggleMotion[0]?.sync(false);
     }
+    syncBrowser(next, changed);
     route = key;
     const previous = effort.value;
     const entries = next.efforts.map(value => [value, effortLabel(value)]);
@@ -155,11 +322,12 @@
   }
 
   function updateModel() {
-    const choices = catalog.models[Number(model.value)].harnesses;
+    const choices = selectedModel().harnesses;
     const previous = harness.value;
     fill(harness, choices.map(item => [item.id, item.label]));
     const selected = choices.find(item => item.id === previous) || choices.find(item => item.default) || choices[0];
     harness.value = selected.id;
+    $('spawn-harness-field').hidden = choices.length < 2;
     selects.get(harness)?.refresh(false);
     updateRoute();
   }
@@ -193,6 +361,7 @@
     } else if (state === 'failed') {
       saveReceipt('');
       show('result', 'Launch failed.');
+      notice.append(document.createElement('br'), failureReasons.get(data.failure_reason) || 'Check the launch settings and try again.');
       resultButton('Edit', loadCatalog);
     } else if (state === 'submitting' || state === 'launching') {
       show('result', state === 'launching' ? 'Starting ' + name + '…' : 'Submitting launch…');
@@ -230,10 +399,9 @@
         resultButton('Retry', loadCatalog);
         return;
       }
-      const previousModel = catalog?.models[Number(model.value)];
+      const previousModel = selectedModel();
       const previousDir = catalog?.directories[Number(directory.value)]?.path;
       catalog = next;
-      modelChoices(catalog.models);
       fill(directory, catalog.directories.map((item, index) => [index, item.label]));
       for (const [index, option] of [...directory.options].entries()) {
         const path = catalog.directories[index].path;
@@ -243,9 +411,9 @@
         && item.model === previousModel.model && item.url_index === previousModel.url_index);
       const restoreDir = catalog.directories.findIndex(item => item.path === previousDir);
       const defaultModel = catalog.models.findIndex(item => item.default);
-      model.value = String(restoreModel >= 0 ? restoreModel : Math.max(0, defaultModel));
+      modelIndex = restoreModel >= 0 ? restoreModel : Math.max(0, defaultModel);
       if (restoreDir >= 0) directory.value = String(restoreDir);
-      selects.get(model)?.refresh(false);
+      renderProviders();
       selects.get(directory)?.refresh(false);
       $('spawn-tools').hidden = !catalog.configurable;
       $('spawn-role-field').hidden = !catalog.configurable;
@@ -260,18 +428,22 @@
     }
   }
 
-  function summaryValue(label, icon, value) {
-    const chip = document.createElement('div');
+  function spawnIcon(icon) {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     const use = document.createElementNS(svg.namespaceURI, 'use');
     svg.setAttribute('class', 'mobile-icon');
     svg.setAttribute('aria-hidden', 'true');
     use.setAttribute('href', '#icon-' + icon);
     svg.append(use);
+    return svg;
+  }
+
+  function summaryValue(label, icon, value) {
+    const chip = document.createElement('div');
     chip.className = 'spawn-value';
     chip.setAttribute('aria-label', label + ': ' + value);
     chip.title = label + ': ' + value;
-    chip.append(svg, document.createTextNode(value));
+    chip.append(spawnIcon(icon), document.createTextNode(value));
     return chip;
   }
 
@@ -281,21 +453,28 @@
     const route = chosenRoute();
     const selectedDirectory = catalog.directories[Number(directory.value)];
     const checked = control => control.getAttribute('aria-checked') === 'true';
+    const canUseBrowser = browserAvailable(route);
+    const modes = browserModes(route);
     selection = {
-      catalog:catalog.catalog, model:Number(model.value), harness:harness.value, directory:Number(directory.value),
+      catalog:catalog.catalog, model:modelIndex, harness:harness.value, directory:Number(directory.value),
       task:task.value.trim(), role:catalog.configurable ? role.value.trim() : '',
       effort:effort.value || null, computer:!tools.hidden && checked(computer),
-      browser:!tools.hidden && checked(browser),
+      ...(modes ? (modes.includes(browserMode) ? {browser_mode:browserMode} : {})
+        : canUseBrowser || (!catalog.configurable && route.key !== 'antigravity')
+          ? {browser:Boolean(canUseBrowser) && checked(browser)} : {}),
     };
+    const item = selectedModel(), source = modelSource(item);
+    const name = modelLabel(item) + (source ? ' on ' + source : '');
     const labels = [
-      summaryValue('Model and harness', 'launch-model', model.selectedOptions[0].textContent + ' with ' + route.label),
+      summaryValue('Model and harness', 'launch-model', name + ' with ' + route.label),
       summaryValue('Launch directory', 'launch-folder', selectedDirectory.path),
     ];
     if (route.efforts.length) labels.push(summaryValue('Effort', 'working', effortLabel(selection.effort || route.default_effort)));
     if (selection.role) labels.push(summaryValue('Role', 'agents', selection.role));
     if (!tools.hidden) {
       labels.push(summaryValue('Computer use', 'launch-computer', selection.computer ? 'On' : 'Off'));
-      labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));
+      if (selection.browser_mode) labels.push(summaryValue('Browser', 'launch-browser', browserLabels[selection.browser_mode]));
+      else if (!modes && canUseBrowser) labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));
     }
     $('spawn-summary').replaceChildren(...labels);
     $('spawn-task-copy').textContent = selection.task;
@@ -338,6 +517,7 @@
   };
   $('spawn-close').onclick = () => sheet.close();
   sheet.addEventListener('close', () => {
+    if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
     if (settings.open) settings.close();
     catalogRequest?.abort();
     clearTimeout(timer);
@@ -378,6 +558,10 @@
 
   modelChip.onclick = () => {
     dismissToolHelp();
+    if (modelSearch.value) {
+      modelSearch.value = '';
+      renderModels();
+    }
     settings.showModal();
     modelChip.setAttribute('aria-expanded', 'true');
     const anchor = positionModelSheet();
@@ -403,10 +587,9 @@
     if (event.clientX < left || event.clientX > right || event.clientY < top || event.clientY > bottom) settings.close();
   });
   settings.addEventListener('close', () => {
-    selects.get(model)?.close();
     selects.get(harness)?.close();
     modelChip.setAttribute('aria-expanded', 'false');
-    if (sheet.open && !editor.hidden && !sheet.contains(document.activeElement)) modelChip.focus({preventScroll:true});
+    if (sheet.open && !editor.hidden) modelChip.focus({preventScroll:true});
   });
   function resizeLaunch() {
     if (!sheet.open) return;
@@ -429,13 +612,28 @@
       if (event.pointerType === 'mouse') delete tool.dataset.hint;
     });
     control.onclick = event => {
+      if (control === browser && browserModes()) {
+        if (browserMenu.matches(':popover-open')) browserMenu.hidePopover();
+        else if (control.getAttribute('aria-disabled') !== 'true') {
+          browserMenu.showPopover({source:control});
+          const anchor = browser.getBoundingClientRect(), bounds = browserMenu.getBoundingClientRect();
+          browserMenu.style.left = Math.max(12, Math.min(anchor.left, innerWidth - bounds.width - 12)) + 'px';
+          browserMenu.style.top = Math.max(12, anchor.top - bounds.height - 6) + 'px';
+          browserMenu.querySelector('[aria-pressed=true]:not([hidden])')?.focus({preventScroll:true});
+        }
+        return;
+      }
       control.setAttribute('aria-checked', String(control.getAttribute('aria-checked') !== 'true'));
       dismissToolHelp();
       if (event.pointerType === 'touch' || matchMedia('(hover: none)').matches) tool.dataset.hint = 'shown';
     };
   }
-  model.onchange = updateModel;
+  browserMenu.addEventListener('toggle', () => {
+    if (browserModes()) browser.setAttribute('aria-expanded', String(browserMenu.matches(':popover-open')));
+  });
+  modelSearch.oninput = renderModels;
   harness.onchange = updateRoute;
+  directory.onchange = () => syncBrowser(chosenRoute());
   effort.onchange = () => {syncEffort();canReview();};
   task.oninput = canReview;
   editor.onsubmit = reviewSelection;

@@ -43,7 +43,9 @@ def _harness_key(value):
             'codex-cli':'codex', 'dsh-tui':'dsh'}.get(key, key)
 
 
-_TOOLS_HARNESSES = {'claude-code', 'codex', 'dsh', 'hermes'}
+_NATIVE_HARNESSES = {'dsh', 'hermes'}
+_TOOLS_HARNESSES = {'claude-code', 'codex'} | _NATIVE_HARNESSES
+_BROWSER_MODES = ('off', 'temporary', 'personal')
 
 
 def _effort_policy(provider, model, harness):
@@ -70,10 +72,12 @@ def _catalog_choices(value):
     if not isinstance(value.get('providers'), list) or not isinstance(value.get('dirs'), list):
         raise SpawnError('catalog_unavailable', 503)
     models = []
+    browser_modes = value.get('browser_modes')
     for provider in value['providers']:
         if not isinstance(provider, dict) or not _text(provider.get('id'), 96):
             continue
         provider_id = provider['id']
+        capabilities = provider.get('capabilities')
         label = provider.get('label')
         label = label if _text(label, 96) else provider_id
         options = provider.get('models')
@@ -92,19 +96,25 @@ def _catalog_choices(value):
                     continue
                 harness_id = harness['id']
                 key = _harness_key(harness_id)
-                capabilities = provider.get('capabilities')
-                antigravity = (provider_id == 'gemini' and key == 'antigravity'
-                               and isinstance(capabilities, dict)
-                               and capabilities.get('standalone') is True)
+                antigravity = provider_id == 'gemini' and key == 'antigravity'
                 if key not in _TOOLS_HARNESSES and not antigravity:
                     continue
                 effort = _effort_policy(provider, model, harness)
                 if effort['effort_required'] and not effort['efforts']:
                     continue
-                route_label = harness.get('label')
+                route_label = label if antigravity else harness.get('label')
                 routes.append({'id': harness_id, 'key': key,
                                'label': route_label if _text(route_label, 96) else harness_id,
                                'default': harness.get('default') is True, **effort})
+                if isinstance(browser_modes, dict):
+                    modes = browser_modes.get(key)
+                    routes[-1]['browser_modes'] = [mode for mode in _BROWSER_MODES
+                                                    if isinstance(modes, list) and mode in modes]
+                if antigravity:
+                    if not isinstance(capabilities, dict) or capabilities.get('standalone') is not True:
+                        routes[-1]['launch_blocked'] = True
+                    if 'browser_modes' in routes[-1]:
+                        routes[-1]['browser_modes'] = []
             if not routes:
                 continue
             index, url_key = model.get('url_index'), model.get('url_key')
@@ -112,20 +122,25 @@ def _catalog_choices(value):
                 continue
             if url_key is not None and not _text(url_key, 256):
                 continue
+            locality = model.get('locality') or provider.get('locality')
             models.append({'provider': provider_id, 'provider_label': label,
+                           **({'locality': 'local'} if locality == 'local' else {}),
                            'model': model['id'], 'default': model.get('default') is True,
                            'harnesses': routes, 'url_index': index, 'url_key': url_key})
+    native_browser = value.get('native_browser_dirs')
+    native_browser = {path for path in native_browser if isinstance(path, str)} if isinstance(native_browser, list) else set()
     dirs = []
     for directory in value['dirs']:
         if not isinstance(directory, dict) or directory.get('exists') is False:
             continue
         path, label = directory.get('path'), directory.get('label')
         if _text(path, 512) and (path.startswith('/') or path == '~' or path.startswith('~/')):
-            dirs.append({'path': path, 'label': label if _text(label, 96) else path})
+            dirs.append({'path': path, 'label': label if _text(label, 96) else path,
+                         **({'native_browser': True} if path in native_browser else {})})
     return models, dirs
 
 
-def _options(model, route, directory, task, role, effort, computer, browser, configurable):
+def _options(model, route, directory, task, role, effort, computer, browser, configurable, *, browser_mode=None):
     payload = {'task':task, 'model':model['model'], 'provider':model['provider'],
                'dir':directory['path'], 'standalone':True, 'headless':True, 'async':True}
     legacy = {'claude':'claude-code', 'codex':'codex', 'gemini':'antigravity'}
@@ -143,18 +158,51 @@ def _options(model, route, directory, task, role, effort, computer, browser, con
         payload['role'] = role
     if route['key'] == 'antigravity':
         return payload
-    native = route['key'] in {'dsh', 'hermes'}
+    native = route['key'] in _NATIVE_HARNESSES
+    browser = browser and (not native or directory.get('native_browser') is True)
     mcp = ['cua-driver'] if computer else []
-    if browser and native:
-        mcp.append('chrome-devtools')
-    if not browser or route['key'] == 'codex' and not computer:
-        payload['base'] = 'mail-only'
     payload['tools'] = {}
+    if browser_mode is not None:
+        payload['tools']['browser_mode'] = browser_mode
+    elif browser:
+        if native:
+            mcp.append('chrome-devtools')
+        else:
+            payload['tools']['browser'] = {}
+    else:
+        payload['tools']['browser_off'] = True
     if mcp:
         payload['tools']['mcp'] = mcp
-    if browser and not native:
-        payload['tools']['browser'] = {}
     return payload
+
+
+def _failure_reason(response):
+    """Publish only fixed codes. Launcher diagnostics may contain local data."""
+    result = response.get('result')
+    if isinstance(result, dict):
+        response = {**response, **result}
+    if response.get('cleanup_incomplete') is True:
+        return 'check_graph'
+    code = response.get('error_code')
+    if code in ('spawn_pair_unavailable', 'url_selection_required'):
+        return 'model_unavailable'
+    error = response.get('error')
+    error = error if isinstance(error, str) else ''
+    detail = response.get('detail')
+    lines = detail.splitlines() if isinstance(detail, str) else []
+    if error == 'unsupported_mcp_selection' or 'Harness prepare failed: unsupported_mcp_selection' in lines:
+        return 'unsupported_tools'
+    if error.startswith(('My Chrome requires ', 'Install Node.js to use Chrome DevTools')):
+        return 'browser_setup'
+    if any(line.startswith('child_resume: tools.browser for a Codex child needs ') for line in [error, *lines]):
+        return 'browser_setup'
+    if error.startswith(('configured URL/model selection is unavailable', 'model not allowed', 'unsupported model')):
+        return 'model_unavailable'
+    if error.startswith(('dir must ', 'dir does not exist:', 'working directory ', 'work_dir ')):
+        return 'launch_directory'
+    if error.startswith('spawn launcher did not finish readiness checks'):
+        return 'check_graph'
+    return 'check_settings'
 
 
 @dataclass
@@ -164,9 +212,11 @@ class Receipt:
     state: str = 'submitting'
     name: str | None = None
     status_until: float | None = None
+    failure_reason: str | None = None
 
     def public(self):
-        return {'state':self.state, **({'name':self.name} if self.name else {})}
+        return {'state':self.state, **({'name':self.name} if self.name else {}),
+                **({'failure_reason':self.failure_reason} if self.failure_reason else {})}
 
 
 class MobileSpawn:
@@ -200,12 +250,17 @@ class MobileSpawn:
             'catalog':token,
             'configurable':configurable,
             'models':[{key:value for key, value in model.items()
-                       if key in {'model','provider','provider_label','default','harnesses','url_index'}} for model in models],
+                       if key in {'model','provider','provider_label','locality','default','harnesses','url_index'}} for model in models],
             'directories':directories,
         }
 
     def launch(self, epoch, value):
-        if set(value) != {'catalog','receipt','model','harness','directory','task','computer','browser','effort','role'}:
+        if (set(value) - {'browser', 'browser_mode'} != {'catalog','receipt','model','harness','directory','task','computer','effort','role'}
+                or 'browser' in value and 'browser_mode' in value):
+            raise SpawnError('invalid_launch', 400)
+        browser = value.get('browser', False)
+        mode = value.get('browser_mode')
+        if 'browser_mode' in value and mode not in _BROWSER_MODES:
             raise SpawnError('invalid_launch', 400)
         receipt_id, catalog_id = value['receipt'], value['catalog']
         if (not isinstance(receipt_id, str) or not RECEIPT.fullmatch(receipt_id)
@@ -218,7 +273,7 @@ class MobileSpawn:
         model_index, dir_index = value['model'], value['directory']
         role, effort = value['role'], value['effort']
         if (not _text(value['harness'],96) or type(model_index) is not int or type(dir_index) is not int
-                or type(value['computer']) is not bool or type(value['browser']) is not bool
+                or type(value['computer']) is not bool or type(browser) is not bool
                 or (role != '' and not _text(role, 40)) or (effort is not None and not _text(effort, 32))):
             raise SpawnError('invalid_launch', 400)
 
@@ -236,23 +291,25 @@ class MobileSpawn:
                 raise SpawnError('invalid_launch', 400)
             model, directory = models[model_index], directories[dir_index]
             route = next((item for item in model['harnesses'] if item['id'] == value['harness']), None)
-            if (route is None or (effort is None and route['effort_required'])
+            if (route is None or route.get('launch_blocked') or (effort is None and route['effort_required'])
                     or (effort is not None and effort not in route['efforts'])
-                    or (route['key'] == 'antigravity' and (value['computer'] or value['browser']))
-                    or (not configurable and (role or value['computer'] or value['browser']))):
+                    or (route['key'] == 'antigravity' and (value['computer'] or browser or mode is not None))
+                    or (mode is not None and mode not in route.get('browser_modes', ()))
+                    or (not configurable and (role or value['computer'] or browser or mode is not None))):
                 raise SpawnError('invalid_launch', 400)
             if len(self._receipts) >= RECEIPT_LIMIT:
                 raise SpawnError('launch_unavailable', 503)
             receipt = Receipt(epoch, self._clock() + RECEIPT_TTL)
             self._receipts[receipt_id] = receipt
 
-        status_until = None
+        status_until = failure_reason = None
         try:
             result = self._launch(_options(model, route, directory, task.strip(), role.strip(),
                                            effort or route['default_effort'],
-                                           value['computer'], value['browser'], configurable))
+                                           value['computer'], browser, configurable, browser_mode=mode))
             if result.get('ok') is False:
                 state, name = 'failed', None
+                failure_reason = _failure_reason(result)
             elif result.get('ok') is True and _matches_name(result.get('child_name')):
                 state, name = ('launching' if result.get('pending') is True else 'ready'), result['child_name']
                 seconds = result.get('verdict_deadline_seconds')
@@ -265,6 +322,7 @@ class MobileSpawn:
             state, name = 'unknown', None
         with self._lock:
             receipt.state, receipt.name, receipt.status_until = state, name, status_until
+            receipt.failure_reason = failure_reason
             return receipt.public()
 
     def status(self, epoch, receipt_id):
@@ -287,6 +345,8 @@ class MobileSpawn:
                 state = result.get('state')
                 if result.get('ok') is True and result.get('name') == name and state in {'ready','failed'}:
                     receipt.state = state
+                    if state == 'failed':
+                        receipt.failure_reason = _failure_reason(result)
                 elif receipt.status_until is not None and self._clock() >= receipt.status_until:
                     receipt.state = 'unknown'
             return receipt.public()
