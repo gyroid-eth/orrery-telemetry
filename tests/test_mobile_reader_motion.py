@@ -182,4 +182,7 @@ def test_r1_reaches_every_word_with_wrapped_columns_in_screen_order(phone,reduce
     assert js('initialView')=={'inView':True,'tableOpacity':'0'}
     assert words.index('First')<words.index('次')<words.index('ListOne')<words.index('ListTwo')<words.index('Left')
     assert words.index('LeftFirst')<words.index('RightFirst')<words.index('LeftLast')<words.index('RightLast')
-    assert min(b[1]-a[1] for a,b in zip(samples,samples[1:]))>=33
+    # Words start in reading order and never go backwards; a long reply is
+    # paced to finish in about a second instead of one word per frame.
+    assert all(b[1]>=a[1] for a,b in zip(samples,samples[1:]))
+    assert samples[-1][1]-samples[0][1]<=1600

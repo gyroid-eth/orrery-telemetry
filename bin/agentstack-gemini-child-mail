@@ -88,7 +88,7 @@ def _client() -> Any:
     )
 
 
-def _paths(value: str) -> list[str]:
+def _paths(value: str, worktree: str = "") -> list[str]:
     paths = [item.strip() for item in value.split(",") if item.strip()]
     if not paths:
         raise SystemExit("at least one reservation path is required")
@@ -98,7 +98,13 @@ def _paths(value: str) -> list[str]:
             raise SystemExit(
                 f"reservation path must stay project-relative: {item}"
             )
-    return paths
+    if not worktree:
+        return paths
+    root = pathlib.Path(worktree).resolve(strict=True)
+    anchored = [(root / path).resolve() for path in paths]
+    if any(not path.is_relative_to(root) for path in anchored):
+        raise SystemExit("reservation path escapes the Antigravity worktree")
+    return [str(path) for path in anchored]
 
 
 def _denied_action_names(value: Any) -> list[str]:
@@ -187,7 +193,7 @@ def main() -> int:
             project_key=args.project_key,
             agent_name=args.agent_name,
             registration_token=token,
-            paths=_paths(args.paths),
+            paths=_paths(args.paths, args.worktree),
             ttl_seconds=args.ttl,
             exclusive=True,
             reason="delegated Antigravity child",
@@ -201,7 +207,7 @@ def main() -> int:
             project_key=args.project_key,
             agent_name=args.agent_name,
             registration_token=token,
-            paths=_paths(args.paths),
+            paths=_paths(args.paths, args.worktree),
         )
         return 0
 

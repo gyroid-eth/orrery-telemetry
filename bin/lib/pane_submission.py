@@ -32,6 +32,7 @@ COLLAPSED = re.compile(r'\[Pasted text #\d+(?: \+\d+ lines?)?\]')
 HERMES_PASTE = re.compile(r'\[Pasted text #(\d+): (\d+) lines → /.+/pastes/paste_\1_\d{6}\.txt\]')
 PASTING = re.compile(r'^\s*(?:Pasting(?:…|\.\.\.)|Waiting for startup\b)', re.I)
 AGY_MODE = re.compile(r'^(?:auto|plan|accept[- ]edits)\s+·\s+', re.I)
+AGY_MODEL_FOOTER = re.compile(r'^Gemini(?:[ -][^·]+)?\s+·\s+(?:low|medium|high)$', re.I)
 AGY_PLACEHOLDER = {
     'Auto mode: edits & safe commands auto-approved (shift+tab to cycle)',
 }
@@ -104,7 +105,10 @@ def frame(metadata, lines, pane):
         tail=[row.strip() for row in plain[cursor+1:] if row.strip()]
         lower=bool(tail and BORDER.fullmatch(tail[0]))
         framed=upper and lower
-        agy=glyph=='>' and framed and len(tail)>1 and bool(AGY_MODE.match(tail[1]))
+        # Antigravity can omit cycle_mode from its status-line payload, leaving
+        # the model and effort under the same framed editor.
+        agy = glyph == '>' and framed and len(tail) > 1 and bool(
+            AGY_MODE.match(tail[1]) or AGY_MODEL_FOOTER.fullmatch(tail[1]))
         boxed=glyph=='❯' and left in ('⌸','│') and upper
         if (glyph=='>' and not agy) or (left and not boxed and (glyph!='❯' or not framed)):
             continue

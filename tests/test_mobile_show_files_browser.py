@@ -91,7 +91,49 @@ def test_ordinary_paths_and_ungranted_images_do_not_auto_load(phone):
     js("OrreryMobileTerminal.open('SampleAgent')")
     wait("document.querySelector('[data-id=plain]')!==null")
     assert js("document.querySelector('.conversation-thumbnail')===null")
+    assert js("document.querySelector('.conversation-path-preview')===null")
     assert not any('thumbnail=1' in p for p in state['get_calls'])
+
+
+@pytest.mark.parametrize('demo', [False, True])
+def test_standalone_image_path_opens_existing_preview_on_tap(phone, demo):
+    _, js, wait, state = phone
+    path = '/fixtures/Fixture Key/図 (draft).PNG'
+    ref = 'a' * 32
+    state['file_preview'] = image()
+    state['events'] = [
+        dict(id='figure', kind='text', role='assistant', ts='',
+             text=f'Here is the figure.\n{path}\n\nSee {path}\n\n`{path}`\n\n[Link]({path})',
+             markdown_images=[dict(target=path, ref=ref)]),
+        dict(id='plain', kind='text', role='assistant', ts='', text=path),
+        dict(id='user', kind='text', role='user', ts='', text=path,
+             markdown_images=[dict(target=path, ref=ref)]),
+    ]
+    if demo:
+        if not os.environ.get('ORRERY_DEMO_BRIDGE_ROOT'):
+            pytest.skip('paired Demo scripts required')
+        state['demo'] = dict(version=1, supported=True, on=True, words=['Fixture Key', 'draft'],
+                             identity=dict(users=['fixture-user'], hosts=['fixture-host']))
+        js('OrreryMobileDemo.refresh()')
+        wait("Boolean(OrreryDemo?.on)")
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('.conversation-path-preview')!==null")
+    button = "document.querySelector('.conversation-path-preview')"
+    assert js("document.querySelectorAll('.conversation-path-preview').length") == 1
+    assert js(f"{button}.closest('[data-id]').dataset.id") == 'figure'
+    if demo:
+        wait(f"!{button}.textContent.includes('Fixture Key')&&!{button}.getAttribute('aria-label').includes('draft')")
+    else:
+        assert js(f"{button}.textContent") == path
+    assert not any('/preview?' in p for p in state['get_calls'])
+    js(f"{button}.focus();{button}.click()")
+    wait("document.querySelector('.conversation-preview-image')?.naturalWidth===3")
+    assert [p for p in state['get_calls'] if '/preview?' in p] == [
+        '/view/conversation/preview?name=SampleAgent&ref='+ref]
+    if demo:
+        wait("!document.querySelector('.conversation-preview-image').alt.includes('draft')")
+    js("document.querySelector('.conversation-preview-close').click()")
+    assert js(f"document.activeElement==={button}")
 
 
 def test_markdown_images_use_event_refs_in_reader_and_mail(phone):

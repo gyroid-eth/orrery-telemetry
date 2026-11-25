@@ -39,6 +39,7 @@ PROXY_AGENT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,127}")
 CODEX_PROGRAMS = {"codex", "codex-cli"}
 CLAUDE_PROGRAMS = {"claude", "claude-code"}
 HARNESS_PROGRAMS = {"dsh", "hermes"}
+AGY_PROGRAMS = {"antigravity"}
 MCP_PROFILES = {"inherit", "orrery-only"}
 MAX_STATE_BYTES = 65536
 MAX_TOKEN_BYTES = 4096
@@ -52,7 +53,7 @@ def _provider(program: object) -> str | None:
             return "codex"
         if program in CLAUDE_PROGRAMS:
             return "claude"
-        if program in HARNESS_PROGRAMS:
+        if program in HARNESS_PROGRAMS | AGY_PROGRAMS:
             return program
     return None
 
@@ -458,7 +459,7 @@ def _validate_identity(
 def prepare_active_state(
     runtime_dir: Path, agent_name: str, *, project_key: str, mcp_profile: str = "inherit",
     program: str | None = None, generation: str | None = None, parent_agent: str | None = None,
-    codex_standalone: bool = False,
+    codex_standalone: bool = False, gemini_launch: dict | None = None,
 ) -> dict[str, Any]:
     """Mark the child active. ``parent_agent`` records the launcher's parent
     (``""`` for a standalone launch clears it; ``None`` leaves it as is) so a
@@ -517,6 +518,10 @@ def prepare_active_state(
             state["parent_agent"] = parent_agent
         elif parent_agent is not None:
             state.pop("parent_agent", None)
+        if gemini_launch is not None:
+            if state["provider"] != "antigravity":
+                raise ResumeStateError("identity_mismatch", "Invalid Antigravity launch state")
+            state["gemini_launch"] = gemini_launch
         _atomic_json(state_path, state)
         tombstone = runtime_dir / "child-resume-tombstones" / f"{state['agent_id']}.json"
         tombstone.unlink(missing_ok=True)

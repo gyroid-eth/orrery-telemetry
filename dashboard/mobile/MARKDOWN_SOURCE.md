@@ -20,5 +20,5 @@ The checksum always runs. The byte comparison skips if no upstream source is
 supplied. Both run without a network request or an upstream checkout dependency.
 The mobile Reader decorates the renderer's `span.markdown-image` markers.
 Local raster images use only preview IDs issued for their conversation event.
-HTTP(S) image targets become links, while ordinary local path candidates keep
-the renderer's inert text behavior.
+HTTP(S) image targets become links. An absolute raster path on its own line in
+an assistant reply opens the preview when tapped if the event has an ID for it.

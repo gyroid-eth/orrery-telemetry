@@ -164,7 +164,7 @@ SOFTWARE.
     return {groups,consumed,pending};
   }
 
-  function mount({host,mutate=fn=>fn(),onFocusLost=()=>{},loadDiff}){
+  function mount({host,mutate=fn=>fn(),onFocusLost=()=>{},loadDetail}){
     const cards=new Map();let model={groups:[],consumed:new Set()},current={},visible=false,timer=0,serial=0,workingModel=false;
     const make=(tag,cls,value)=>{const node=root.document.createElement(tag);node.className=cls;if(value!==undefined)node.textContent=value;return node;};
     function changed(node,value){if(node.textContent!==value)node.textContent=value;}
@@ -187,7 +187,7 @@ SOFTWARE.
     }
     function setOpen(card,open){
       if(!open&&card.body.contains(root.document.activeElement))card.button.focus({preventScroll:true});
-      if(!open)for(const record of card.rows.values())closeDiff(record);
+      if(!open)for(const record of card.rows.values())closeDetail(record);
       card.open=open;card.node.classList.toggle('is-open',open);card.button.setAttribute('aria-expanded',String(open));
       card.body.inert=!open;
     }
@@ -213,25 +213,40 @@ SOFTWARE.
       const copy=make('div','conversation-step-copy'),top=make('div','conversation-step-top');
       const tool=make('span','conversation-step-tool'),outcome=make('span','conversation-step-outcome');
       const clock=make('span','conversation-step-duration'),detail=make('div','conversation-step-target');
-      const toggle=make('button','conversation-step-diff-toggle'),panel=make('div','conversation-step-diff');
+      const toggle=make('button','conversation-step-detail-toggle conversation-step-diff-toggle');
+      const panel=make('div','conversation-step-detail conversation-step-diff');
       const added=make('span','conversation-diff-added'),removed=make('span','conversation-diff-removed');
+      const disclosure=glyph('conversation-step-command-chevron','m4 6 4 4 4-4');
+      const exit=make('span','conversation-step-exit');exit.hidden=disclosure.hidden=true;
       toggle.type='button';toggle.hidden=panel.hidden=true;
-      panel.id='conversation-step-diff-'+(++serial)+'-'+Math.random().toString(36).slice(2);
+      panel.id='conversation-step-detail-'+(++serial)+'-'+Math.random().toString(36).slice(2);
       toggle.setAttribute('aria-controls',panel.id);toggle.setAttribute('aria-expanded','false');
-      toggle.append(added,removed);
-      top.append(tool,toggle,outcome,clock);copy.append(top,detail,panel);node.append(copy);
-      const record={node,top,tool,outcome,clock,detail,toggle,panel,added,removed,ref:null,request:null,
+      toggle.append(added,removed,disclosure);
+      top.append(tool,toggle,outcome,clock,exit);copy.append(top,detail,panel);node.append(copy);
+      const record={node,top,tool,outcome,clock,exit,detail,toggle,panel,added,removed,disclosure,
+        kind:'',ref:null,request:null,
         icon:null,status:'',fingerprint:''};
-      toggle.addEventListener('click',()=>mutate(()=>toggleDiff(record),toggle));
+      toggle.addEventListener('click',()=>mutate(()=>toggleDetail(record),toggle));
       return record;
     }
-    function closeDiff(record){
+    function closeDetail(record){
       if(record.panel.hidden)return;
       if(record.panel.contains(root.document.activeElement)&&record.toggle.isConnected)
         record.toggle.focus({preventScroll:true});
       record.request?.abort();record.request=null;
       record.panel.hidden=true;record.panel.replaceChildren();
       record.toggle.setAttribute('aria-expanded','false');
+    }
+    function showMore(panel,content,count,expand){
+      const more=make('button','conversation-step-detail-more','Show '+count+' more lines');
+      more.type='button';
+      more.addEventListener('click',()=>{expand();panel.tabIndex=-1;panel.focus({preventScroll:true});});
+      content.append(more);
+      return more;
+    }
+    function revealDetail(panel,content){
+      if(root.OrreryDemo?.on)root.OrreryDemo.maskContent?.(content);
+      panel.replaceChildren(content);
     }
     function diffContent(panel,diff,stepPath){
       const total=diff.hunks.reduce((count,hunk)=>count+hunk.lines.length,0);
@@ -260,62 +275,84 @@ SOFTWARE.
           content.append(group);
         }
         if(diff.truncated)content.append(make('p','conversation-step-diff-note','Too long to show here'));
-        else if(total>limit){
-          const more=make('button','conversation-step-diff-more','Show '+(total-limit)+' more lines');
-          more.type='button';
-          more.addEventListener('click',()=>{paintDiff(total);panel.tabIndex=-1;panel.focus({preventScroll:true});});
-          content.append(more);
-        }
-        if(root.OrreryDemo?.on)root.OrreryDemo.maskContent?.(content);
-        panel.replaceChildren(content);
+        else if(total>limit)showMore(panel,content,total-limit,()=>paintDiff(total)).classList.add('conversation-step-diff-more');
+        revealDetail(panel,content);
       }
       paintDiff(initialLines);
     }
-    async function toggleDiff(record){
-      if(!record.panel.hidden){closeDiff(record);return;}
+    function commandContent(panel,value){
+      const lines=value.output?value.output.replace(/\n$/,'').split('\n'):[];
+      function paintCommand(limit){
+        const content=make('div','conversation-step-command-content');
+        content.append(make('pre','conversation-step-command-code','$ '+value.command));
+        if(lines.length)content.append(make('pre','conversation-step-command-output',lines.slice(0,limit).join('\n')));
+        else if(!value.truncated)content.append(make('p','conversation-step-detail-note','No output'));
+        if(lines.length>limit)showMore(panel,content,lines.length-limit,()=>paintCommand(lines.length));
+        if(value.truncated)content.append(make('p','conversation-step-detail-note','Too long to show here'));
+        revealDetail(panel,content);
+      }
+      paintCommand(8);
+    }
+    async function toggleDetail(record){
+      if(!record.panel.hidden){closeDetail(record);return;}
       if(!record.ref)return;
       const request=new AbortController();record.request=request;
-      const {panel,toggle}=record;
+      const {panel,toggle,kind}=record;
+      const command=kind==='detail';
       panel.hidden=false;toggle.setAttribute('aria-expanded','true');
-      const notice=make('p','conversation-step-diff-note','Loading diff…');
+      const notice=make('p',command?'conversation-step-detail-note':'conversation-step-diff-note',
+        command?'Loading command…':'Loading diff…');
       notice.setAttribute('role','status');panel.append(notice);
       try{
-        const diff=await loadDiff(record.ref,request.signal);
-        if(record.request===request)diffContent(panel,diff,record.detailText);
+        const value=await loadDetail(kind,record.ref,request.signal);
+        if(record.request===request){
+          if(command)commandContent(panel,value);else diffContent(panel,value,record.detailText);
+        }
       }catch(error){
-        if(record.request===request)notice.textContent=error.message||'Diff unavailable';
+        if(record.request===request)notice.textContent=error.message||(command?'Command unavailable':'Diff unavailable');
       }finally{
         if(record.request===request)record.request=null;
       }
     }
-    function diffControl(record,step){
-      const stat=step.diff_stat,ref=step.diff_ref;
-      const valid=loadDiff&&/^[a-f0-9]{32}$/.test(ref)&&stat&&
+    function detailControl(record,step){
+      const stat=step.diff_stat;
+      const command=loadDetail&&key(step.detail_ref)&&['Bash','Shell'].includes(step.tool);
+      const diff=loadDetail&&key(step.diff_ref)&&stat&&
         Number.isSafeInteger(stat.added)&&stat.added>=0&&Number.isSafeInteger(stat.removed)&&stat.removed>=0;
-      const nextRef=valid?ref:null;
-      if(nextRef!==record.ref){
-        closeDiff(record);record.ref=nextRef;record.toggle.hidden=!nextRef;
+      const nextKind=command?'detail':diff?'diff':'';
+      const nextRef=command?step.detail_ref:diff?step.diff_ref:null;
+      if(nextRef!==record.ref||nextKind!==record.kind){
+        closeDetail(record);record.ref=nextRef;record.kind=nextKind;record.toggle.hidden=!nextRef;
         if(nextRef)record.toggle.prepend(record.tool);else record.top.prepend(record.tool);
       }
-      if(!nextRef)return;
+      record.toggle.classList.toggle('conversation-step-diff-toggle',!command);
+      record.panel.classList.toggle('conversation-step-diff',!command);
+      record.toggle.classList.toggle('conversation-step-command-toggle',Boolean(command));
+      if(command)record.toggle.setAttribute('aria-label',step.tool+' command and output');
+      else record.toggle.removeAttribute('aria-label');
+      record.disclosure.hidden=!command;
+      record.added.hidden=!diff||Boolean(command);
+      record.removed.hidden=!diff||Boolean(command)||stat.new_file;
+      if(!diff||command)return;
       changed(record.added,'+'+stat.added);
       changed(record.removed,stat.new_file?'':'−'+stat.removed);
-      record.removed.hidden=stat.new_file;
     }
     function updateRow(record,step){
-      const status=['done','failed','running'].includes(step.status)?step.status:'observed';
+      const exit=Number.isSafeInteger(step.exit_code)&&step.exit_code!==0?step.exit_code:null;
+      const status=exit!==null?'failed':['done','failed','running'].includes(step.status)?step.status:'observed';
       if(status!==record.status){
         const symbol=icon(status);
         if(record.icon)record.icon.replaceWith(symbol);else record.node.prepend(symbol);
         record.icon=symbol;record.status=status;
       }
       changed(record.tool,text(step.tool).split('__').at(-1));
-      changed(record.outcome,status==='failed'?'Failed':status==='running'?'Running…':status==='observed'?'Observed':'');
+      changed(record.outcome,status==='failed'?(exit===null?'Failed':''):status==='running'?'Running…':status==='observed'?'Observed':'');
+      record.exit.hidden=exit===null;changed(record.exit,exit===null?'':'exit '+exit);
       const start=time(step.started),end=time(step.ended);
       changed(record.clock,Number.isFinite(start)&&Number.isFinite(end)&&end>=start?duration((end-start)/1000):'');
       record.detailText=text(step.detail);
       changed(record.detail,record.detailText);record.detail.hidden=!step.detail;
-      diffControl(record,step);
+      detailControl(record,step);
     }
     function title(card,value,working){
       if(card.title===value&&card.wave===working)return;
@@ -367,7 +404,7 @@ SOFTWARE.
       const wanted=new Set(model.groups.map(g=>g.id)),byId=new Map(rows.map(r=>[r.dataset.id,r]));
       for(const [id,card] of cards)if(!wanted.has(id)){
         if(card.node.contains(root.document.activeElement))onFocusLost();
-        for(const record of card.rows.values())closeDiff(record);
+        for(const record of card.rows.values())closeDetail(record);
         card.node.remove();cards.delete(id);
       }
       for(const g of model.groups){
@@ -375,7 +412,7 @@ SOFTWARE.
         const ids=new Set(g.steps.map(s=>s.id));
         for(const [id,record] of card.rows)if(!ids.has(id)){
           if(record.node.contains(root.document.activeElement))card.button.focus({preventScroll:true});
-          closeDiff(record);record.node.remove();card.rows.delete(id);
+          closeDetail(record);record.node.remove();card.rows.delete(id);
         }
         for(const [index,step] of g.steps.entries()){
           const fingerprint=JSON.stringify(step),record=card.rows.get(step.id)||createRow(existed);
@@ -391,10 +428,10 @@ SOFTWARE.
       }
       paint();return model.consumed;
     }
-    function closeDiffs(){for(const card of cards.values())for(const record of card.rows.values())closeDiff(record);}
-    return Object.freeze({sync,closeDiffs,needsSync:context=>workingModel!==doingWork(context),
+    function closeDetails(){for(const card of cards.values())for(const record of card.rows.values())closeDetail(record);}
+    return Object.freeze({sync,closeDetails,needsSync:context=>workingModel!==doingWork(context),
       activity(context,isVisible){current=context||{};visible=isVisible;paint();return [...cards.values()].some(c=>!c.node.hidden&&(c.working||c.waiting));},
-      reset(){closeDiffs();if(timer)root.clearInterval(timer);timer=0;for(const card of cards.values())card.node.remove();cards.clear();model={groups:[],consumed:new Set()};workingModel=false;},
+      reset(){closeDetails();if(timer)root.clearInterval(timer);timer=0;for(const card of cards.values())card.node.remove();cards.clear();model={groups:[],consumed:new Set()};workingModel=false;},
     });
   }
   const api={collect,duration,elapsed,mount};
@@ -497,6 +534,12 @@ const diffMessages={
  diff_changed:'The record changed. Reopen the conversation.',
  history_slow:'Taking longer than usual. Tap again to retry.',
 };
+const commandMessages={
+ detail_expired:'Command link expired. Reopen the conversation and try again.',
+ detail_too_large:'Too long to show here',
+ detail_changed:diffMessages.diff_changed,
+ history_slow:diffMessages.history_slow,
+};
 async function enabled(){
  if(capability!==null)return capability;
  try{
@@ -521,23 +564,28 @@ async function request(token,slot){
   if(c.signal.aborted&&!late)e.superseded=true;if(late)e.slow=true;throw e;
  }finally{clearTimeout(t);if(controllers[slot]===c)controllers[slot]=null;}
 }
-async function loadStepDiff(ref,signal){
- if(!recordConfirmed||!REF.test(ref))throw Error('Diff unavailable');
+async function loadStepDetail(kind,ref,signal){
+ const command=kind==='detail',unavailable=command?'Command unavailable':'Diff unavailable';
+ if(!recordConfirmed||!REF.test(ref))throw Error(unavailable);
  const controller=new AbortController(),abort=()=>controller.abort();
  signal.addEventListener('abort',abort,{once:true});
  const timer=setTimeout(abort,WAIT);
  try{
-  const response=await fetch('/view/conversation/diff?name='+encodeURIComponent(name)+'&ref='+ref,
+  const route=command?'/view/conversation/detail':'/view/conversation/diff';
+  const messages=command?commandMessages:diffMessages;
+  const response=await fetch(route+'?name='+encodeURIComponent(name)+'&ref='+ref,
    {credentials:'same-origin',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
   const raw=await response.text();
-  if(new TextEncoder().encode(raw).length>64*1024)throw Error(diffMessages.diff_too_large);
+  const maxBytes=command?(8+64)*1024*6+1024:64*1024;
+  if(new TextEncoder().encode(raw).length>maxBytes)throw Error(messages[kind+'_too_large']);
   const value=JSON.parse(raw);
   if(!response.ok||value?.ok!==true){
    const code=value?.error;
-   throw Error(Object.hasOwn(diffMessages,code)?diffMessages[code]:'Diff unavailable');
+   throw Error(Object.hasOwn(messages,code)?messages[code]:unavailable);
   }
-  if(typeof value.path!=='string'||typeof value.new_file!=='boolean'||typeof value.truncated!=='boolean'||
-   !Array.isArray(value.hunks))throw Error('Diff unavailable');
+  const valid=command?value.kind==='command'&&typeof value.command==='string'&&typeof value.output==='string':
+   typeof value.path==='string'&&typeof value.new_file==='boolean'&&Array.isArray(value.hunks);
+  if(!valid||typeof value.truncated!=='boolean')throw Error(unavailable);
   return value;
  }finally{clearTimeout(timer);signal.removeEventListener('abort',abort);}
 }
@@ -615,7 +663,7 @@ function body(text,assistant=false,images){
  const box=make('div','conversation-text'),m=markdown();
  if(m&&assistant){
   m.renderDocument(text,box,{codeControls:true});
-  renderMarkdownImages(box,images,m);
+  renderMarkdownImages(box,images,m,{barePaths:true});
  }
  else if(m)m.renderText(text,box);else box.textContent=text;
  return box;
@@ -823,7 +871,7 @@ function observeThumbnail(button){
   thumbnailObserver.observe(button);
  }
 }
-function renderMarkdownImages(host,images,renderer){
+function renderMarkdownImages(host,images,renderer,{barePaths=false}={}){
  const refs=new Map();
  if(Array.isArray(images))for(const item of images.slice(0,8)){
   if(typeof item?.target==='string'&&typeof item.ref==='string'&&REF.test(item.ref))refs.set(item.target,item.ref);
@@ -849,6 +897,22 @@ function renderMarkdownImages(host,images,renderer){
   if(ref){
    marker.replaceWith(thumbnail({ref,label,markdown:true},alt||label,caption));
   }else marker.textContent=caption;
+ }
+ if(!barePaths||!refs.size)return;
+ // Use the same path candidates as the desktop. Match a whole line of
+ // assistant prose, even when Markdown combines it with adjacent lines.
+ for(const marker of host.querySelectorAll(':scope > p > span[data-path-candidate]')){
+  const target=marker.dataset.pathCandidate,ref=refs.get(target);
+  if(!ref||marker.dataset.pathLabel||!target.startsWith('/')||target.startsWith('//'))continue;
+  let before=marker.previousSibling,after=marker.nextSibling;
+  while(before&&/^[ \t]*$/.test(before.textContent))before=before.previousSibling;
+  while(after&&/^[ \t]*$/.test(after.textContent))after=after.nextSibling;
+  if((before&&!/\n[ \t]*$/.test(before.textContent))||(after&&!/^[ \t]*\n/.test(after.textContent)))continue;
+  const label=target.split('/').pop();
+  const button=make('button','conversation-path-preview',target);
+  button.type='button';button.setAttribute('aria-label','Preview image: '+label);
+  button.onclick=()=>openPreview({ref,label,markdown:true});
+  marker.replaceWith(button);
  }
 }
 function forgetThumbnails(node){
@@ -1246,7 +1310,7 @@ async function poll(){
   if(v.ok!==true){
    // A hidden, stale or changed record also hides any file opened from it;
    // a slow answer is only a delay and leaves it open.
-   if(v.error!=='history_slow'){recordConfirmed=false;lastRecordPoll=null;recordVersion++;dismissReferenceSelection();window.OrreryMobileTerminal?.refreshReference?.();closePreview();stepView?.closeDiffs();}showError(v);if(v.error==='history_changed')reset();}
+   if(v.error!=='history_slow'){recordConfirmed=false;lastRecordPoll=null;recordVersion++;dismissReferenceSelection();window.OrreryMobileTerminal?.refreshReference?.();closePreview();stepView?.closeDetails();}showError(v);if(v.error==='history_changed')reset();}
   else{
    recordConfirmed=true;provider=({claude:'Claude',codex:'Codex',antigravity:'Antigravity'})[v.provider]||'';
    failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));
@@ -1298,7 +1362,7 @@ function mount(n){
  retryButton=make('button','conversation-retry','Retry');retryButton.type='button';retryButton.hidden=true;
  retryButton.onclick=()=>{retryButton.hidden=true;setStatus('Loading the record…');return poll();};
  list.append(olderButton);root.append(status,retryButton,list);
- stepView=window.OrreryMobileSteps.mount({host:list,loadDiff:loadStepDiff,
+ stepView=window.OrreryMobileSteps.mount({host:list,loadDetail:loadStepDetail,
   mutate:(fn,button)=>{const top=button.getBoundingClientRect().top;fn();list.scrollTop+=button.getBoundingClientRect().top-top;following=atBottom();savedTop=list.scrollTop;},
   onFocusLost:()=>list.focus?.({preventScroll:true})});
  if(typeof ResizeObserver==='function'){mailResize=new ResizeObserver(()=>{if(list&&list.clientWidth!==mailWidth){mailWidth=list.clientWidth;layoutMailRoutes();}});mailResize.observe(list);}
@@ -1338,7 +1402,7 @@ document.addEventListener('visibilitychange',()=>{
  if(document.hidden){
   lastRecordPoll=null;
   stepView?.activity(stepContext(),false);
-  stepView?.closeDiffs();
+  stepView?.closeDetails();
   gen++;clearTimeout(timer);timer=0;
   if(controllers.preview&&previewRequest)previewRetry=true;
   for(const item of thumbnails.values())item.controller?.abort();

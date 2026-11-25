@@ -51,6 +51,7 @@ def _acl_snapshot(path: Path) -> dict:
         "rights=[int]$_.FileSystemRights} }); "
         "@{owner=$a.GetOwner("
         "[System.Security.Principal.SecurityIdentifier]).Value;"
+        "currentUser=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;"
         "protected=$a.AreAccessRulesProtected;rules=$rules} | "
         "ConvertTo-Json -Compress -Depth 4",
         ORRERY_ACL_PATH=str(path),
@@ -65,7 +66,7 @@ def _acl_snapshot(path: Path) -> dict:
 
 def _assert_current_user_only(path: Path, *, protected: bool | None = True) -> None:
     snapshot = _acl_snapshot(path)
-    sid = private_state.current_sid()
+    sid = snapshot["currentUser"]
     assert snapshot["owner"] == sid
     if protected is not None:
         assert snapshot["protected"] is protected
@@ -89,7 +90,19 @@ def _grant_everyone_read(path: Path) -> None:
     )
 
 
-def test_private_directory_has_only_current_user_full_control(tmp_path: Path) -> None:
+def test_private_directory_has_only_current_user_full_control(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Exercise the cold SID lookup. The ACL inspection still uses PowerShell
+    # as an independent check of both the current token and the resulting ACL.
+    private_state.current_sid.cache_clear()
+    powershell = private_state.powershell
+
+    def acl_only(script, **env):
+        assert "$env:ORRERY_ACL_PATH" in script
+        return powershell(script, **env)
+
+    monkeypatch.setattr(private_state, "powershell", acl_only)
     state = tmp_path / "private-state"
     private_state.create_private_directory(state)
 

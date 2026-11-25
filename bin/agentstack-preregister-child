@@ -279,7 +279,8 @@ PY
 # the same formal receipt with the canonical runtime token for the documented
 # no-argument launch path. Claude/Codex launchers fail closed when either copy is
 # unavailable; preregistration must therefore not report success without both.
-if [[ "$program" == "codex" || "$program" == "codex-cli" || "$program" == "claude" || "$program" == "claude-code" ]]; then
+if [[ "$program" == "codex" || "$program" == "codex-cli" || "$program" == "claude" || "$program" == "claude-code" ]] ||
+   [[ "$program" == "antigravity" && "$(uname -s)" == Darwin ]]; then
   [[ "$registered_id" =~ ^[1-9][0-9]*$ ]] \
     || die "register_agent returned no positive numeric id for child $registered"
   binding_file="${token_file_out}.binding.json"
@@ -309,9 +310,11 @@ PY
   then
     die "could not persist the one-shot child registration binding"
   fi
-  persist_codex_registration_state \
-    "$registered" "$registered_id" "$project_key" "$program" "$token_file_out" \
-    || die "could not persist canonical child registration token and metadata"
+  if [[ "$program" != "antigravity" ]]; then
+    persist_codex_registration_state \
+      "$registered" "$registered_id" "$project_key" "$program" "$token_file_out" \
+      || die "could not persist canonical child registration token and metadata"
+  fi
 else
   ags_store_registration_token "$registered" "$effective_token" || true
 fi
