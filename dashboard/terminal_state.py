@@ -40,6 +40,13 @@ _ASK_CODEX_RE = re.compile(
     r"Press\s+enter\s+to\s+confirm\s+or\s+esc\s+to\s+cancel", re.IGNORECASE)
 _QUESTION_RE = re.compile(r"Enter to select.{0,80}Esc to cancel")
 _CLAUDE_APPROVAL_SCROLL_RE = re.compile(r"[↑↓] [1-9]\d* more lines?")
+_AGY_COMMAND_APPROVAL_CONTROLS = "↑/↓ Navigate · tab Amend · ctrl+g edit/expand command"
+_AGY_APPROVAL_FOOTER_RE = re.compile(r"esc to cancel(?:\s{2,}[a-z-]+ · [^·]+ · [a-z]+)?")
+_AGY_COMMAND_OPTION_BREAK_RE = re.compile(r"\n(?=>? ?[1-9]\d*\. )")
+_AGY_COMMAND_ALWAYS_RE = re.compile(
+    r"[1-9]\d*\. Yes, and always allow(?: in this conversation)? "
+    r"for commands that start with '.+'(?: \(Persist to settings\.json\))?"
+)
 
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _STALL_WORK = re.compile(r"(?im)^\s*[•▌●]\s*(?:Working|Thinking)\b[^\n]*\([^\n]*(?:\d+\s*s|esc to interrupt)")
@@ -180,6 +187,20 @@ def current_modal_activity(current):
     rows = [row.strip() for row in current[-16:] if row.strip()]
     if not rows:
         return None
+    # Antigravity puts the approval controls above its model status bar.
+    if (len(rows) >= 5 and rows[-2] == _AGY_COMMAND_APPROVAL_CONTROLS
+            and _AGY_APPROVAL_FOOTER_RE.fullmatch(rows[-1])):
+        for index, row in enumerate(rows[:-4]):
+            if row != "Run this command?":
+                continue
+            options = _AGY_COMMAND_OPTION_BREAK_RE.split("\n".join(rows[index + 1:-2]))
+            # The persistent allowances wrap at narrower terminal widths.
+            choices = [" ".join(option.removeprefix(">").split()) for option in options]
+            if (len(choices) >= 2 and choices[0] == "1. Yes, run command"
+                    and re.fullmatch(r"[1-9]\d*\. No, cancel", choices[-1])
+                    and any(option.startswith("> ") for option in options)
+                    and all(_AGY_COMMAND_ALWAYS_RE.fullmatch(choice) for choice in choices[1:-1])):
+                return "ask"
     # Codex hook trust has its own footer, not the normal command-approval one.
     # Require the complete current menu transcribed from the reviewed screen;
     # the title or a prose explanation of hook trust is not an approval UI.
