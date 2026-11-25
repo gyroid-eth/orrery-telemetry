@@ -1,3 +1,8 @@
-### Fixed
+### 初回導入で詰まる所を直す
 
-- 初回導入で詰まる所を直した。Hermes を使うときの前提（xz・libatomic）を先に調べて入れ方を示す、lsof が無くても自分の dashboard の port を取り違えない、Hermes の初回取得を固定 commit だけの浅い取得にして進み具合を出す、selftest で共通部分の合否と Claude の MCP の未承認を分ける、ChatGPT MCP の既定 port を 8792 にする、`--dry-run` で HOME に .pyc を書かない。
+Hermes を使うときは、始める前に xz と libatomic を調べ、足りなければ入れる command を 1 行で示して止まるようにしました。
+lsof が無い環境でも、自分の dashboard が持つ port を「使用中」と取り違えなくなりました。
+Hermes の初回取得は固定 commit だけを浅く取り、進み具合を逐次表示します。
+selftest と doctor は、共通部分の合否と Claude の MCP 登録の未承認を分けて示します。
+ChatGPT MCP の既定 port を 8792 にして、cockpit の 8791 と分けました。
+`--dry-run` が HOME に .pyc を書かなくなりました。
