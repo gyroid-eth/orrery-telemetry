@@ -6,12 +6,14 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import shlex
 import subprocess
 import sys
 
 import pytest
 
+from scripts.lib import codex_app_bridge_restart as refresh_bridge
 from service_teardown import TEST_LABEL_PREFIX
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +23,151 @@ SPEC.loader.exec_module(trust)
 OWN_SPEC = importlib.util.spec_from_file_location('codex_plugin_ownership', ROOT/'scripts/codex_plugin_ownership.py')
 ownership = importlib.util.module_from_spec(OWN_SPEC)
 OWN_SPEC.loader.exec_module(ownership)
+
+
+@pytest.fixture
+def bridge_restart_home(tmp_path, monkeypatch):
+    home = tmp_path / 'isolated home'
+    install = home / '.agentstack/integrations/codex_app'
+    runner = install / 'bin/run-bridge'
+    runner.parent.mkdir(parents=True)
+    runner.write_text('#!/bin/bash\nexit 0\n')
+    runner.chmod(0o700)
+    label = TEST_LABEL_PREFIX + '.bridge'
+    plist = home / 'Library/LaunchAgents' / f'{label}.plist'
+    plist.parent.mkdir(parents=True)
+    plist.write_bytes(plistlib.dumps({'Label': label, 'ProgramArguments': ['/bin/bash', str(runner)]}))
+    manifest = install / 'install-state.json'
+    manifest.write_text(json.dumps({
+        'tool': 'agentstack-codex-app', 'install_dir': str(install),
+        'launchd': {'enabled': True, 'label': label, 'path': str(plist)},
+    }))
+    tools = tmp_path / 'bin'
+    tools.mkdir()
+    log = tmp_path / 'service-calls'
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('PATH', str(tools) + ':' + os.environ['PATH'])
+    monkeypatch.setenv('BRIDGE_TEST_CALLS', str(log))
+
+    def fake(name, response):
+        script = tools / name
+        script.write_text(f'#!{sys.executable}\n' + r'''
+import json, os, sys
+with open(os.environ['BRIDGE_TEST_CALLS'], 'a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\n')
+''' + response)
+        script.chmod(0o700)
+
+    def calls():
+        return [json.loads(row) for row in log.read_text().splitlines()] if log.exists() else []
+
+    return install, runner, label, plist, manifest, fake, calls
+
+
+@pytest.mark.parametrize('mode', ['running', 'legacy-disabled', 'service-disabled', 'stopped', 'foreign', 'dry-run'])
+def test_core_update_restarts_only_the_owned_running_launchd_bridge(bridge_restart_home, monkeypatch, mode):
+    install, runner, label, plist, manifest, fake, calls = bridge_restart_home
+    monkeypatch.setattr(refresh_bridge.sys, 'platform', 'darwin')
+    record = json.loads(manifest.read_text())
+    if mode == 'legacy-disabled':
+        record['launchd']['enabled'] = False
+    elif mode == 'service-disabled':
+        record['service'] = {'kind': 'disabled'}
+    manifest.write_text(json.dumps(record))
+    saved = manifest.read_bytes(), plist.read_bytes()
+    loaded_runner = '/another/install/bin/run-bridge' if mode == 'foreign' else str(runner)
+    state = 'not running' if mode == 'stopped' else 'running'
+    info = f'job = {{\n    state = {state}\n    arguments = {{\n        /bin/bash\n        {loaded_runner}\n    }}\n}}\n'
+    fake('launchctl', f"if sys.argv[1] == 'print': print({info!r}, end='')\n")
+    if mode == 'foreign':
+        with pytest.raises(refresh_bridge.ownership.OwnershipUnknown, match='loaded launchd definition'):
+            refresh_bridge.restart(install, dry_run=False)
+    else:
+        refresh_bridge.restart(install, dry_run=mode == 'dry-run')
+    target = f'gui/{os.getuid()}/{label}'
+    expected = [] if mode in {'dry-run', 'legacy-disabled', 'service-disabled'} else [['print', target]]
+    if mode == 'running':
+        expected.append(['kickstart', '-k', target])
+    assert calls() == expected
+    assert (manifest.read_bytes(), plist.read_bytes()) == saved
+
+
+@pytest.mark.parametrize('mode', ['running', 'inactive', 'disabled', 'foreign', 'drop-in', 'dry-run', 'absent'])
+def test_core_update_restarts_only_the_enabled_active_wsl_bridge(bridge_restart_home, monkeypatch, mode):
+    install, runner, label, _, manifest, fake, calls = bridge_restart_home
+    monkeypatch.setattr(refresh_bridge.mobile_systemd, 'is_wsl', lambda: True)
+    path = Path.home() / '.config/systemd/user' / f'{label}.service'
+    path.parent.mkdir(parents=True)
+    record = json.loads(manifest.read_text())
+    record['launchd']['enabled'] = False
+    record['service'] = {'kind': 'disabled'}
+    manifest.write_text(json.dumps(record))
+    if mode != 'absent':
+        path.write_text(f'[Service]\nExecStart=/bin/bash "{runner}"\n[Install]\nWantedBy=default.target\n')
+    unit_state = 'disabled' if mode == 'disabled' else 'enabled'
+    state = 'inactive' if mode == 'inactive' else 'active'
+    fragment = '/another/unit.service' if mode == 'foreign' else path.resolve()
+    drop_in = '/etc/unit.conf' if mode == 'drop-in' else ''
+    reply = (f'LoadState=loaded\nActiveState={state}\nUnitFileState={unit_state}\n'
+             f'FragmentPath={fragment}\nDropInPaths={drop_in}\nNeedDaemonReload=no\n')
+    fake('systemctl', f"if sys.argv[2] == 'show': print({reply!r}, end='')\n")
+    if mode in {'foreign', 'drop-in'}:
+        with pytest.raises(refresh_bridge.ownership.OwnershipUnknown, match='loaded systemd Bridge service'):
+            refresh_bridge.restart(install, dry_run=False)
+    else:
+        refresh_bridge.restart(install, dry_run=mode == 'dry-run')
+    if mode == 'running':
+        observed, restarted = calls()
+        assert observed[:2] == ['--user', 'show']
+        assert restarted == ['--user', 'try-restart', '--', path.name]
+    elif mode in {'dry-run', 'absent'}:
+        assert calls() == []
+    else:
+        assert [call[1] for call in calls()] == ['show']
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason='runs the macOS installer functions')
+def test_core_installer_restarts_bridge_after_installing_new_python(bridge_restart_home, tmp_path):
+    install, runner, label, _, _, fake, calls = bridge_restart_home
+    repo = tmp_path / 'checkout'
+    source = repo / 'integrations/codex_app'
+    relative = 'src/agentstack_codex_app/daemon.py'
+    for base, content in ((source, 'new\n'), (install, 'old\n')):
+        path = base / relative
+        path.parent.mkdir(parents=True)
+        path.write_text(content)
+    entry = source / 'plugin/scripts/run-mcp.sh'
+    entry.parent.mkdir(parents=True)
+    entry.touch()
+    info = f'job = {{\n    state = running\n    arguments = {{\n        /bin/bash\n        {runner}\n    }}\n}}\n'
+    fake('launchctl', f"""
+if sys.argv[1] == 'print':
+    print({info!r}, end='')
+else:
+    assert sys.argv[1:3] == ['kickstart', '-k']
+    assert open({str(install / relative)!r}).read() == 'new\\n'
+""")
+    text = (ROOT / 'scripts/install.sh').read_text()
+    main = text.split('\nmain() {', 1)[1]
+    assert main.index('\n  install_payload\n') < main.index('\n  restart_codex_app_bridge\n')
+
+    def installer_function(name):
+        start = f'{name}() {{\n'
+        return start + text.split(start, 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+
+    settings = {'TIER': 'tier1', 'DRY_RUN': 'false', 'REPO_ROOT': str(repo),
+                'INSTALL_DIR': str(install.parents[1]), 'SCRIPT_DIR': str(ROOT / 'scripts'),
+                'PYTHON_BIN': sys.executable}
+    script = '\n'.join([
+        'set -eu', *(f'{key}={shlex.quote(value)}' for key, value in settings.items()),
+        'plan() { :; }', 'warn() { echo "$*" >&2; return 1; }',
+        installer_function('install_child_mcp_proxy'), installer_function('restart_codex_app_bridge'),
+        'install_child_mcp_proxy', 'restart_codex_app_bridge',
+    ])
+    done = subprocess.run(['/bin/bash', '-c', script], capture_output=True, text=True, timeout=15)
+    assert done.returncode == 0, done.stdout + done.stderr
+    target = f'gui/{os.getuid()}/{label}'
+    assert calls() == [['print', target], ['kickstart', '-k', target]]
 
 
 @pytest.fixture

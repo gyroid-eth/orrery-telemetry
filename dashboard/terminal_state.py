@@ -39,7 +39,9 @@ _WORK_RE = re.compile(
 _WORK_CLAUDE_TASK_RE = re.compile(
     r"(?m)"
     r"^[ \t\xa0]*[✢✳✶✻✽✺·][ \t\xa0]+"
-    r"(?![^\n]*\bfor\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*$)"
+    # A completion timestamp can precede a separate tip with an ellipsis.
+    r"(?![^\n]*\bfor[ \t\xa0]+(?:\d+h[ \t\xa0]*)?(?:\d+m[ \t\xa0]*)?\d+s"
+    r"(?:[ \t\xa0]+·[ \t\xa0]+done\b[^\n]*)?[ \t\xa0]*$)"
     r"\S(?:[^\n]*\S[^\n]*\n){0,2}[^\n]*…"
     r"|^[ \t\xa0]*[✢✳✶✻✽✺][ \t\xa0]*$")
 _WORK_CODEX_RE = re.compile(

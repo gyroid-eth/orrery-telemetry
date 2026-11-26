@@ -673,6 +673,21 @@ def test_launchd_in_place_upgrade_replaces_its_own_listener_with_new_code(
         "launchctl": """#!/bin/sh
 case "$*" in
   *agentdashboard*) ;;
+  *org.agentstack.mobile-relay)
+    case "$1" in
+      print)
+        printf '    path = %s\n    state = running\n' "$TEST_MOBILE_PLIST"
+        exit 0
+        ;;
+      kickstart)
+        [ "$2" = -k ] &&
+          grep -Fq /local_model_makers.js "$AGENTSTACK_HOME/dashboard/mobile_relay.py" &&
+          printf 'restarted\n' > "$TEST_MOBILE_RESTART"
+        exit $?
+        ;;
+      *) exit 9 ;;
+    esac
+    ;;
   *) [ "$1" = print ] && exit 1; exit 0 ;;
 esac
 case "$1" in
@@ -708,6 +723,22 @@ exit 0
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     env, install_dir = _installer_upgrade_env(tmp_path, fake_bin, port)
+    mobile_restart = tmp_path / "mobile-restart"
+    if sys.platform == "darwin":
+        config = install_dir / "mobile.json"
+        relay = install_dir / "dashboard/mobile_relay.py"
+        relay.parent.mkdir(parents=True)
+        relay.write_text("# Previous relay, without the new route\n")
+        config.write_text('{"access":true}\n')
+        config.chmod(0o600)
+        mobile_plist = pathlib.Path(env["HOME"]) / "Library/LaunchAgents/org.agentstack.mobile-relay.plist"
+        mobile_plist.parent.mkdir(parents=True)
+        mobile_plist.write_bytes(plistlib.dumps({
+            "Label": "org.agentstack.mobile-relay",
+            "ProgramArguments": [sys.executable, str(relay), "--config", str(config)],
+        }))
+        env.update(AGENTSTACK_LAUNCHCTL=str(fake_bin / "launchctl"),
+                   TEST_MOBILE_PLIST=str(mobile_plist), TEST_MOBILE_RESTART=str(mobile_restart))
     old_server = tmp_path / "old-dashboard.py"
     _write_marker_dashboard(old_server, "old-launchd")
     env["AGENTSTACK_CHILD_DEFAULT_TOOLS"] = "browser,screen:read:windows-mcp"
@@ -745,6 +776,10 @@ exit 0
         assert _pid_is_alive(new_pid)
         assert "managed dashboard owns port" in result.stdout
         assert "replacing it during this install" in result.stdout
+        if sys.platform == "darwin":
+            assert mobile_restart.read_text() == "restarted\n"
+            assert "Restarted the mobile relay" in result.stdout
+            assert config.read_text() == '{"access":true}\n'
         manifest = json.loads(
             (install_dir / "install-state.json").read_text(encoding="utf-8")
         )

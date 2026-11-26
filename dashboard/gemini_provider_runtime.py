@@ -34,8 +34,7 @@ _DEFAULT_MODELS = (
 )
 _UNSUFFIXED_EFFORTS = ("low", "medium", "high")
 _EFFORTS = (*_UNSUFFIXED_EFFORTS, "xhigh")
-# Dashboard launches require an explicit effort.  The direct CLI launchers keep
-# their historical ``high`` fallback; this declaration does not reach them.
+# Adjustable Dashboard models require an explicit effort.
 CAPABILITIES = {
     "effort": True,
     "effort_required": True,
@@ -174,7 +173,12 @@ def _gemini_models(base: Any, *, discover: bool = True) -> tuple[list[str], str]
         if value and value not in values:
             values.append(value)
     discovered = _discover_models() if discover and not values else ()
-    models = values or list(dict.fromkeys((*_DEFAULT_MODELS, *discovered)))
+    if discovered:
+        # Keep the familiar default first when the CLI offers it. The account
+        # catalog is authoritative when a fallback model has been withdrawn.
+        preferred = (model for model in _DEFAULT_MODELS if model in discovered)
+        discovered = tuple(dict.fromkeys((*preferred, *discovered)))
+    models = values or list(discovered or _DEFAULT_MODELS)
     native = (
         ("claude", set(base._SPAWN_MODELS)),
         ("codex", set(base._codex_models())),
@@ -198,10 +202,17 @@ def _gemini_models(base: Any, *, discover: bool = True) -> tuple[list[str], str]
     return models, ""
 
 
+def _fixed_effort(model: str) -> bool:
+    return model == "gemini-pro-orchestrator" or model.startswith("gemini-pro-orchestrator-")
+
+
 def _catalog_item(models: list[str]) -> dict:
     available = set(models)
     model_efforts = {}
     for model in models:
+        if _fixed_effort(model):
+            model_efforts[model] = []
+            continue
         family, separator, level = model.rpartition("-")
         model_efforts[model] = ([effort for effort in _EFFORTS
                                  if f"{family}-{effort}" in available]
@@ -772,25 +783,26 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
         if not permitted(model):
             return {"ok": False, "error": f"model not allowed for provider gemini: {model}"}
         effort = str(payload.get("effort") or "").strip().lower()
-        if not effort:
-            if CAPABILITIES["effort_required"]:
-                return {"ok": False, "error": "effort required for provider gemini"}
-            effort = "high"
-        family, separator, model_effort = model.rpartition("-")
-        suffixed = bool(separator) and model_effort in _EFFORTS
-        # Accept the same levels the catalog offers: an id without an effort
-        # suffix keeps the historical low/medium/high.
-        if effort not in (_EFFORTS if suffixed else _UNSUFFIXED_EFFORTS):
-            return {"ok": False, "error": f"effort not allowed for provider gemini: {effort}"}
-        # The UI groups effort-qualified ids into one model family. Resolve
-        # the selected effort before registration so roster, log, and agy agree.
-        if suffixed:
-            resolved_model = f"{family}-{effort}"
-            if not permitted(resolved_model):
-                return {"ok": False, "error": (
-                    f"model not allowed for provider gemini at effort {effort}: {resolved_model}"
-                )}
-            model = resolved_model
+        if _fixed_effort(model):
+            if effort:
+                return {"ok": False, "error": f"effort is fixed for Gemini model: {model}"}
+        else:
+            if not effort:
+                if CAPABILITIES["effort_required"]:
+                    return {"ok": False, "error": "effort required for provider gemini"}
+                effort = "high"
+            family, separator, model_effort = model.rpartition("-")
+            suffixed = bool(separator) and model_effort in _EFFORTS
+            if effort not in (_EFFORTS if suffixed else _UNSUFFIXED_EFFORTS):
+                return {"ok": False, "error": f"effort not allowed for provider gemini: {effort}"}
+            # The UI keeps a native catalog ID for each model family.
+            if suffixed:
+                resolved_model = f"{family}-{effort}"
+                if not permitted(resolved_model):
+                    return {"ok": False, "error": (
+                        f"model not allowed for provider gemini at effort {effort}: {resolved_model}"
+                    )}
+                model = resolved_model
         if request["standalone"]:
             if payload.get("resources") not in (None, ""):
                 return {"ok": False, "error": "resources require a parent for provider gemini"}

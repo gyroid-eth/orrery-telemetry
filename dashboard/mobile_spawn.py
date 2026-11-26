@@ -62,9 +62,11 @@ def _effort_policy(provider, model, harness):
             fallback = defaults.get(model['id'], fallback)
     else:
         levels = provider.get('efforts')
+    model_efforts = provider.get('model_efforts')
+    fixed = isinstance(model_efforts, dict) and model_efforts.get(model['id']) == []
     levels = [entry for entry in levels if _text(entry, 32)] if isinstance(levels, list) else []
     capabilities = provider.get('capabilities')
-    required = isinstance(capabilities, dict) and capabilities.get('effort_required') is True
+    required = not fixed and isinstance(capabilities, dict) and capabilities.get('effort_required') is True
     return {'efforts':levels, 'default_effort':fallback if fallback in levels else None,
             'effort_required':required}
 

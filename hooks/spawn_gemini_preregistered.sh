@@ -93,7 +93,12 @@ else
 fi
 [[ -n "$TASK_FILE" && -s "$TASK_FILE" ]] || { echo "$PROG: full task handoff file is missing" >&2; exit 2; }
 [[ -d "$WORK_DIR" ]] || { echo "$PROG: workdir does not exist: $WORK_DIR" >&2; exit 2; }
-case "$EFFORT" in low|medium|high|xhigh) ;; *) echo "$PROG: invalid effort: $EFFORT" >&2; exit 2 ;; esac
+case "$MODEL" in gemini-pro-orchestrator|gemini-pro-orchestrator-*) EFFORT="" ;; esac
+case "$EFFORT" in ""|low|medium|high|xhigh) ;; *) echo "$PROG: invalid effort: $EFFORT" >&2; exit 2 ;; esac
+EFFORT_OPTION=""
+if [[ -n "$EFFORT" ]]; then
+  EFFORT_OPTION="--effort $(printf '%q' "$EFFORT")"
+fi
 if [[ ${#GEMINI_TOOLS[@]} -gt 0 ]]; then
   "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" parse --provider gemini "${GEMINI_TOOLS[@]}" >/dev/null || exit 2
 fi
@@ -559,7 +564,7 @@ fi
 set +e
 cat $(printf '%q' "$TASK_EVENT_FILE") | \
   $(printf '%q' "$GEMINI_BIN") --input-format stream-json --output-format stream-json \
-    --model $(printf '%q' "$MODEL") --effort $(printf '%q' "$EFFORT") \
+    --model $(printf '%q' "$MODEL") $EFFORT_OPTION \
     --print-timeout $(printf '%q' "$PRINT_TIMEOUT") \
     2> >(tee $(printf '%q' "$STDERR_LOG") >&2) | \
   $(printf '%q' "$PYTHON_BIN") $(printf '%q' "$STREAM_HELPER") $(printf '%q' "$RESULT_LOG")

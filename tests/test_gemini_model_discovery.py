@@ -39,7 +39,7 @@ def _fake_cli(monkeypatch, tmp_path: Path, body: str) -> Path:
     return binary
 
 
-def test_cli_adds_argon_without_mixing_other_providers(monkeypatch, tmp_path):
+def test_cli_catalog_excludes_unavailable_fallbacks_and_other_providers(monkeypatch, tmp_path):
     rows = ("gemini-4-argon-medium\tMedium\n"
             "gemini-4-argon-high\tHigh\n"
             "gemini-4-argon-low\tLow\n"
@@ -50,9 +50,8 @@ def test_cli_adds_argon_without_mixing_other_providers(monkeypatch, tmp_path):
     _fake_cli(monkeypatch, tmp_path, f"import sys\nsys.stdout.write({rows!r})")
     models, error = gemini._gemini_models(BASE)
     assert error == ""
-    assert models == FALLBACK + ["gemini-4-argon-medium", "gemini-4-argon-high",
-                                 "gemini-4-argon-low"]
-    assert gemini._catalog_item(models)["default_model"] == FALLBACK[0]
+    assert models == ["gemini-4-argon-medium", "gemini-4-argon-high", "gemini-4-argon-low"]
+    assert gemini._catalog_item(models)["default_model"] == "gemini-4-argon-medium"
     assert gemini._catalog_item(models)["model_efforts"]["gemini-4-argon-medium"] == [
         "low", "medium", "high"]
 
@@ -76,7 +75,7 @@ def test_xhigh_is_offered_only_for_families_with_that_variant():
     assert levels["gemini-4-neon-low"] == levels["gemini-4-neon-xhigh"] == ["low", "xhigh"]
     assert levels["gemini-4-carbon-high"] == ["high"]
     assert "xhigh" not in levels["gemini-3.8-flash-high"]
-    assert "xhigh" not in levels["gemini-pro-orchestrator"]
+    assert levels["gemini-pro-orchestrator"] == []
     assert levels["xhigh"] == ["low", "medium", "high"]
 
 
@@ -88,7 +87,7 @@ def test_cache_coalesces_concurrent_queries_and_override_skips_cli(monkeypatch, 
               "time.sleep(0.2)\nprint('gemini-4-argon-high\\tArgon')")
     with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(lambda _: gemini._gemini_models(BASE)[0], range(6)))
-    assert all(models == FALLBACK + ["gemini-4-argon-high"] for models in results)
+    assert all(models == ["gemini-4-argon-high"] for models in results)
     assert counter.read_text().splitlines() == ["call"]
 
     monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", "custom-model")
@@ -107,12 +106,12 @@ def test_failure_recovers_soon_and_keeps_last_success(monkeypatch, tmp_path):
     monkeypatch.setenv("AGY_TEST_FAIL", "0")
     key, _, last = gemini._CLI_CATALOG_CACHE
     monkeypatch.setattr(gemini, "_CLI_CATALOG_CACHE", (key, 0, last))
-    assert gemini._gemini_models(BASE)[0] == FALLBACK + ["gemini-4-argon-high"]
+    assert gemini._gemini_models(BASE)[0] == ["gemini-4-argon-high"]
 
     monkeypatch.setenv("AGY_TEST_FAIL", "1")
     key, _, last = gemini._CLI_CATALOG_CACHE
     monkeypatch.setattr(gemini, "_CLI_CATALOG_CACHE", (key, 0, last))
-    assert gemini._gemini_models(BASE)[0] == FALLBACK + ["gemini-4-argon-high"]
+    assert gemini._gemini_models(BASE)[0] == ["gemini-4-argon-high"]
 
 
 @pytest.mark.parametrize("body", [
@@ -207,7 +206,8 @@ def test_aborted_cli_kills_inherited_stdout_child_after_parent_exit(monkeypatch,
               "with open(os.environ['AGY_TEST_OWNED'], 'w') as f:\n"
               "    f.write(f'{os.getpid()} {os.getpgrp()} {child.pid}')")
     monkeypatch.setenv("AGY_TEST_OWNED", str(marker))
-    monkeypatch.setattr(gemini, "_CLI_CATALOG_TIMEOUT", 0.35 if failure == "timeout" else 1.5)
+    # Allow the wrapper to record its child before timing out the inherited stdout pipe.
+    monkeypatch.setattr(gemini, "_CLI_CATALOG_TIMEOUT", 1.5)
 
     def active(pid):
         result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
@@ -244,4 +244,4 @@ def test_successful_catalog_read_does_not_signal_process_group(monkeypatch, tmp_
     def unexpected_group_signal(*_):
         pytest.fail("a completed catalog read must not signal a recycled process group")
     monkeypatch.setattr(gemini.os, "killpg", unexpected_group_signal)
-    assert gemini._gemini_models(BASE) == (FALLBACK + ["gemini-4-argon-high"], "")
+    assert gemini._gemini_models(BASE) == (["gemini-4-argon-high"], "")
