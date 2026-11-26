@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":53}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":54}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -406,6 +406,7 @@ Claude / Claude Code, dsh and Hermes return only verified own conversations thro
 | `history_binding_reason_code` | Stable machine-readable code, including provider-specific conditions |
 | `history_session_id` | Provider-native session ID (required for Hermes database reads), or null if unverified |
 | `history_receipt_ts` | Original receipt timestamp (ISO 8601 string), or null if unavailable; preserve offset-free values as written |
+| `history_workspace` | API 54. A bound Antigravity row includes the absolute workspace from the verified launch receipt. The Reader uses it to resolve relative paths for image steps. |
 
 Cwd, timestamps and latest-session scans never establish ownership. Binding does not prove process liveness. Existing Codex fields and states and the protected fresh `/api/history` path remain unchanged.
 

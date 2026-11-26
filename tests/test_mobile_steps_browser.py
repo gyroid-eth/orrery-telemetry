@@ -1,10 +1,12 @@
 """Selected A on the real mobile page, synthetic APIs and shared opt-in CDP."""
 import base64
+import io
 import json
 import os
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from mobile_reader_browser import phone  # noqa: F401
 from test_mobile_steps import fixtures, raw
@@ -15,6 +17,38 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def project(provider, events):
     return project_page(dict(ok=True, provider=provider, events=events))[0]
+
+
+def test_mobile_image_step_opens_the_file_preview(phone):
+    client, js, wait, state = phone
+    events = fixtures('codex')
+    seen = next(event for event in events if event['id']=='observed')
+    seen['step']['detail'] = 'diagram.png'
+    seen['step']['image'] = dict(id='r'*32, kind='image', label='diagram.png')
+    picture = io.BytesIO()
+    Image.new('RGB', (640, 400), '#548eae').save(picture, 'PNG')
+    state['file_preview'] = dict(ok=True, kind='image', width=640, height=400,
+                                 data=base64.b64encode(picture.getvalue()).decode())
+    state.update(provider='codex', events=project_page(dict(ok=True, provider='codex', events=events),
+                                                      issue=lambda _: 'a'*32)[0])
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('.conversation-step-image:not([hidden])')!==null")
+    js("document.querySelector('.conversation-steps-toggle').click()")
+    assert js("document.querySelectorAll('.conversation-step-image:not([hidden])').length") == 1
+    assert js("document.querySelector('.conversation-step-image:not([hidden])').ariaLabel") == 'Preview diagram.png'
+    capture = os.environ.get('ORRERY_STEP_IMAGE_SCREENSHOTS')
+    if capture:
+        folder = Path(capture)
+        folder.mkdir(parents=True, exist_ok=True)
+        client.call('Page.bringToFront')
+        wait("document.querySelector('.conversation-step-image:not([hidden])').getBoundingClientRect().height>0")
+        (folder/'phone-step.png').write_bytes(base64.b64decode(client.call('Page.captureScreenshot', format='png')['data']))
+    js("document.querySelector('.conversation-step-image:not([hidden])').click()")
+    wait("document.querySelector('.conversation-preview-image')?.naturalWidth===640")
+    assert '/view/conversation/preview?name=SampleAgent&ref='+'a'*32 in state['get_calls']
+    assert js("document.querySelector('.conversation-preview').ariaLabel") == 'Preview of diagram.png'
+    if capture:
+        (folder/'phone-preview.png').write_bytes(base64.b64decode(client.call('Page.captureScreenshot', format='png')['data']))
 
 
 @pytest.mark.parametrize('provider', ['claude', 'codex'])

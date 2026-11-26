@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":53}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":54}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -405,6 +405,7 @@ Claude / Claude Code・dsh・Hermes は、検証した本人の会話だけを�
 | `history_binding_reason_code` | 機械向けの固定 code。provider 固有の事情もこの値で表す |
 | `history_session_id` | provider の native session ID。Hermes の DB 読取では必須。未確認なら null |
 | `history_receipt_ts` | receipt の元時刻（ISO 8601 string）。未確認なら null。offset がなければ元の表記を保つ |
+| `history_workspace` | API 54。Antigravity の bound 行では、起動 receipt と照合した作業フォルダの絶対 path。Reader の画像を読む段で相対 path の解決に使う |
 
 cwd・時刻・最新履歴だけから所有を推測しません。binding はプロセス生存の証明ではありません。既存 Codex の field・状態と、fresh の保護された `/api/history` 経路は変更しません。
 
