@@ -79,7 +79,8 @@ def _unchanged(snapshots):
     return True
 
 
-def history_binding(runtime_dir, install_home, name, registration, *, session_created=None, tools_generation=None):
+def history_binding(runtime_dir, install_home, name, registration, *, session_created=None,
+                    tools_generation=None, include_activity=False):
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', name):
         return unbound('invalid_binding')
     if not isinstance(registration, dict):
@@ -138,6 +139,7 @@ def history_binding(runtime_dir, install_home, name, registration, *, session_cr
             return unbound('invalid_binding')
         database = home / 'state.db'
         fd = _open_regular(database)
+        activity = None
         try:
             pinned = os.fstat(fd)
             # mode=ro sees committed WAL rows; immutable=1 would miss them.
@@ -149,6 +151,14 @@ def history_binding(runtime_dir, install_home, name, registration, *, session_cr
                 # Fail closed for unsupported schema without fetching bodies.
                 con.execute('SELECT id, session_id, role, content, timestamp, tool_calls, tool_call_id, tool_name '
                             'FROM messages LIMIT 0')
+                if row is not None and include_activity:
+                    try:
+                        latest = con.execute('SELECT timestamp FROM messages WHERE session_id=? '
+                                             'ORDER BY id DESC LIMIT 1', (sid,)).fetchone()
+                        activity = latest[0] if latest else None
+                    except sqlite3.Error:
+                        # An unavailable sample does not invalidate the binding.
+                        pass
             current = _open_regular(database)
             try:
                 now = os.fstat(current)
@@ -165,6 +175,8 @@ def history_binding(runtime_dir, install_home, name, registration, *, session_cr
         if (session_created and not source.get('resume_session_id')
                 and receipt_time.timestamp() < float(session_created)):
             return dict(unbound('receipt_predates_session'), history_binding='stale', **evidence)
+        if activity is not None:
+            evidence['_transcript_activity'] = activity
         return dict(history_binding='bound', history_binding_reason='', history_binding_reason_code='bound',
                     transcript_path=str(database), **evidence)
     except sqlite3.Error:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -50,6 +51,37 @@ const canKill=()=>false, deckProviderLogo=()=>'';
     return Card(result.stdout)
 
 
+@pytest.fixture
+def live_tmux_roster(monkeypatch, tmp_path):
+    session = dict(cmd='claude', title='', activity=8_000, created=100,
+                   session_id='$fixture', attached=False, pane_pid=61000)
+    mail = dict(program='claude-code', model='Opus 5.5', model_raw='Opus 5.5',
+                task='', last_active=8_500)
+    monkeypatch.setattr(server.time, 'time', lambda: 10_000)
+    monkeypatch.setattr(server.time, 'monotonic', lambda: 100.0)
+    monkeypatch.setattr(server, '_rt_cache', {})
+    monkeypatch.setattr(server, '_provider_captures', {})
+    monkeypatch.setattr(server, '_observed', {})
+    monkeypatch.setattr(server, '_tmux_run', lambda *a, **kw:
+                        SimpleNamespace(returncode=1, stdout=''))
+    monkeypatch.setattr(server, 'tmux_state', lambda: {'FixtureAgent': session})
+    monkeypatch.setattr(server, 'agentmail_state', lambda: ({'FixtureAgent': mail}, {}))
+    monkeypatch.setattr(server, '_process_tree_snapshot', lambda:
+                        ({61000: 'zsh', 61010: 'claude'}, {61000: [61010]}))
+    for name in ('_codex_app_runtimes', '_deliverables_index', '_card_screen_launches', '_annotations',
+                 '_name_substitutions', '_persistent_profiles'):
+        monkeypatch.setattr(server, name, lambda: {})
+    monkeypatch.setattr(server, 'RUNTIME_DIR', str(tmp_path))
+    monkeypatch.setattr(server, 'SESSION_INDEX_DIR', str(tmp_path / 'index'))
+    monkeypatch.setattr(server, 'DB_PATH', str(tmp_path / 'mail.sqlite3'))
+    monkeypatch.setattr(server, '_project_key', lambda: '')
+    monkeypatch.setattr(server, '_retired_names', lambda *_: set())
+    monkeypatch.setattr(server, '_resume_capability_for_row', lambda *a, **kw: 'ready')
+    monkeypatch.setattr(server, '_claude_row_mail_fields', lambda *a, **kw: {})
+    monkeypatch.setattr(server.harness_runtime, 'metadata', lambda *a: {})
+    return mail
+
+
 @pytest.mark.parametrize('current,state,duration', [
     ('⏺ Running a synthetic task · 1m 1s\n'
      '  ⎿  $ synthetic command\n'
@@ -58,33 +90,11 @@ const canKill=()=>false, deckProviderLogo=()=>'';
     (_OLD_WORK + '\n⏺ Finished the requested work.\n', 'wait', None),
 ])
 def test_current_work_with_old_events_survives_runtime_roster_and_card(
-    monkeypatch, current, state, duration,
+    monkeypatch, live_tmux_roster, current, state, duration,
 ):
     capture = current + _CLAUDE_USAGE_INPUT
-    monkeypatch.setattr(server.time, 'time', lambda: 10_000)
-    monkeypatch.setattr(server.time, 'monotonic', lambda: 100.0)
-    monkeypatch.setattr(server, '_rt_cache', {})
-    monkeypatch.setattr(server, '_provider_captures', {})
-    monkeypatch.setattr(server, '_observed', {})
     monkeypatch.setattr(server, '_tmux_run', lambda *a, **kw:
                         SimpleNamespace(returncode=0, stdout=capture))
-    monkeypatch.setattr(server, 'tmux_state', lambda: {'FixtureAgent': dict(
-        cmd='claude', title='', activity=8_000, created=100,
-        session_id='$fixture', attached=False, pane_pid=61000)})
-    monkeypatch.setattr(server, 'agentmail_state', lambda: ({'FixtureAgent': dict(
-        program='claude-code', model='Opus 5.5', model_raw='Opus 5.5',
-        task='', last_active=8_500)}, {}))
-    monkeypatch.setattr(server, '_process_tree_snapshot', lambda:
-                        ({61000: 'zsh', 61010: 'claude'}, {61000: [61010]}))
-    for name in ('_codex_app_runtimes', '_deliverables_index',
-                 '_name_substitutions', '_persistent_profiles'):
-        monkeypatch.setattr(server, name, lambda: {})
-    monkeypatch.setattr(server, '_project_key', lambda: '')
-    monkeypatch.setattr(server, '_retired_names', lambda *_: set())
-    monkeypatch.setattr(server, '_resume_capability_for_row', lambda *a, **kw: 'ready')
-    monkeypatch.setattr(server, '_claude_row_mail_fields', lambda *a, **kw: {})
-    monkeypatch.setattr(server.harness_runtime, 'metadata', lambda *a: {})
-
     row, = server.build_agents()
     assert row['running'] is True and row['act_state'] == state
     assert row['last_active'] == 8_500 and row['mail_active'] == 8_500
@@ -99,6 +109,44 @@ def test_current_work_with_old_events_survives_runtime_roster_and_card(
     assert ('work' in card.classes) is (state == 'work')
     if duration:
         assert duration in card.text
+
+
+@pytest.mark.parametrize('program', ['claude-code', 'codex-cli', 'dsh', 'antigravity'])
+def test_live_roster_uses_only_a_newer_bound_transcript(
+    monkeypatch, tmp_path, live_tmux_roster, program,
+):
+    transcript = tmp_path / 'conversation.jsonl'
+    transcript.write_text('{}\n')
+    binding = dict(history_binding='bound', transcript_path=str(transcript))
+    live_tmux_roster['program'] = program
+    monkeypatch.setattr(server, '_tmux_row_state', lambda *a: (program, 'agent', True, None))
+    monkeypatch.setattr(server, '_history_binding_fields', lambda *a, **kw: dict(binding))
+    monkeypatch.setattr(server, '_native_context_runtime', lambda *a: {})
+    monkeypatch.setattr(server, '_agent_runtime', lambda *a: {})
+    monkeypatch.setattr(server, '_provider_stall_view', lambda *a: None)
+
+    os.utime(transcript, (8_200, 8_200))
+    row, = server.build_agents()
+    assert row['last_active'] == 8_500
+
+    os.utime(transcript, (9_800, 9_800))
+    row, = server.build_agents()
+    assert row['last_active'] == 9_800 and row['mail_active'] == 8_500
+    assert row['last_active_rel'] == '3m 前'
+    assert 'LAST EVENT 3m 前' in render_card(row).text
+
+    binding['history_binding'] = 'stale'
+    row, = server.build_agents()
+    assert row['last_active'] == 8_500
+
+    binding['history_binding'] = 'bound'
+    os.utime(transcript, (11_000, 11_000))
+    row, = server.build_agents()
+    assert row['last_active'] == 8_500
+
+    transcript.unlink()
+    row, = server.build_agents()
+    assert row['last_active'] == 8_500
 
 
 @pytest.mark.parametrize('running,state,indicator', [

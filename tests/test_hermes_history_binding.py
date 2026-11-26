@@ -46,6 +46,7 @@ def binding(tmp_path, monkeypatch):
         con.executemany('INSERT INTO sessions VALUES (?, ?)', [(SID, 'cli'), ('other-same-cwd', 'cli')])
     monkeypatch.setattr(server, 'RUNTIME_DIR', str(runtime))
     monkeypatch.setattr(server, 'HOOKS_DIR', str(root / 'hooks'))
+    monkeypatch.setattr(server, 'DB_PATH', str(root / 'mail.sqlite3'))
     monkeypatch.setattr(server, 'FRESH_MODE', False)
     monkeypatch.setattr(server, '_resume_registration', lambda name, programs: registration)
     return dict(root=root, runtime=runtime, home=home, directory=directory, state=state,
@@ -174,9 +175,22 @@ def test_agents_row_exposes_hermes_binding(binding, monkeypatch):
     monkeypatch.setattr(server, '_project_key', lambda: '')
     monkeypatch.setattr(server, '_resume_capability_for_row', lambda *a, **k: 'not_required')
     monkeypatch.setattr(server, '_provider_stall_view', lambda *a: None)
+    monkeypatch.setattr(server, '_card_screen_launches', lambda: {})
+    monkeypatch.setattr(server.time, 'time', lambda: 1_000)
     row = server.build_agents()[0]
     assert row['history_binding'] == 'bound'
     assert row['history_session_id'] == SID
+    assert row['last_active'] == 200
+
+    with sqlite3.connect(binding['home'] / 'state.db') as db:
+        db.execute('PRAGMA journal_mode=WAL')
+        db.executemany('INSERT INTO messages (session_id, timestamp) VALUES (?, ?)',
+                       [(SID, 400.25), ('other-same-cwd', 900)])
+        db.commit()
+        row = server.build_agents()[0]
+        assert row['last_active'] == 400 and row['last_active_rel'] == '10m 前'
+        assert row['mail_active'] == 150
+        assert '_transcript_activity' not in row
 
 
 def test_old_receipt_is_stale_for_new_launch_but_valid_for_exact_resume(binding):
