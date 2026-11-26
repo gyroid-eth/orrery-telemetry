@@ -725,7 +725,7 @@ function refreshReference(){
 }
 const MAX_ATTACHMENTS=10;
 const imageTypes=['image/jpeg','image/png','image/webp'], imageExtensions=['jpg','jpeg','png','webp'];
-const fileFormats=['pdf','txt','md','csv','json'];
+const fileLimit=50;
 let attachmentAccess={image:false,file:false},attachmentProbe='',attachmentController=null,attachmentProbeController=null,attachments=[],pendingAttachmentSelection=null;
 let paused=false,checkingView=false,reviewUntil=0,startupReady=false;
 const viewKey='orrery-mobile-view-v1';
@@ -1131,9 +1131,11 @@ function renderAttachments(panel,removable){
  panel.append(list);
 }
 function attachmentType(file,source){
- const extension=/\.([a-z]+)$/i.exec(file.name)?.[1].toLowerCase();
+ const dot=file.name.lastIndexOf('.');
+ const suffix=dot>0?file.name.slice(dot+1).toLowerCase():'';
+ const extension=/^[a-z0-9]{1,32}$/.test(suffix)?suffix:'';
  if(attachmentAccess.image&&(imageTypes.includes(file.type)||!file.type&&imageExtensions.includes(extension)))return {kind:'image'};
- if(source==='file'&&attachmentAccess.file&&fileFormats.includes(extension))return {kind:'file',format:extension};
+ if(source==='file'&&attachmentAccess.file)return {kind:'file',format:extension};
  return null;
 }
 function flushAttachmentSelection(){
@@ -1160,10 +1162,10 @@ async function uploadAttachments(files,source){
   message='Attach up to '+MAX_ATTACHMENTS+(includesFiles?' items':' images')+' per input.';render();return;
  }
  for(const {file,type} of typed){
-  if(!type){message=source==='file'&&attachmentAccess.file?'Choose a JPEG, PNG, WebP, PDF, TXT, MD, CSV or JSON file.':'Choose a JPEG, PNG or WebP image.';render();return;}
-  const limit=type.kind==='image'?10:5;
-  if(file.size>limit*1024*1024){message=(type.kind==='image'?'Choose an image up to ':'Choose a document up to ')+limit+' MiB.';render();return;}
-  if(type.kind==='file'&&!file.size){message='Choose a document that is not empty.';render();return;}
+  if(!type){message='Choose a JPEG, PNG or WebP image.';render();return;}
+  const limit=type.kind==='image'?10:fileLimit;
+  if(file.size>limit*1024*1024){message=file.name+' exceeds '+limit+' MiB.';render();return;}
+  if(!file.size){message=file.name+' is empty.';render();return;}
  }
  if(phase!=='editing'){cancelIntent();phase='editing';}
  const g=generation,t=target,controller=new AbortController();attachmentController=controller;
@@ -1177,7 +1179,7 @@ async function uploadAttachments(files,source){
    if(g!==generation||controller.signal.aborted)return;
    const result=await request(kind,{epoch:capability.epoch,choice:t.choice,revision:t.revision,
     ...(file.name&&{label:file.name.slice(0,256)}),
-    [kind]:kind==='image'?data:{format:type.format,data}},controller,30000);
+    [kind]:kind==='image'?data:{format:type.format,data}},controller,kind==='image'?30000:90000);
    if(g!==generation||!sheet.open||document.hidden)return;
    if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||
     !sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
@@ -1193,13 +1195,13 @@ async function uploadAttachments(files,source){
     image_too_large:'Choose an image up to 10 MiB.',image_pixels_too_large:'Choose an image up to 24 megapixels.',
     image_format_unsupported:'Choose a static JPEG, PNG or WebP image.',
     image_text_too_large:'The image paths and text exceed 4096 bytes. Shorten the text or remove an image.',
-    file_folder_full:'This workspace already has 50 documents. Remove older files before attaching another.',
-    file_too_large:'Choose a document up to 5 MiB.',file_empty:'Choose a document that is not empty.',
-    file_format_unsupported:'Choose a PDF or UTF-8 TXT, MD, CSV or JSON file.',
+    file_folder_full:'This workspace already has 50 files. Remove older files before attaching another.',
+    file_too_large:'Choose a file up to '+fileLimit+' MiB.',file_empty:'Choose a file that is not empty.',
+    file_format_unsupported:'This Cockpit version cannot save the file. Update Cockpit and try again.',
     file_text_too_large:'The attachment paths and text exceed 4096 bytes. Shorten the text or remove an attachment.',
    };
    const noun=includesFiles?' attachment(s)':' image(s)';
-   const failed=kind==='image'?'Image':'Document';
+   const failed=kind==='image'?'Image':'File';
    message=(attachments.length?attachments.length+noun+' attached. ':'')+(reasons[error.message]||failed+' could not be saved. No input was sent. Choose the file again.');
   }
  }finally{if(g===generation&&attachmentController===controller){attachmentController=null;render();}}
