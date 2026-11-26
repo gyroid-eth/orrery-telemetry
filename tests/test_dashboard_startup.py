@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import socket
 import threading
 import urllib.request
-from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -15,7 +15,7 @@ import dashboard.server as server
 pytestmark = pytest.mark.usefixtures("isolated_provider_stall_runtime")
 
 
-def test_main_serves_dashboard_without_cleanup_process(monkeypatch):
+def test_main_serves_dashboard_without_cleanup_process_or_reverse_dns(monkeypatch):
     """Exercise main's real HTTP bind and handler without a persistent server."""
     cleanup = Mock()
     monkeypatch.setattr(server, "subprocess", SimpleNamespace(run=cleanup))
@@ -27,7 +27,12 @@ def test_main_serves_dashboard_without_cleanup_process(monkeypatch):
     monkeypatch.setattr(server, "BIND_HOST", "127.0.0.1")
     monkeypatch.setattr(server, "PORT", 0)
 
-    class SingleRequestServer(ThreadingHTTPServer):
+    def blocked_reverse_lookup(*_args):
+        pytest.fail("dashboard startup must not depend on reverse DNS")
+
+    monkeypatch.setattr(socket, "getfqdn", blocked_reverse_lookup)
+
+    class SingleRequestServer(server.DashboardHTTPServer):
         def serve_forever(self):
             self.timeout = 5
             worker = threading.Thread(target=self.handle_request, daemon=True)
@@ -43,7 +48,7 @@ def test_main_serves_dashboard_without_cleanup_process(monkeypatch):
                 self.server_close()
             assert not worker.is_alive()
 
-    monkeypatch.setattr(server, "ThreadingHTTPServer", SingleRequestServer)
+    monkeypatch.setattr(server, "DashboardHTTPServer", SingleRequestServer)
 
     server.main()
 

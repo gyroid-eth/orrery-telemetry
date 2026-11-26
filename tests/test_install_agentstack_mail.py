@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -581,6 +582,108 @@ def test_default_provisions_isolated_state_and_serves_health(tmp_path):
     finally:
         _stop_mail(home, destination_state, mail_port)
         stop_dashboard(home, label_prefix="")
+
+
+def test_default_installer_owns_serves_updates_and_removes_gemini(tmp_path):
+    from test_gemini_core_install_boundary import _provider_installer_files
+
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    # Use the host's platform logic without talking to its service manager
+    # or tmux server. Dashboard and Mail use only this test's free ports.
+    for command in ("launchctl", "systemctl", "tmux"):
+        _write_command(fake_bin, command, "#!/bin/sh\nexit 1\n")
+    env = _base_env(tmp_path, home, fake_bin)
+    mail_port, dashboard_port = _free_port(), _free_port()
+    assert mail_port != dashboard_port
+    state = tmp_path / "mail"
+    install = home / ".agentstack"
+    env.update(
+        PATH=f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+        AGENTSTACK_MAIL_STATE_ROOT=str(state),
+        AGENTSTACK_MAIL_SERVICE_VENV=str(pathlib.Path(sys.executable).parent.parent),
+        AGENTSTACK_MCP_URL=f"http://127.0.0.1:{mail_port}/mcp",
+        AGENTSTACK_PORT=str(dashboard_port),
+        CODEX_HOME=str(home / ".codex"),
+        CLAUDE_CONFIG_DIR=str(home / ".claude"),
+    )
+    env.pop("TMUX", None)
+    env.pop("TMUX_PANE", None)
+    payload = _provider_installer_files()
+    mcp_config = home / ".gemini/config/mcp_config.json"
+    mcp_config.parent.mkdir(parents=True)
+    mcp_config.write_text('{"mcpServers": {}}\n')
+    original_config = mcp_config.read_bytes()
+
+    def invoke(*args):
+        result = subprocess.run(
+            ["/bin/bash", *map(str, args)], cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+            text=True, capture_output=True, timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result
+
+    def assert_owned_payload():
+        receipt = json.loads((install / "install-state.json").read_text())
+        assert {str(install / relative) for relative in payload} <= set(receipt["owned_files"])
+        for relative in payload:
+            assert (install / relative).read_bytes() == (ROOT / relative).read_bytes()
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def catalog(install_result):
+        url = f"http://127.0.0.1:{dashboard_port}/api/spawn-names"
+        deadline = time.monotonic() + 15
+        last_error = None
+        while (remaining := deadline - time.monotonic()) > 0:
+            try:
+                with opener.open(url, timeout=min(5, remaining)) as response:
+                    return {provider["id"]: provider for provider in json.load(response)["providers"]}
+            except urllib.error.HTTPError:
+                raise  # An HTTP response is already a result for this assertion.
+            except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+                last_error = exc
+                time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+        log_path = install / "runtime/dashboard.log"
+        log = log_path.read_text(encoding="utf-8", errors="replace")[-4000:] if log_path.is_file() else "(no dashboard log)"
+        raise AssertionError(
+            f"No response from {url}\n"
+            f"{install_result.stdout}{install_result.stderr}\nDashboard log:\n{log}"
+        ) from last_error
+
+    try:
+        dry_run = invoke(INSTALLER, "--dry-run").stdout
+        assert "install Gemini integration files and record ownership" in dry_run
+        assert not install.exists()
+
+        result = invoke(INSTALLER)
+        assert "agy is not installed/on PATH" in result.stdout
+        assert_owned_payload()
+        assert {"claude", "codex", "gemini"} <= catalog(result).keys()
+        assert mcp_config.read_bytes() == original_config
+
+        cli_bin = home / ".local/bin"
+        cli_bin.mkdir(parents=True)
+        model = "gemini-4-hydrogen-high"
+        _write_command(cli_bin, "agy", f"#!/bin/sh\n[ \"$1\" = models ] || exit 2\nprintf '{model}\\tFixture model\\n'\n")
+        (install / "bin/agentstack-gemini-stream").write_text("# previous release\n")
+        result = invoke(INSTALLER)
+        assert_owned_payload()
+        gemini = catalog(result)["gemini"]
+        assert gemini["label"] == "Antigravity"
+        assert model in gemini["models"]
+        assert gemini["capabilities"]["standalone"] == (sys.platform == "darwin")
+        assert mcp_config.read_bytes() == original_config
+
+        invoke(install / "bin/agentstack-uninstall", "--install-dir", install)
+        assert all(not (install / relative).exists() for relative in payload)
+        assert mcp_config.read_bytes() == original_config
+        assert (cli_bin / "agy").is_file()
+    finally:
+        stop_dashboard(home, label_prefix="", launchd=False)
+        _stop_mail(home, state, mail_port)
 
 
 def test_reinstall_adopts_the_running_candidate_enroll_cli_and_wrapper_inspects(

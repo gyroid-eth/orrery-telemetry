@@ -19,7 +19,7 @@ First [install and verify the shared components](#standalone-installation-and-ve
 | Provider | After the shared install |
 | --- | --- |
 | Claude Code / Codex | Install and sign in to the chosen CLI, then [start the first agent](#3-start-the-first-agent-and-watch-it-on-the-dashboard) |
-| Gemini (Antigravity) | Install and sign in to Antigravity CLI, then launch from NEW AGENT. [Gemini setup guide](antigravity.en.md) |
+| Gemini (Antigravity) | The shared install includes the integration files. Install and sign in to Antigravity CLI, then launch from NEW AGENT. [Gemini setup guide](antigravity.en.md) |
 | DeepSeek / Local LLMs | Follow [API setup](native-setup.en.md) for dsh/Hermes, key storage and connection settings, then launch from NEW AGENT. Claude/Codex login is not required |
 
 Open DECK / NETWORK to observe configured agents. To connect them, continue with the [Mail check](#5-play-shiritori-as-an-end-to-end-check). Check the [supported API combinations and limitations (Japanese)](managed-catalog.md) too.
@@ -84,7 +84,7 @@ agentstack-selftest
 
 ### 3. Start the first agent and watch it on the dashboard
 
-**For Gemini**, follow the [Gemini setup guide](antigravity.en.md) to sign in to Antigravity CLI and set up Telemetry. Choose **Antigravity** and a model in NEW AGENT, then launch and check for its card in DECK.
+**For Gemini**, the `install.sh` command above installs the integration files. Follow the [Gemini setup guide](antigravity.en.md) to install and sign in to Antigravity CLI. Choose **Antigravity** and a model in NEW AGENT, then launch and check for its card in DECK.
 
 **For DeepSeek / Local LLMs**: Complete [API setup](native-setup.en.md), then choose the configured Model and Harness in NEW AGENT at `http://127.0.0.1:8770/` and launch. When a card with the scientist's name appears in DECK, try the guide's short conversation check and the [Mail check below](#5-play-shiritori-as-an-end-to-end-check).
 
