@@ -928,7 +928,7 @@ def _parse_process_tree(
     return (names, children) if names else None
 
 
-def _process_tree_snapshot() -> tuple[dict[int, str], dict[int, list[int]]] | None:
+def _process_tree_snapshot(*, fresh: bool = False) -> tuple[dict[int, str], dict[int, list[int]]] | None:
     """Return one cached host process tree, or None when it cannot be measured.
 
     Dashboard polling happens every five seconds. Keep this on the same 4.5s
@@ -938,7 +938,7 @@ def _process_tree_snapshot() -> tuple[dict[int, str], dict[int, list[int]]] | No
     with _PROCESS_TREE_LOCK:
         now = time.monotonic()
         cached_at = float(_PROCESS_TREE_CACHE.get("ts") or 0.0)
-        if cached_at and now - cached_at < _PROCESS_TREE_TTL:
+        if not fresh and cached_at and now - cached_at < _PROCESS_TREE_TTL:
             return _PROCESS_TREE_CACHE.get("tree")  # type: ignore[return-value]
 
         tree = None
@@ -2195,6 +2195,10 @@ def _card_antigravity_permissions(plan, screen_launch, project, identity, *, sel
 
 def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None, process_tree=None):
     name, program = row["name"], row.get("program")
+    channels = (program in {"claude", "claude-code"}
+                and _uses_claude_channels(session.get("pane_pid"), process_tree))
+    resident_reason = _permission_resident_reason(
+        name, persistent=row.get("lifecycle") == "persistent", channels=channels)
     if program == "antigravity" and registration and _valid(name):
         children = Path(RUNTIME_DIR) / "child-agents"
         state = _card_child_state(children, name, registration)
@@ -2218,6 +2222,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                     reason = ""
                 except (OSError, RuntimeError, ValueError, KeyError):
                     reason = "Antigravity's saved launch settings are unavailable"
+            reason = resident_reason or reason
             return {"cwd": agent_card.absolute_cwd(plan.get("cwd")),
                     "model_id": agent_card.native_model_id(status.get("model_id")) or plan.get("model"),
                     "effort": status.get("effort") or plan.get("effort"),
@@ -2378,19 +2383,14 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
 
     if (kind in {"claude", "codex", "antigravity"} and registration and transcript and not parent
             and not os.path.lexists(Path(RUNTIME_DIR) / "child-agents" / f"{name}.json")
-            and not os.path.lexists(Path(RUNTIME_DIR) / "child-resume-tombstones" / f"{registration['agent_id']}.json")
             and (kind != "codex" or provenance.get("launch_origin") == "standalone")
             and (kind != "antigravity" or sys.platform == "darwin")
             and (kind != "claude" or spec is None or spec.get("standalone") is True)):
-        try:
-            token_info = (Path(RUNTIME_DIR) / f"agent_token_{name}").lstat()
-            adoption = stat.S_ISREG(token_info.st_mode) and token_info.st_uid == os.getuid() and not token_info.st_mode & 0o077
-        except OSError:
-            adoption = False
-        if adoption:
-            parent_state, permission_reason = "top", ""
-    if row.get("lifecycle") == "persistent":
-        permission_reason = "Persistent agents cannot change permissions on resume"
+        parent_state = "top"
+        permission_reason = _standalone_permission_block(registration, name)
+        adoption = not permission_reason
+    if resident_reason:
+        permission_reason = resident_reason
     elif row.get("surface") == "codex-app" or program == "codex-app":
         permission_reason = "Codex App does not support changing permissions on resume"
     elif session.get("mail_disabled") == "1":
@@ -6726,6 +6726,7 @@ def _codex_history_binding(session: str, *, now: float | None = None) -> dict:
             "history_binding": "bound",
             "history_binding_reason": "",
             "history_binding_reason_code": "bound",
+            "history_session_id": claimed_session_id,
             "transcript_path": transcript,
         }
 
@@ -6753,6 +6754,7 @@ def _codex_history_binding(session: str, *, now: float | None = None) -> dict:
                 "history_binding": "bound",
                 "history_binding_reason": "",
                 "history_binding_reason_code": "bound",
+                "history_session_id": resume_session_id,
                 "transcript_path": fallback,
             }
 
@@ -8311,6 +8313,46 @@ _PERMISSION_UNSUPPORTED = "This harness cannot change permissions on resume"
 _PERMISSION_HISTORY_UNVERIFIED = "The agent's conversation or launch could not be verified"
 
 
+def _uses_claude_channels(pane_pid, process_tree):
+    pid = _agent_process_pid(
+        pane_pid, process_tree, "claude",
+        match=lambda pid, _name, _program: agent_process.claude_channels(agent_process.argv(pid)),
+    )
+    return pid is not None
+
+
+def _permission_resident_reason(session, *, persistent, channels=False):
+    # Site-managed residents can outlive the process used to identify their launcher.
+    if channels:
+        return "Changing permissions would disconnect Claude Channels"
+    if persistent:
+        return "Persistent agents cannot change permissions on resume"
+    if session in (name.strip() for name in _env_text("AGENTSTACK_PERMISSION_RESIDENT_AGENTS").split(",")):
+        return "This operator-managed resident cannot change permissions on resume"
+    return ""
+
+
+def _standalone_permission_block(registration, name):
+    runtime = Path(RUNTIME_DIR)
+    tombstone = runtime / "child-resume-tombstones" / f"{registration['agent_id']}.json"
+    if os.path.lexists(tombstone):
+        retired = _card_private_mapping(tombstone)
+        if (retired.get("agent_id") == registration["agent_id"] and retired.get("agent_name") == name
+                and retired.get("project_key") == registration["project_key"]):
+            if retired.get("reason") == "retention_expired":
+                return "Saved resume settings have expired"
+            if retired.get("reason") == "purged":
+                return "Saved resume settings were purged"
+        return "A prior managed launch requires its saved resume settings"
+    try:
+        token = (runtime / f"agent_token_{name}").lstat()
+    except OSError:
+        return "The standalone owner credential is unavailable"
+    if not stat.S_ISREG(token.st_mode) or token.st_uid != os.getuid() or token.st_mode & 0o077:
+        return "The standalone owner credential is unsafe"
+    return ""
+
+
 def _valid_permission_request(permission):
     """Validate one change independently of the harness that owns the session."""
     if not isinstance(permission, dict):
@@ -8339,9 +8381,11 @@ def _standalone_permission_state(registration, provider, sid, cwd, *, live=None,
     name = registration["agent_name"]
     module = _child_resume_module()
     state_path = module._paths(runtime, name)[0]
-    if os.path.lexists(state_path) or os.path.lexists(
-            runtime / "child-resume-tombstones" / f"{registration['agent_id']}.json"):
+    if os.path.lexists(state_path):
         raise ValueError("A prior managed launch requires its saved resume settings")
+    reason = _standalone_permission_block(registration, name)
+    if reason:
+        raise ValueError(reason)
     credential = module._read_private(runtime / f"agent_token_{name}", "standalone owner credential",
                                       module.MAX_TOKEN_BYTES).decode("utf-8").strip()
     if not credential:
@@ -8363,14 +8407,18 @@ def _permission_resume_material(session, sid, *, live=None):
         raise ValueError("A valid history_session_id is required")
     if session.startswith(("warm-", "pending-")):
         raise ValueError("Warmup and pending sessions cannot change permissions")
-    if session in _persistent_profiles():
-        raise ValueError("Persistent agents cannot change permissions on resume")
+    reason = _permission_resident_reason(session, persistent=session in _persistent_profiles())
+    if reason:
+        raise ValueError(reason)
     if live:
         if not (re.fullmatch(r"\$\d+", live.get("session_id", "")) and live.get("created", 0) > 0):
             raise ValueError(_PERMISSION_HISTORY_UNVERIFIED)
         if live.get("mail_disabled") == "1":
             raise ValueError("Conversation-only resume has no saved permissions")
     program = _agent_program(session)
+    if (live and live.get("pane_pid") and program in {"claude", "claude-code"}
+            and _uses_claude_channels(live["pane_pid"], _process_tree_snapshot(fresh=True))):
+        raise ValueError(_permission_resident_reason(session, persistent=False, channels=True))
     runtime = pathlib.Path(RUNTIME_DIR)
     directory = runtime / "child-agents"
     module = _child_resume_module()

@@ -412,6 +412,10 @@ receipt の時刻が現在の tmux `session_created` より古ければ `stale` 
 
 ダッシュボードから Claude の会話だけを再開した場合も、同じ会話の自己登録 receipt と今回の tmux 起動証跡が一致すれば、Reader は `bound` の transcript を読めます。
 
+#### Codex CLI
+
+Codex の `history_binding` が `bound` のときは、照合済みの `history_session_id` を返します。再開時に新しいフックを待っている間は、その再開に使った旧 receipt と会話ログを照合して同じ ID を返します。
+
 #### dsh（DeepSeek Harness）
 
 `history_receipt_ts` は callback が発行した UTC ISO 8601 時刻です。更新後に準備した子の起動証跡と、本人の `agent/created` callback が native persistence の `locate(header)` から得た場所・flush 後の device/inode を、現在の project の Mail ID と照合します。会話本体は子専用 `DSH_HOME/sessions/<workspace>/<session>/session.v4.jsonl.zstd`（現行版・既定の圧縮設定）です。`DSH_TUI_DATA_DIR` は TUI 設定用です。root ID の観測は locator / flush / receipt 保存に先行し、同一起動で別 root を観測すれば、その後の保存処理が失敗しても競合を保持します。元の root の callback が再び来ても、新しい正式な起動まで bound に戻しません。root 観測自体の書込み失敗でも取得済み lock を保持し、競合側の marker 保存が失敗した場合も所有側が公開・lock 解除を止めます。書込みの回復だけでは復活させず、新しい正式な起動 nonce を必要とします。receipt の時刻が現在の terminal の生成より古い場合は `stale` / `receipt_predates_session` とし、native ID・元時刻を残して path を null にします。terminal のない退役 archive は同じ条件で検証します。resume は起動証跡の nonce を更新し、新しい callback が届くまで古い記録を公開しません。退役後も同じ登録と証跡が残れば閲覧でき、登録の変更・証跡の削除・同一起動で複数の root session・ファイルの差し替え・symlink は未確認になります。古い起動で証跡が無い場合や保存先を変更した場合、cwd・時刻・最新履歴から補いません。raw path を使うこの契約は legacy 専用です。cockpit は dsh 用の Zstd / native event parser を別途必要とします。
@@ -723,6 +727,8 @@ API 54 では、生成された dsh と Hermes も親の有無にかかわらず
 macOS の管理起動による Antigravity CLI も、親の有無にかかわらず同じリクエストを利用できます。保存済み workspace と会話を照合し、選択した MCP 設定と個別の画面操作権限で起動して、新しい端末の会話 ID と入力待ちを確認します。委任されたセッションに適用できるのは、起動時に生成された workspace MCP 設定です。
 
 API 55 は、道具の選択を省略して生成された Codex CLI の保存済み MCP プロファイルを引き継ぎます。親なしで直接起動した Claude Code、Codex CLI、Antigravity CLI は、所有者と元の会話を確認できれば管理起動に移行できます。一覧の `permission_managed_launch:true` に対し、利用者が確認した後、事前確認と再開の両方で `permission` 内に `adopt:true` を付けます。元の所有者・作業ディレクトリ・会話を引き継ぎ、端末に単一の待機シェルだけが残った場合はその端末を置き換えます。dsh／Hermes の権限付き再開には、対応する起動記録と専用プロファイルが必要です。
+
+Claude Channels で起動したエージェントと、登録済みの常駐エージェントは権限変更の対象外です。運用者が管理するその他の常駐は、ダッシュボードの環境変数 `AGENTSTACK_PERMISSION_RESIDENT_AGENTS` に正確なエージェント名をカンマで区切って指定すると、停止中でも対象外になります。権限欄と書き込みリクエストの応答に理由を返します。
 
 生成済みで稼働中の Claude Code は、端末に明示選択の起動マーカーがないことを確認してから、権限付きの終了時に既定を記録します。
 

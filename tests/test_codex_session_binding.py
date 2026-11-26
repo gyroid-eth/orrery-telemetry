@@ -1216,6 +1216,7 @@ def test_receipt_program_must_match_the_current_registration(binding_env) -> Non
 
     assert state["history_binding"] == "unconfirmed"
     assert state["history_binding_reason_code"] == "receipt_missing"
+    assert "history_session_id" not in state
 
 
 def test_old_valid_index_is_not_success_for_a_new_launch(binding_env) -> None:
@@ -1234,6 +1235,7 @@ def test_unclaimed_resume_keeps_the_exact_previous_receipt_authoritative(
 ) -> None:
     first_path, first_id = _prepare_standalone(binding_env, now=100.0)
     assert _record(binding_env, first_path, first_id) == "bound"
+    assert server._codex_history_binding(AGENT, now=200.0)["history_session_id"] == SESSION_ID
     old_receipt = json.loads(
         (
             binding_env["runtime"] / "session_index" / f"{AGENT_ID}.json"
@@ -1251,6 +1253,7 @@ def test_unclaimed_resume_keeps_the_exact_previous_receipt_authoritative(
     assert launch["fallback_receipt_id"] == old_receipt["receipt_id"]
     state = server._codex_history_binding(AGENT, now=211.0)
     assert state["history_binding"] == "bound"
+    assert state["history_session_id"] == SESSION_ID
     assert state["transcript_path"] == str(binding_env["transcript"])
 
 

@@ -125,6 +125,18 @@ def matches_harness(values, kind):
     return False
 
 
+def claude_channels(values):
+    """Recognize a Channels launch from the Claude CLI's actual arguments."""
+    if not matches_harness(values, "claude"):
+        return False
+    for value in values[1:]:
+        if value == "--":
+            break
+        if value == "--channels" or value.startswith("--channels="):
+            return True
+    return False
+
+
 def _read_descendants(pid, process_tree, read):
     names, children = process_tree
     seen, pending = {pid}, list(children.get(pid, ()))

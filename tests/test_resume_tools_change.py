@@ -864,6 +864,52 @@ def test_verified_direct_permission_requires_adoption_and_keeps_the_same_identit
     assert not child_resume._tools_journal(state_path).exists()
 
 
+def test_expired_standalone_permissions_explain_the_block_on_read_and_write(stopped, monkeypatch):
+    runtime, record, provider, old = stopped
+    (runtime / "child-agents" / f"{NAME}.json").unlink()
+    record.unlink()
+    owner = {"agent_name": NAME, **{key: old[key] for key in ("agent_id", "project_key", "program")}}
+    tombstones = runtime / "child-resume-tombstones"
+    tombstones.mkdir()
+    child_resume._atomic_json(tombstones / "7.json", {**owner, "reason": "retention_expired"})
+    monkeypatch.setattr(server, f"_{provider}_registration", lambda _name: owner)
+    monkeypatch.setattr(server, "_card_codex_provenance", lambda *_: {"launch_origin": "standalone"})
+    monkeypatch.setattr(server, "_codex_resume_provenance", lambda *a, **kw: ({"launch_origin": "standalone"}, None))
+    row = {"name": NAME, "program": provider, "category": "gone", "running": False,
+           **server._claude_history_binding(NAME)}
+    row.update(server._agent_card_fields(row, {}, {}, owner, ()))
+    reason = "Saved resume settings have expired"
+    assert "permission_managed_launch" not in row
+    for control in server.agent_card.permission_controls(row).values():
+        assert not control["can_change"] and control["change_reason"] == reason
+    permission = {"history_session_id": SID, "computer_use": "off", "adopt": True}
+    assert server.do_jump(NAME, check_only=True, permission=permission)["error"] == reason
+
+
+def test_resident_permissions_block_cards_preflight_and_exit(stopped, monkeypatch):
+    _runtime, _record, provider, _old = stopped
+    live = {"session_id": "$7", "created": 17, "pane_pid": 19}
+    row = {"name": NAME, "program": provider, "category": "agent", "running": True}
+    tree = ({19: "zsh", 21: "claude"}, {19: [21]})
+    monkeypatch.setattr(server, "_process_tree_snapshot", lambda *, fresh: tree)
+    monkeypatch.setattr(server.agent_process, "argv", lambda pid: ["claude", "--channels", "fixture"] if pid == 21 else None)
+    monkeypatch.setattr(server, "_child_session_live", lambda *_args: True)
+    monkeypatch.setattr(server, "tmux_state", lambda: {NAME: live})
+    monkeypatch.setattr(server, "_do_exit", lambda *a, **kw: pytest.fail("Resident must stay running"))
+    if provider == "claude":
+        reason = "Changing permissions would disconnect Claude Channels"
+    else:
+        monkeypatch.setenv("AGENTSTACK_PERMISSION_RESIDENT_AGENTS", f"Other, {NAME}")
+        reason = "This operator-managed resident cannot change permissions on resume"
+
+    row.update(server._agent_card_fields(row, live, {}, None, (), process_tree=tree))
+    for control in server.agent_card.permission_controls(row).values():
+        assert not control["can_change"] and control["change_reason"] == reason
+    request = {"history_session_id": SID, "browser_mode": "off"}
+    assert server.do_jump(NAME, check_only=True, permission=request)["error"] == reason
+    assert server.do_exit(NAME, history_session_id=SID)["error"] == reason
+
+
 def test_permission_stopped_terminal_accepts_only_the_single_idle_shell(monkeypatch):
     sessions = {NAME: {"session_id": "$41", "created": 17, "server_pid": 19}}
     monkeypatch.setattr(server, "lookup_agent", lambda *a, **kw: {"category": "finished", "running": False})
