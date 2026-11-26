@@ -42,6 +42,7 @@ import unicodedata
 from dataclasses import dataclass, replace as _dataclass_replace
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 import urllib.parse
 import urllib.request
 from collections import deque
@@ -12636,6 +12637,14 @@ def _log_js_error(body: dict) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+class DashboardHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer's reverse DNS lookup runs between bind() and listen().
+        # The dashboard only needs its bound address to serve requests.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def main():
     if GLOBAL_MODE or FRESH_MODE:
         # Isolation-only global backend starts no legacy maintenance, providers
@@ -12643,7 +12652,7 @@ def main():
         if FRESH_MODE:
             legacy_http_admission.configured_origins(os.environ.get(legacy_http_admission.SETTING, ""))
             asyncio.run(_fresh_backend().roster())
-        srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
+        srv = DashboardHTTPServer((BIND_HOST, PORT), Handler)
         host = None
         previous_term = None
         try:
@@ -12675,7 +12684,7 @@ def main():
     # The picker's Claude default checks the claude a child runs; find it once
     # here, where starting a login shell is allowed (requests may not).
     threading.Thread(target=_bind_claude_child_cli_path, args=(HOOKS_DIR,), daemon=True).start()
-    srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
+    srv = DashboardHTTPServer((BIND_HOST, PORT), Handler)
     print(f"agent-dashboard listening on http://{BIND_HOST}:{PORT}/")
     try:
         srv.serve_forever()
