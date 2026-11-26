@@ -181,6 +181,15 @@ def screen_mode(spec: dict) -> str | None:
     return "off" if SCREEN_SERVER in tools.get("mcp", ()) else None
 
 
+def check_screen_relay(spec):
+    """Validate the interpreter for a managed relay without creating a binding."""
+    if screen_mode(spec) is not None:
+        try:
+            _screen_state()["_python"](os.environ.get("AGENTSTACK_MAIL_ENV"))
+        except (OSError, ValueError) as exc:
+            raise ToolsError("The Computer use relay Python is unavailable") from exc
+
+
 def screen_definition(spec, runtime, project, child, generation, **options):
     mode = screen_mode(spec)
     if not generation:
@@ -835,6 +844,7 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
     names = list(tools.get('mcp', ()))
     servers, approved, enabled = {}, {}, {}
     mode = tools.get('browser_mode')
+    managed_browser = None
     # The plain native MCP selection copies the transport without requesting
     # per-tool auto-approval, which these clients cannot express.
     plain_chrome = 'chrome-devtools' in names and 'chrome-devtools' not in tools.get('approve_all', ())
@@ -849,6 +859,7 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
         if name in names:
             raise ToolsError("Select one browser server")
         servers[name] = definition
+        managed_browser = name
     if spec['base'] == 'default' and codex_browser:
         servers[codex_browser[0]] = codex_browser[1]
     if not tools:
@@ -900,6 +911,10 @@ def native_plan(spec: dict, *, cwd: str, claude_json: str,
             enabled[name] = allow
     plan = dict(servers=servers, inherit=spec['base']!='mail-only', approved=approved,
                 enabled_tools=enabled)
+    if mode is not None:
+        plan["browser_mode"] = mode
+        if managed_browser is not None:
+            plan["managed_browser"] = managed_browser
     if screen_mode(spec) is not None:
         plan["managed_screen"] = list(_screen_state()["TOOLS"])
     return plan
@@ -1078,6 +1093,13 @@ def change_permission(tools: dict, permission: dict, definitions: dict | None) -
             if direct not in mcp:
                 mcp.append(direct)
             removed.discard(direct)
+    elif "browser_mode" in permission:
+        if tools.get("chrome_extension"):
+            raise ToolsError("Disable the separately configured Chrome extension before changing Browser use")
+        changed.pop("browser", None)
+        changed.pop("browser_off", None)
+        changed["browser_mode"] = permission["browser_mode"]
+        removed = {name for name in mcp if _codex_chrome_server(name, definition(name))}
     elif permission["browser_use"]:
         changed.pop("browser_off", None)
         changed.pop("browser_mode", None)

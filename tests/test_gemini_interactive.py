@@ -587,3 +587,109 @@ def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch, standalone):
     assert server._do_resume_gemini(NAME, open_terminal=False)["ok"]
     assert calls[0][1]["existing_agent_id"] == 52
     assert calls[1] == ("retired", {"retired": False})
+
+
+@pytest.mark.parametrize("standalone", [True, False], ids=["standalone", "delegated"])
+@pytest.mark.parametrize("change", [{"computer_use": "view"}, {"browser_mode": "temporary"}])
+def test_permission_restart_uses_bound_conversation_and_projects_only_selected_tools(
+        managed, monkeypatch, standalone, change):
+    runtime, cwd, state = managed
+    state_path = child_resume._paths(runtime, NAME)[0]
+    mcp_path = cwd / ".agents/mcp_config.json"
+    plan = state["gemini_launch"]
+    plan["tools"] = ["browser-mode:off"]
+    if standalone:
+        plan["standalone"] = True
+        state.pop("parent_agent")
+    else:
+        child_resume._atomic_json(mcp_path, {"mcpServers": {"orrery-mail": agy._mail_server()}})
+    original = mcp_path.read_bytes() if mcp_path.exists() else None
+    child_resume._atomic_json(state_path, state)
+    monkeypatch.setattr(Path, "home", lambda: runtime.parent)
+    monkeypatch.setattr(agy.child_tools, "_screen_state", lambda: vars(screen_state))
+    monkeypatch.setattr(screen_state, "_python", lambda _: sys.executable)
+    monkeypatch.setattr(agy.child_tools.shutil, "which", lambda _: "/fixture/npx")
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", PROJECT)
+    monkeypatch.setenv("AGENTSTACK_PORT", "53163")
+    monkeypatch.setenv("TMUX_PANE", "%4")
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(server, "PORT", 53163)
+    monkeypatch.setattr(server, "_child_resume_module", lambda: child_resume)
+    monkeypatch.setattr(server, "_child_tools_module", lambda: agy.child_tools)
+    monkeypatch.setattr(server, "_gemini_interactive_module", lambda _: vars(agy))
+    monkeypatch.setattr(server, "_agent_program", lambda _: "antigravity")
+    monkeypatch.setattr(server, "_resume_registration", lambda *args: REGISTRATION)
+    monkeypatch.setattr(server, "_persistent_profiles", lambda: {})
+    monkeypatch.setattr(server, "_mcp_tool_parameters", lambda _: {"existing_agent_id"})
+    monkeypatch.setattr(agy, "saved_conversation", lambda *args: SID)
+    live = {"session_id": "$8", "created": 1000, "server_pid": 123, "tmux_pid": 123}
+    monkeypatch.setattr(server, "tmux_state", lambda: {NAME: live})
+    monkeypatch.setattr(server, "_child_session_live", lambda *args: True)
+
+    def bound(runtime_dir, name, registration, session):
+        assert (Path(runtime_dir), name, registration) == (runtime, NAME, REGISTRATION)
+        assert session["session_id"] == live["session_id"]
+        return {"history_binding": "bound", "history_session_id": SID}
+
+    monkeypatch.setattr(server.agy_history, "binding", bound)
+    permission = {"history_session_id": SID, **change}
+    assert server.do_jump(NAME, permission=permission, check_only=True) == {"ok": True, "action": "validated"}
+    assert not child_resume.tools_record_path(runtime, NAME).exists()
+    assert (mcp_path.read_bytes() if mcp_path.exists() else None) == original
+    assert not server.do_jump(NAME, permission={**permission, "history_session_id": "foreign"},
+                              check_only=True)["ok"]
+    if not standalone:
+        child_resume._atomic_json(mcp_path, {"mcpServers": {"custom": {"command": "/fixture/custom"}}})
+        rejected = server.do_jump(NAME, permission=permission, check_only=True)
+        assert not rejected["ok"] and "workspace MCP configuration changed" in rejected["error"]
+        child_resume._atomic_bytes(mcp_path, original)
+
+    child_resume.mark_retired(runtime, NAME, retention_days=30)
+    monkeypatch.setattr(server, "_child_session_live", lambda *args: False)
+    monkeypatch.setattr(server, "_resume_capability", lambda *args, **kwargs: "ready")
+    monkeypatch.setattr(server, "_mcp_call", lambda method, payload: {"ok": True,
+        "data": {"id": payload["existing_agent_id"], "name": NAME, "program": "antigravity"}})
+    monkeypatch.setattr(server, "_set_claude_mail_retired", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agy.subprocess, "check_output",
+                        lambda argv, **_: IDENTITY if argv[0] == "tmux" else "history-fixture")
+    observed = []
+
+    def run(argv, *, env, **kwargs):
+        if argv[0] == "/bin/bash":
+            return SimpleNamespace(returncode=0)
+        assert argv[-2:] == ["--conversation", SID]
+        actual_path = (Path(argv[argv.index("--add-dir") + 1]) / ".agents/mcp_config.json"
+                       if standalone else mcp_path)
+        servers = json.loads(actual_path.read_bytes())["mcpServers"]
+        assert "orrery-mail" in servers
+        assert env.get("PARENT_AGENT") == (None if standalone else "FixtureParent")
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        grants = [item for item in settings["permissions"]["allow"] if item.startswith("mcp(orrery-screen/")]
+        if "computer_use" in change:
+            assert set(servers) == {"orrery-mail", "orrery-screen"}
+            assert grants == [f"mcp(orrery-screen/{tool})" for tool in screen_state.VIEW_TOOLS]
+        else:
+            assert set(servers) == {"orrery-mail", "chrome-devtools"}
+            assert "--isolated" in servers["chrome-devtools"]["args"]
+            assert grants == []
+        observed.append(argv[-1])
+        return SimpleNamespace(returncode=0)
+
+    def launch(argv, **kwargs):
+        assert kwargs["include_identity"] and f"--conversation {SID}" in argv[-1]
+        assert any(arg.startswith("AGENTSTACK_TOOLS_CHANGE_GENERATION=") for arg in argv)
+        assert agy.run(runtime, NAME, conversation=SID) == 0
+        child_resume._atomic_json(runtime / "child-agents" / f"{NAME}.agy-status.json",
+                                  {"tmux": IDENTITY, "activity": "wait"})
+        return {"ok": True, "adapter": "detached", "tmux_identity": IDENTITY.split("|", 1)[1]}
+
+    fixture_subprocess = SimpleNamespace(run=run, check_output=agy.subprocess.check_output)
+    monkeypatch.setattr(agy, "subprocess", fixture_subprocess)
+    monkeypatch.setattr(server, "_launch_claude_resume_tmux", launch)
+    monkeypatch.setattr(server, "_tmux", lambda *args: IDENTITY)
+    result = server.do_jump(NAME, open_terminal=False, permission=permission)
+    assert result["ok"] and result["tools_changed"], result
+    assert observed == [SID]
+    assert (mcp_path.read_bytes() if mcp_path.exists() else None) == original
+    assert not child_resume._tools_journal(state_path).exists()

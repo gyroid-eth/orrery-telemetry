@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -166,6 +167,12 @@ def _tool_selection(plan):
     return child_tools.normalize(tools=child_tools.parse_cli(plan.get("tools", [])))
 
 
+def permission_selection(runtime, state, conversation):
+    plan = state["gemini_launch"]
+    return child_resume.permission_selection(runtime, state, conversation,
+        workspace=plan["cwd"], workspace_file_id=plan["workspace_file_id"])
+
+
 def validate_standalone_config(plan):
     child_tools.agy_validate_selection(_tool_selection(plan), cwd=plan["cwd"])
 
@@ -188,13 +195,69 @@ def _delegated_mcp_path(cwd):
     return path
 
 
+def _mail_server():
+    return {"command": str(_home() / "bin" / "agentstack-gemini-mcp"), "args": []}
+
+
+def _workspace_mcp_snapshot(runtime, state, cwd):
+    """Only replace the configuration written by this managed workspace."""
+    path = _guard_config(cwd).with_name("mcp_config.json")
+    raw = child_resume._read_private(path, "Antigravity workspace MCP", child_resume.MAX_STATE_BYTES)
+    plan = state["gemini_launch"]
+    hashes = plan.get("workspace_mcp_hashes")
+    changed = "Antigravity's workspace MCP configuration changed outside its launcher"
+    if hashes is not None:
+        if isinstance(hashes, list) and hashlib.sha256(raw).hexdigest() in hashes:
+            return path, raw
+        raise ValueError(changed)
+    # Earlier launches recorded the relay generation and used a fixed Mail
+    # / Chrome configuration. Accept only those managed server definitions.
+    legacy = json.loads(raw)
+    servers = legacy.get("mcpServers") if isinstance(legacy, dict) else None
+    if isinstance(servers, dict) and set(legacy) == {"mcpServers"}:
+        expected = {"orrery-mail": _mail_server()}
+        mode = _tool_selection(plan)["tools"].get("browser_mode")
+        if mode in ("temporary", "personal"):
+            name, definition = child_tools._browser_mcp(mode)
+            expected[name] = definition
+        screen = servers.get(child_tools.SCREEN_SERVER)
+        generation = plan.get("screen_generation")
+        if generation and isinstance(screen, dict):
+            policy = child_tools._screen_state()
+            target = dict(project=state["project_key"], runtime=policy["launch_runtime"](runtime),
+                          agent=state["agent_name"], generation=generation)
+            binding = policy["binding_path"](policy["Store"](runtime), target)
+            if (screen.get("args") == ["-I", "-m", "agentstack_mail.screen_mcp"]
+                    and screen.get("enabledTools") == list(policy["TOOLS"])
+                    and isinstance(screen.get("env"), dict)
+                    and screen["env"].get("AGENTSTACK_SCREEN_BINDING_FILE") == str(binding)
+                    and set(screen) == {"args", "enabledTools", "command", "env"}
+                    and isinstance(screen.get("command"), str) and Path(screen["command"]).is_absolute()):
+                expected[child_tools.SCREEN_SERVER] = screen
+        if servers == expected:
+            return path, raw
+    raise ValueError(changed)
+
+
+def validate_permission_selection(runtime, state, spec):
+    plan = state["gemini_launch"]
+    cwd = validate_plan(plan)
+    child_tools.agy_validate_selection(spec, cwd=cwd if plan.get("standalone") else None)
+    mode = spec["tools"].get("browser_mode")
+    if mode in ("temporary", "personal"):
+        child_tools._browser_mcp(mode)
+    if not plan.get("standalone"):
+        _workspace_mcp_snapshot(runtime, state, cwd)
+    child_tools.check_screen_relay(spec)
+
+
 def _managed_mail_approval_rules(home, cwd, config_dir):
     """Grant by tool name only when that name resolves to the child Mail wrapper."""
     configs = [("global", home / ".gemini" / "config" / "mcp_config.json"),
                ("workspace", Path(cwd) / ".agents" / "mcp_config.json")]
     if config_dir is not None:
         configs.append(("launch", config_dir / ".agents" / "mcp_config.json"))
-    managed = {"command": str(_home() / "bin" / "agentstack-gemini-mcp"), "args": []}
+    managed = _mail_server()
     found = False
     for scope, path in configs:
         try:
@@ -242,10 +305,10 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
     if config_dir is not None:
         settings["trustedWorkspaces"].append(str(config_dir))
         extra = ["--add-dir", str(config_dir)]
-    effort = plan.get("effort")
+    model = ["--model", plan["model"]] if plan.get("model") else []
+    effort = ["--effort", plan["effort"]] if plan.get("effort") else []
     return [plan["binary"], "--mode", "auto", "--sandbox", *extra, "--settings",
-            json.dumps(settings, separators=(",", ":")), "--model", plan["model"],
-            *(["--effort", effort] if effort else []),
+            json.dumps(settings, separators=(",", ":")), *model, *effort,
             *(["--conversation", conversation] if conversation else ["-i", prompt])]
 
 
@@ -254,6 +317,7 @@ def run(runtime, name, task_file=None, conversation=None):
     state = child_resume._load_state(path)
     project = os.environ["AGENTSTACK_PROJECT_KEY"]
     child_resume._validate_identity(state, agent_name=name, project_key=project, program=PROGRAM)
+    child_resume._check_tools_change(state, path)
     canonical = child_resume._read_private(token, "canonical credential", child_resume.MAX_TOKEN_BYTES)
     if canonical.decode().strip() != state["registration_token"]:
         raise ValueError("Antigravity child identity changed")
@@ -294,20 +358,24 @@ def run(runtime, name, task_file=None, conversation=None):
     os.chdir(cwd)
     status_path = _status_path(runtime, name)
     status_path.unlink(missing_ok=True)
-    config_dir = None
+    config_dir = workspace_mcp = written_mcp = None
     try:
         standalone = plan.get("standalone") is True
-        # Delegated resumes defer to the existing workspace and user MCP policy.
+        changed = permission_selection(runtime, state, conversation) if conversation else None
         screen_mode = "off"
-        if standalone or conversation is None:
-            mail_command = str(_home() / "bin" / "agentstack-gemini-mcp")
-            mcp_path = None if standalone else _delegated_mcp_path(cwd)
+        if standalone or conversation is None or changed:
+            spec = changed["selection"] if changed else _tool_selection(plan)
+            if changed and not standalone:
+                workspace_mcp = _workspace_mcp_snapshot(runtime, state, cwd)
+            mcp_path = (workspace_mcp[0] if workspace_mcp else
+                        None if standalone else _delegated_mcp_path(cwd))
+            change_screen = changed and changed.get("computer_use_changed") and child_resume.tools_change_generation()
             generation = uuid.uuid4().hex
             mcp, screen_mode = child_tools.agy_launch_config(
-                mail_command, _tool_selection(plan), runtime=str(runtime), project=project, child=name,
+                _mail_server()["command"], spec, runtime=str(runtime), project=project, child=name,
                 mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
                 generation=generation, cwd=cwd if standalone else None,
-                resume_from=(plan.get("screen_generation") or "") if conversation else None,
+                resume_from=(plan.get("screen_generation") or "") if conversation and not change_screen else None,
             )
             if standalone:
                 directory = path.with_suffix(".agy-config")
@@ -315,10 +383,12 @@ def run(runtime, name, task_file=None, conversation=None):
                 config_dir = directory
             else:
                 child_resume._atomic_json(mcp_path, mcp)
-            if screen_mode is not None or conversation:
-                plan = {**plan, "screen_generation": generation if screen_mode is not None else None,
-                        "screen_launch_mode": screen_mode or "off", "screen_tmux": identity}
-        if screen_mode is not None or conversation:
+                written_mcp = mcp_path.read_bytes()
+                snapshots = [workspace_mcp[1], written_mcp] if workspace_mcp else [written_mcp]
+                plan = {**plan, "workspace_mcp_hashes": [hashlib.sha256(raw).hexdigest() for raw in snapshots]}
+            plan = {**plan, "screen_generation": generation if screen_mode is not None else None,
+                    "screen_launch_mode": screen_mode or "off", "screen_tmux": identity}
+        if screen_mode is not None or conversation or written_mcp:
             child_resume.prepare_active_state(runtime, name, project_key=project, program=PROGRAM,
                                               gemini_launch=plan)
         env["AGENTSTACK_AGY_HISTORY_LAUNCH"] = subprocess.check_output(
@@ -328,11 +398,17 @@ def run(runtime, name, task_file=None, conversation=None):
                                       config_dir=config_dir, screen_mode=screen_mode),
                               env=env).returncode
     finally:
-        if config_dir is not None:
-            shutil.rmtree(config_dir, ignore_errors=True)
-        status_path.unlink(missing_ok=True)
-        subprocess.run(["/bin/bash", str(_home() / "hooks" / "cleanup-child-agent.sh"), name],
-                       env=env, check=False)
+        try:
+            if workspace_mcp and written_mcp is not None:
+                mcp_path, previous = workspace_mcp
+                if not mcp_path.is_symlink() and mcp_path.is_file() and mcp_path.read_bytes() == written_mcp:
+                    child_resume._atomic_bytes(mcp_path, previous)
+        finally:
+            if config_dir is not None:
+                shutil.rmtree(config_dir, ignore_errors=True)
+            status_path.unlink(missing_ok=True)
+            subprocess.run(["/bin/bash", str(_home() / "hooks" / "cleanup-child-agent.sh"), name],
+                           env=env, check=False)
 
 
 def _status_context(window):

@@ -206,7 +206,8 @@ def test_aborted_cli_kills_inherited_stdout_child_after_parent_exit(monkeypatch,
               "with open(os.environ['AGY_TEST_OWNED'], 'w') as f:\n"
               "    f.write(f'{os.getpid()} {os.getpgrp()} {child.pid}')")
     monkeypatch.setenv("AGY_TEST_OWNED", str(marker))
-    monkeypatch.setattr(gemini, "_CLI_CATALOG_TIMEOUT", 0.35 if failure == "timeout" else 1.5)
+    # Allow the wrapper to record its child before timing out the inherited stdout pipe.
+    monkeypatch.setattr(gemini, "_CLI_CATALOG_TIMEOUT", 1.5)
 
     def active(pid):
         result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],

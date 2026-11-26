@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":53}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":55}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -418,6 +418,10 @@ receipt の時刻が現在の tmux `session_created` より古ければ `stale` 
 
 ダッシュボードから Claude の会話だけを再開した場合も、同じ会話の自己登録 receipt と今回の tmux 起動証跡が一致すれば、Reader は `bound` の transcript を読めます。
 
+#### Codex CLI
+
+Codex の `history_binding` が `bound` のときは、照合済みの `history_session_id` を返します。再開時に新しいフックを待っている間は、その再開に使った旧 receipt と会話ログを照合して同じ ID を返します。
+
 #### dsh（DeepSeek Harness）
 
 `history_receipt_ts` は callback が発行した UTC ISO 8601 時刻です。更新後に準備した子の起動証跡と、本人の `agent/created` callback が native persistence の `locate(header)` から得た場所・flush 後の device/inode を、現在の project の Mail ID と照合します。会話本体は子専用 `DSH_HOME/sessions/<workspace>/<session>/session.v4.jsonl.zstd`（現行版・既定の圧縮設定）です。`DSH_TUI_DATA_DIR` は TUI 設定用です。root ID の観測は locator / flush / receipt 保存に先行し、同一起動で別 root を観測すれば、その後の保存処理が失敗しても競合を保持します。元の root の callback が再び来ても、新しい正式な起動まで bound に戻しません。root 観測自体の書込み失敗でも取得済み lock を保持し、競合側の marker 保存が失敗した場合も所有側が公開・lock 解除を止めます。書込みの回復だけでは復活させず、新しい正式な起動 nonce を必要とします。receipt の時刻が現在の terminal の生成より古い場合は `stale` / `receipt_predates_session` とし、native ID・元時刻を残して path を null にします。terminal のない退役 archive は同じ条件で検証します。resume は起動証跡の nonce を更新し、新しい callback が届くまで古い記録を公開しません。退役後も同じ登録と証跡が残れば閲覧でき、登録の変更・証跡の削除・同一起動で複数の root session・ファイルの差し替え・symlink は未確認になります。古い起動で証跡が無い場合や保存先を変更した場合、cwd・時刻・最新履歴から補いません。raw path を使うこの契約は legacy 専用です。cockpit は dsh 用の Zstd / native event parser を別途必要とします。
@@ -718,12 +722,26 @@ API 43 から、停止した Claude の `resume_mode: conversation_only` でも�
 {"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
 ```
 
-API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。直接起動、常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。直接起動などで設定の記録がない場合の理由は `No saved launch settings; use Resume` です。
+API 54 の legacy roster は、権限を表示する行に `permission_controls` を返します。`computer_use` と `browser_use` のそれぞれに、現在の `value`（不明時は null）、根拠の `source` と `observation_reason`、操作可否の `can_change` と `change_reason`、反映方法の `action`（`restart`・`resume`・null）があります。サーバーは操作時に対象と起動設定を改めて検証します。
 
-稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と、`computer_use`（`off`、`view`、`control`）または `browser_use`（真偽値）の片方だけを指定します。この確認に成功すると `{"ok":true,"action":"validated"}` を返し、設定と Mail 登録はそのままです。
+`browser_use.mode` は `off`、`temporary`（Temporary Chrome）、`personal`（My Chrome）、または方式が不明な場合の null です。`browser_use.options` は起動時に選べる方式を返し、操作できない行では空になります。
+
+API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。
+
+API 54 では、生成された dsh と Hermes も親の有無にかかわらず同じリクエストを利用できます。プロバイダーが記録した本人の会話を照合し、専用プロファイルを引き継いで、再起動後に会話 ID と端末の入力待ちを確認します。
+
+macOS の管理起動による Antigravity CLI も、親の有無にかかわらず同じリクエストを利用できます。保存済み workspace と会話を照合し、選択した MCP 設定と個別の画面操作権限で起動して、新しい端末の会話 ID と入力待ちを確認します。委任されたセッションに適用できるのは、起動時に生成された workspace MCP 設定です。
+
+API 55 は、道具の選択を省略して生成された Codex CLI の保存済み MCP プロファイルを引き継ぎます。親なしで直接起動した Claude Code、Codex CLI、Antigravity CLI は、所有者と元の会話を確認できれば管理起動に移行できます。一覧の `permission_managed_launch:true` に対し、利用者が確認した後、事前確認と再開の両方で `permission` 内に `adopt:true` を付けます。元の所有者・作業ディレクトリ・会話を引き継ぎ、端末に単一の待機シェルだけが残った場合はその端末を置き換えます。dsh／Hermes の権限付き再開には、対応する起動記録と専用プロファイルが必要です。
+
+Claude Channels で起動したエージェントと、登録済みの常駐エージェントは権限変更の対象外です。運用者が管理するその他の常駐は、ダッシュボードの環境変数 `AGENTSTACK_PERMISSION_RESIDENT_AGENTS` に正確なエージェント名をカンマで区切って指定すると、停止中でも対象外になります。権限欄と書き込みリクエストの応答に理由を返します。
+
+生成済みで稼働中の Claude Code は、端末に明示選択の起動マーカーがないことを確認してから、権限付きの終了時に既定を記録します。
+
+稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と変更欄を一つ指定します。`computer_use` は `off`、`view`、`control`、API 54 の `browser_mode` は `off`、`temporary`、`personal` です。従来のクライアントは引き続き真偽値の `browser_use` を指定できます。この確認に成功すると、起動設定や Mail 登録を変更せずに `{"ok":true,"action":"validated"}` を返します。
 
 ```json
-{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_use":true}}
+{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_mode":"temporary"}}
 ```
 
 次に `POST /api/exit` へ同じ `session` と `history_session_id` を渡します。両方のリクエストで、対象の会話、Mail 登録、保存された起動経路を照合します。Cockpit は停止を待ち、同じ `/api/jump` を `check_only` を省いて送ります。サーバーは会話・登録を再検証して、対象の tmux セッションと稼働中の lease がないことを確認します。`open:false` は端末ウィンドウを開かずに再開します。
@@ -840,7 +858,7 @@ request:
 | `task` | yes | task 本文。UI は最大4000文字 |
 | `name` | no | 指定時は hyphen を除去し、`available` 必須 |
 | `dir` | no | 存在する working directory。既定は source repo |
-| `provider` | no | `claude`（既定）、`codex`、`gemini`（追加 provider の Antigravity）、または catalog が返した native 接続 ID（旧 `deepseek` / `strata`、追加例 `strata-epyc`）。catalog の ID をそのまま送る |
+| `provider` | no | `claude`（既定）、`codex`、`gemini`（Antigravity）、または catalog が返した native 接続 ID（旧 `deepseek` / `strata`、追加例 `strata-epyc`）。catalog の ID をそのまま送る |
 | `harness` | DeepSeek / Local 必須 | `dsh` または `hermes`。Claude は `claude-code`（従来 alias `claudecode`）、Codex は `codex-cli`（従来 alias `codex`）を省略可 |
 | `helper_model` | no | 省略または `same` は主モデルを継承。DeepSeek / Local は選択した model × harness の `helper_models` にある同 backend の正式 ID も指定可。未提供・別 backend の ID は拒否 |
 | `web_search` | no | native の dsh / Hermes だけ。`exa` または `searxng` で今回の検索先を上書きする。URL・資格の参照は managed spawn manifest の共通 `web_search` を使う。省略時は共通設定、共通設定も無ければ従来どおり。既存 API 世代の任意 field |
@@ -866,7 +884,7 @@ API 44 から、Codex child の `/api/spawn` と道具を変更する `/api/jump
 
 `base` か `tools` で選択した child は、選択どおりにできなければ（Mail の proxy が無い、server を写せないなど）起動しません。形の誤りはここで 400、child の起動ディレクトリで決まる誤りは launcher の失敗として返ります。API 53 では macOS の Antigravity が管理 relay の `tools.screen` と、catalog が示す `tools.browser_mode` を受け付けます。[Antigravity の起動条件](antigravity.md#dashboard-new-agent)を参照してください。
 
-未知の request field はモデル解決や起動の前に HTTP 400 で拒否します。任意の Gemini provider を導入した環境では `resources` も受け付けます（[Gemini の委任](delegation.md)を参照）。他の provider では拒否します。
+未知の request field はモデル解決や起動の前に HTTP 400 で拒否します。`resources` を受け付けるのは Gemini の委任起動です。[Gemini の委任](delegation.md)を参照してください。
 
 起動失敗後は launcher と同じ共通 cleanup を呼びます。cleanup が確認に失敗した場合、応答は `ok: false`・`cleanup_state: "unknown"`・`cleanup_incomplete: true` となり、API は子の state・owner credential・handoff を消しません。cleanup が正常に完了した場合も、保持期間内の再開に必要な state と資格を API が追加で削除することはありません。
 

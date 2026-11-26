@@ -79,7 +79,7 @@ def _unchanged(snapshots):
     return True
 
 
-def history_binding(runtime_dir, install_home, name, registration, *, session_created=None):
+def history_binding(runtime_dir, install_home, name, registration, *, session_created=None, tools_generation=None):
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', name):
         return unbound('invalid_binding')
     if not isinstance(registration, dict):
@@ -96,7 +96,8 @@ def history_binding(runtime_dir, install_home, name, registration, *, session_cr
                 or any(registration.get(k) != v or state.get(k) != v for k, v in identity.items())
                 or state.get('harness') != 'hermes'):
             return unbound('invalid_binding')
-        if (state.get('resume_in_progress_at') or state.get('tools_change_generation')
+        if (state.get('resume_in_progress_at')
+                or (state.get('tools_change_generation') and state['tools_change_generation'] != tools_generation)
                 or os.path.lexists(children / ('.' + name + '.registration-pending.json'))
                 or os.path.lexists(children / ('.' + name + '.legacy-migration.json'))):
             return unbound('launch_transition')
