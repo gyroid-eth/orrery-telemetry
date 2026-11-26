@@ -294,7 +294,7 @@ def test_codex_reads_the_terminal_scroll_marker_without_stripping_typed_arrows()
     assert not typed.scrolled and '↑' in typed.draft
 
     rows[0] = rows[0].replace('↑', '\x1b[2m↑')
-    rows[2] += ' \x1b[2m↓'
+    rows[2] += '\x1b[2m↓'
     partial = submission['frame'](metadata, rows, '%1')
     assert partial.scrolled and partial.draft_continues
     assert not submission['same_notice'](partial, text)
@@ -329,6 +329,33 @@ def test_codex_resumes_captured_notice_with_one_space_before_scroll_arrow():
     assert submission['ready'](view, notice)
     assert submission['same_notice'](view, notice)
     assert not submission['same_notice'](view, notice.replace('capture.png', 'other.png'))
+
+
+def test_codex_resumes_captured_notice_with_scroll_arrow_attached_to_text():
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    # Captured Codex layout with the body replaced. The arrow directly follows
+    # the last visible character of the first row.
+    rows = [
+        '\x1b[1m›\x1b[0m\x1b[48;2;30;30;30m 操作を撮り直す. Body (complete; no inbox fetch\x1b[2m↑',
+        '  needed): 試験では、画面の切り',
+        '  替えと確認を順に撮ってください。 ⏎ - 動画はスマホでも読めるようにします。',
+        '  ⏎ - 完了したら結果を報告してください。',
+        '',
+        '  GPT-6.2-Sol high · Context 80% left',
+        '                                    ⚠ 2 warnings · f2 to view',
+    ]
+    metadata = '/tmp/fixture.sock\t100\t%1\t200\t3\t0\t40\t1\tzsh'
+    notice = (
+        'ORRERY Mail notification: message from FixtureSender [normal]: '
+        '操作を撮り直す. Body (complete; no inbox fetch needed): 試験では、画面の切り'
+        '替えと確認を順に撮ってください。 ⏎ - 動画はスマホでも読めるようにします。 '
+        '⏎ - 完了したら結果を報告してください。'
+    )
+    view = submission['frame'](metadata, rows, '%1')
+    assert view.scrolled and '↑' not in view.draft
+    assert submission['ready'](view, notice)
+    assert submission['same_notice'](view, notice)
+    assert not submission['same_notice'](view, notice.replace('スマホ', 'デスクトップ'))
 
 
 @pytest.mark.parametrize('editor', ['agy', 'claude', 'codex', 'dsh', 'hermes'])
