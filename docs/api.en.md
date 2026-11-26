@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":55}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":56}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -406,6 +406,7 @@ Claude / Claude Code, dsh and Hermes return only verified own conversations thro
 | `history_binding_reason_code` | Stable machine-readable code, including provider-specific conditions |
 | `history_session_id` | Provider-native session ID (required for Hermes database reads), or null if unverified |
 | `history_receipt_ts` | Original receipt timestamp (ISO 8601 string), or null if unavailable; preserve offset-free values as written |
+| `history_workspace` | API 56. A bound Antigravity row includes the absolute workspace from the verified launch receipt. The Reader uses it to resolve relative paths for image steps. |
 
 Cwd, timestamps and latest-session scans never establish ownership. Binding does not prove process liveness. Existing Codex fields and states and the protected fresh `/api/history` path remain unchanged.
 
@@ -489,10 +490,10 @@ Response:
 ```json
 {"ok":true,"agent":{"name":"AgentName","program":"claude-code","category":"agent","running":true,"created":1793775600,
  "history_binding":"bound","transcript_path":"/abs/path.jsonl","history_binding_reason":"","history_binding_reason_code":"bound",
- "history_session_id":"…","history_receipt_ts":"…"}}
+ "history_session_id":"…","history_receipt_ts":"…","history_workspace":null}}
 ```
 
-- Only these 11 fields are returned; their meaning is as in [conversation history binding](#conversation-history-binding-legacy-api-35)
+- The response contains the fields shown above. API 56 adds `history_workspace`, which is `null` when no verified Antigravity workspace is available. See [conversation history binding](#conversation-history-binding-legacy-api-35) for field definitions
 - A name that is not a live-roster row (retired, gone, warm-up, unregistered) or is malformed returns 404 `{"ok":false,"error":"agent_unavailable"}`
 - A read-only GET with the same Host/Origin handling as `/api/agents` (loopback). Fresh and global answer 404 `agent_unavailable` without a legacy judgement (in global, a failed operator admission before any route answers 503). The protected fresh history path is unchanged
 - Use it only when `api` is 36 or later; on any other failure (another 404, a 5xx, a transport failure) or with an older dashboard, confirm with `/api/agents?scope=live` as before

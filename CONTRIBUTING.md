@@ -27,10 +27,11 @@ note that `tests/conftest.py` strips `AGENTSTACK_*` from the environment for
 the whole session, so a shell started by an installed stack runs the suite
 the way CI does.
 
-GitHub runs only a few macOS jobs at a time, and one full run takes about an
-hour there. So CI runs the macOS suite on Python 3.12 for a PR, and on 3.11,
-3.12 and 3.14 after each merge to master. A failure that only 3.11 or 3.14
-shows appears on master; fix it in a new PR.
+Pull requests that change only documentation run the documentation, release-note
+and publication checks on Ubuntu. Markdown used as runtime instructions goes
+through the full workflow. Other pull requests run the macOS suite on Python
+3.12, and pushes to master run it on 3.11, 3.12 and 3.14. A failure specific to
+3.11 or 3.14 appears on master.
 
 Caveats learned by measurement:
 

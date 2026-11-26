@@ -2,7 +2,7 @@
 
 [English](getting-started.en.md) · [目的別索引](README.md) · [README](../README.md)
 
-普段の入口は [ORRERY cockpit のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)です。1行で cockpit と Telemetry を入れ、Your first flight → help map → Full tour を画面内で試します。ここは Telemetry だけを入れる人向けの手順と、背景・用語の参照です。
+普段の入口は [ORRERY cockpit のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#1-行で入れる更新する)です。1行で cockpit と Telemetry を入れ、Your first flight → help map → Full tour を画面内で試します。ここは Telemetry だけを入れる人向けの手順と、背景・用語の参照です。
 
 ## 誰のためのものか
 
@@ -54,7 +54,7 @@ API 起動は legacy mode です。macOS の Keychain と Linux の明示した 
 
 ## Telemetry 単独の導入と確認
 
-Python 3.11 以上と `git`・`tmux`・`uv` が必要です。[OS ごとの前提](https://github.com/gyroid-eth/orrery/blob/master/README.md#始める前に)で `curl`・`lsof`・`xz` も確認します。macOS では `brew install uv` で uv を追加できます。公式スクリプトで入れた場合は `export PATH="$HOME/.local/bin:$PATH"` を同じシェルで実行して、`uv --version` で確認します。
+Python 3.11 以上と `git`・`tmux`・`uv` が必要です。[OS ごとの前提](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#動作環境)で `curl`・`lsof`・`xz` も確認します。macOS では `brew install uv` で uv を追加できます。公式スクリプトで入れた場合は `export PATH="$HOME/.local/bin:$PATH"` を同じシェルで実行して、`uv --version` で確認します。
 
 **Windows の人へ**。WSL2 の Ubuntu を開きます。以下のコマンドは Ubuntu で実行し、dashboard は Windows のブラウザで開きます。[WSL2 の準備](install.md#windowswsl2で入れる)のあと、使う系統に合わせて Claude／Codex の CLI へのログイン、[Gemini の導入](antigravity.md)、または DeepSeek／Local の [API の初期設定](native-setup.md)へ進みます。
 

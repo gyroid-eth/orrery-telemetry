@@ -178,7 +178,7 @@ SOFTWARE.
     return {groups,consumed,pending};
   }
 
-  function mount({host,mutate=fn=>fn(),onFocusLost=()=>{},loadDetail}){
+  function mount({host,mutate=fn=>fn(),onFocusLost=()=>{},loadDetail,previewImage}){
     const cards=new Map();let model={groups:[],consumed:new Set()},current={},visible=false,timer=0,serial=0,workingModel=false;
     const make=(tag,cls,value)=>{const node=root.document.createElement(tag);node.className=cls;if(value!==undefined)node.textContent=value;return node;};
     function changed(node,value){if(node.textContent!==value)node.textContent=value;}
@@ -236,11 +236,13 @@ SOFTWARE.
       panel.id='conversation-step-detail-'+(++serial)+'-'+Math.random().toString(36).slice(2);
       toggle.setAttribute('aria-controls',panel.id);toggle.setAttribute('aria-expanded','false');
       toggle.append(added,removed,disclosure);
-      top.append(tool,toggle,outcome,clock,exit);copy.append(top,detail,panel);node.append(copy);
+      const imageButton=make('button','conversation-step-image');imageButton.type='button';imageButton.hidden=true;
+      top.append(tool,toggle,outcome,clock,exit);copy.append(top,detail,panel);node.append(copy,imageButton);
       const record={node,top,tool,outcome,clock,exit,detail,toggle,panel,added,removed,disclosure,
-        kind:'',ref:null,request:null,
+        kind:'',ref:null,imageButton,image:null,request:null,
         icon:null,status:'',fingerprint:''};
       toggle.addEventListener('click',()=>mutate(()=>toggleDetail(record),toggle));
+      imageButton.addEventListener('click',()=>{if(record.image)previewImage(record.image);});
       return record;
     }
     function closeDetail(record){
@@ -366,6 +368,12 @@ SOFTWARE.
       changed(record.clock,Number.isFinite(start)&&Number.isFinite(end)&&end>=start?duration((end-start)/1000):'');
       record.detailText=text(step.detail);
       changed(record.detail,record.detailText);record.detail.hidden=!step.detail;
+      const image=step.image;
+      record.image=previewImage&&step.phase==='complete'&&['done','observed'].includes(status)
+        &&image?.kind==='image'&&key(image.ref)&&text(image.label)?image:null;
+      record.imageButton.hidden=!record.image;
+      record.node.classList.toggle('has-step-image',Boolean(record.image));
+      if(record.image)record.imageButton.setAttribute('aria-label','Preview '+image.label);
       detailControl(record,step);
     }
     function title(card,value,working){
@@ -1413,7 +1421,7 @@ function mount(n){
  retryButton=make('button','conversation-retry','Retry');retryButton.type='button';retryButton.hidden=true;
  retryButton.onclick=()=>{retryButton.hidden=true;setStatus('Loading the record…');return poll();};
  list.append(olderButton);root.append(status,retryButton,list);
- stepView=window.OrreryMobileSteps.mount({host:list,loadDetail:loadStepDetail,
+ stepView=window.OrreryMobileSteps.mount({host:list,loadDetail:loadStepDetail,previewImage:openPreview,
   mutate:(fn,button)=>{const top=button.getBoundingClientRect().top;fn();list.scrollTop+=button.getBoundingClientRect().top-top;following=atBottom();savedTop=list.scrollTop;},
   onFocusLost:()=>list.focus?.({preventScroll:true})});
  if(typeof ResizeObserver==='function'){mailResize=new ResizeObserver(()=>{if(list&&list.clientWidth!==mailWidth){mailWidth=list.clientWidth;layoutMailRoutes();}});mailResize.observe(list);}

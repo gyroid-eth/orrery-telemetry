@@ -223,6 +223,13 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
         result['variant'] = 'update'
     if step and (kind == 'tool' or kind == 'mail' and role == 'assistant' and step['phase'] in ('call', 'complete')):
         result['step'] = step
+        if (issue is not None and raw['kind'] == 'tool' and role == 'assistant'
+                and step['phase'] in ('call', 'complete') and step.get('status') != 'failed'):
+            image = raw['step'].get('image')
+            if isinstance(image, dict) and image.get('kind') == 'image':
+                label, ref = _label(image.get('label')), image.get('id')
+                if label and '/' not in label and '\\' not in label and isinstance(ref, str) and COCKPIT_REF.fullmatch(ref):
+                    step['image'] = {'kind': 'image', 'label': label, 'ref': issue(ref)}
         if issue_diff and role == 'assistant' and (raw['kind'], step['phase']) in {
             ('tool_result', 'result'), ('tool', 'complete'),
         }:
