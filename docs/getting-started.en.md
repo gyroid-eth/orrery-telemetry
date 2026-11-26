@@ -2,7 +2,7 @@
 
 [日本語](getting-started.md) · [Documentation index](README.en.md) · [README](../README.en.md)
 
-For the usual entry point, use the [ORRERY cockpit quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start). One line installs cockpit and Telemetry together; try Your first flight → help map → Full tour on screen. This page is the standalone Telemetry procedure and a reference for background and terms.
+For the usual entry point, use the [ORRERY cockpit quick start](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md#install-or-update-with-one-line). One line installs cockpit and Telemetry together; try Your first flight → help map → Full tour on screen. This page is the standalone Telemetry procedure and a reference for background and terms.
 
 ## Who this is for
 
@@ -54,7 +54,7 @@ These six terms help you read this standalone procedure and the reference guides
 
 ## Standalone installation and verification
 
-Use Python 3.11 or later, `git`, `tmux`, and `uv`. Check the [OS prerequisites](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#before-you-start) for `curl`, `lsof`, and `xz`. On macOS you can add uv with `brew install uv`. If you use uv's official installer, run `export PATH="$HOME/.local/bin:$PATH"` in the same shell and verify with `uv --version`.
+Use Python 3.11 or later, `git`, `tmux`, and `uv`. Check the [OS prerequisites](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md#requirements) for `curl`, `lsof`, and `xz`. On macOS you can add uv with `brew install uv`. If you use uv's official installer, run `export PATH="$HOME/.local/bin:$PATH"` in the same shell and verify with `uv --version`.
 
 **On Windows**, run the commands below in WSL2 Ubuntu and open the dashboard in your Windows browser. After [preparing WSL2](install.en.md#installing-on-windows-wsl2), follow the setup for your provider. Sign in to the CLI for Claude or Codex, follow the [Gemini setup guide](antigravity.en.md), or complete [API setup](native-setup.en.md) for DeepSeek or Local.
 
