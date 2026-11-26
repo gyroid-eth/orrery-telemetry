@@ -15,6 +15,11 @@ import threading
 import time
 from urllib.parse import quote
 
+try:
+    from .question_screen import valid_choice
+except ImportError:
+    from question_screen import valid_choice
+
 CONTRACT='orrery-mobile-pane-v1'
 MAX_JSON_BYTES=16384
 MAX_IMAGE_BYTES=10*1024*1024
@@ -49,8 +54,7 @@ def request_fields(operation,payload,*,fresh=None):
     if operation=='prepare' and 'question' in payload:
         question=payload['question']
         if (not isinstance(question,dict) or set(question)!={'token','choice'}
-                or not _matches(QUESTION_TOKEN,question['token']) or type(question['choice']) is not int
-                or not 0<=question['choice']<=9):return False
+                or not _matches(QUESTION_TOKEN,question['token']) or not valid_choice(question['choice'])):return False
         fields.add('question')
     if set(payload)!=fields:return False
     if operation=='file' and payload['file'] is not None:
@@ -62,16 +66,20 @@ def request_fields(operation,payload,*,fresh=None):
 
 
 def _checked_question(value):
-    if (not isinstance(value,dict) or set(value)!={'token','kind','harness','mode','body','choices','draft_empty'}
-            or value['kind']!='question' or value['harness']!='hermes' or value['mode'] not in ('choice','other')
-            or not _matches(QUESTION_TOKEN,value['token']) or type(value['draft_empty']) is not bool
+    required={'token','kind','harness','mode','body','choices','draft_empty'}
+    if (not isinstance(value,dict) or not required <= set(value) <= required|{'multiple'}
+            or value['kind']!='question' or value['harness'] not in ('hermes','codex','dsh','agy','claude') or value['mode'] not in ('choice','other')
+            or not _matches(QUESTION_TOKEN,value['token']) or type(value['draft_empty']) is not bool or type(value.get('multiple',False)) is not bool
             or not isinstance(value['body'],str) or not 1<=len(value['body'])<=1000
             or not isinstance(value['choices'],list) or len(value['choices'])>9):
         raise InputUnavailable('input_response_invalid')
     for index,option in enumerate(value['choices'],1):
-        if (not isinstance(option,dict) or set(option) not in ({'id','label'},{'id','label','other'})
+        if (not isinstance(option,dict) or not {'id','label'} <= set(option) <= {'id','label','other','description','checked'}
                 or type(option['id']) is not int or option['id']!=index
                 or not isinstance(option['label'],str) or not 1<=len(option['label'])<=400
+                or 'description' in option and (not isinstance(option['description'],str) or len(option['description'])>1000)
+                or value.get('multiple',False)!=('checked' in option)
+                or 'checked' in option and type(option['checked']) is not bool
                 or 'other' in option and (option['other'] is not True or index!=len(value['choices']))):
             raise InputUnavailable('input_response_invalid')
 

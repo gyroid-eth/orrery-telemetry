@@ -341,3 +341,16 @@ async def _isolated_mail_scenario(tmp_path, monkeypatch):
     finally:
         db.reset_database_state()
         config.clear_settings_cache()
+
+def test_codex_question_uses_fixed_controls_for_notification():
+    from dashboard.terminal_state import activity
+
+    screen="""  Question 1/1 (1 unanswered)
+  A private question
+  › 1. First              This is a private option.
+    2. None of the above  Optionally, add details in notes (tab)
+  tab to add notes | enter to submit answer | esc to interrupt"""
+    assert activity(screen)=="question"
+    evidence=human_wait.observe(screen,"codex","question")
+    assert evidence.lines==("tab to add notes | enter to submit answer | esc to interrupt",)
+    assert human_wait.observe(screen+"\n› New task", "codex", "wait")=="clear"

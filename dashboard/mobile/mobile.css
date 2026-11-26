@@ -1040,3 +1040,4 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .reader-question p{margin:.35rem 0 .6rem;overflow-wrap:anywhere}
 .reader-question-choices{display:grid;gap:.35rem}
 .reader-question-choice{text-align:start;white-space:normal}
+.reader-question-choice[aria-pressed=true]{color:var(--amber);border-color:var(--amber)}

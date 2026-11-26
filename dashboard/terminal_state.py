@@ -1,6 +1,11 @@
 """Pure terminal evidence shared by observation and explicit compact admission."""
 import re
 
+try:
+    from .question_screen import parse_agy_question, parse_codex_question
+except ImportError:
+    from question_screen import parse_agy_question, parse_codex_question
+
 _CTX_RE = re.compile(r"ctx:\s*(\d+)%\s*used")
 _CTX_CODEX_LEFT_RE = re.compile(r"Context\s+(\d+)%\s*left", re.IGNORECASE)
 _CTX_CODEX_USED_RE = re.compile(r"Context\s+(\d+)%\s*used", re.IGNORECASE)
@@ -173,6 +178,9 @@ def context_used(text):
 
 def current_modal_activity(current):
     """Classify a modal that ends the current screen, excluding any composer."""
+    screen = '\n'.join(current[-96:])
+    if parse_codex_question(screen) or parse_agy_question(screen):
+        return 'question'
     # Claude wraps the permission modal before tmux captures it. Its heading
     # can be above the 16-line window, while the menu must end the capture.
     permission = " ".join(" ".join(current[-32:]).split()).replace("❯ ", "")
@@ -258,6 +266,8 @@ def current_modal_activity(current):
 
 
 def activity(text):
+    if parse_codex_question(text) or parse_agy_question(text):
+        return 'question'
     # Compact admission refuses even incomplete recent controls. Keep that
     # conservative evidence separate from asserting a current displayed modal.
     if _WORK_RE.search(text) or _WORK_CODEX_RE.search(text) or _WORK_CLAUDE_TASK_RE.search('\n'.join(text.splitlines()[-25:])):

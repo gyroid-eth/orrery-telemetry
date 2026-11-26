@@ -1082,10 +1082,14 @@ const inputValid=()=>preview?.question
  ?preview.question.draft_empty&&otherChoice(preview.question)!==undefined&&!attachments.length&&!replyReference&&validText(text)
  :validText(draftText())&&validText(inputText())&&referenceCurrent(replyReference);
 
+let questionSelection={token:null,choices:new Set()};
 function refreshQuestion(){
  const host=q('.reader-question');if(!host)return;
  const question=previewOK?preview?.question:null;
- const signature=JSON.stringify([question?.token,phase]);
+ if(question?.token!==questionSelection.token){
+  questionSelection={token:question?.token,choices:new Set((question?.choices||[]).filter(item=>item.checked).map(item=>item.id))};
+ }
+ const signature=JSON.stringify([question?.token,phase,[...questionSelection.choices]]);
  if(host.dataset.question===signature)return;
  host.dataset.question=signature;host.replaceChildren();host.hidden=!question||phase!=='editing';
  if(host.hidden)return;
@@ -1096,9 +1100,25 @@ function refreshQuestion(){
  }
  const choices=make('div','reader-question-choices');
  for(const choice of question.choices){
-  const button=action(choice.label,'reader-question-choice',()=>choice.other
-   ?q('#terminal-text')?.focus({preventScroll:true}):reviewInput(choice.id));
+  const select=()=>{
+   if(question.multiple){
+    const checked=questionSelection.choices.delete(choice.id);
+    if(!checked)questionSelection.choices.add(choice.id);
+    refreshQuestion();
+    if(!choice.other||checked)q('.reader-question-choice[data-choice="'+choice.id+'"]')?.focus({preventScroll:true});
+    else q('#terminal-text')?.focus({preventScroll:true});
+   }else if(choice.other)q('#terminal-text')?.focus({preventScroll:true});
+   else reviewInput(choice.id);
+  };
+  const button=action(choice.label,'reader-question-choice',select);button.dataset.choice=choice.id;
+  if(choice.description)button.title=choice.description;
+  if(question.multiple)button.setAttribute('aria-pressed',String(questionSelection.choices.has(choice.id)));
   choices.append(button);
+ }
+ if(question.multiple){
+  const confirm=action('Review choices','reader-question-submit',()=>reviewInput([...questionSelection.choices].sort((a,b)=>a-b)));
+  confirm.disabled=!questionSelection.choices.size||questionSelection.choices.has(otherChoice(question));
+  choices.append(confirm);
  }
  host.append(choices);
 }
@@ -1231,13 +1251,17 @@ async function uploadAttachments(files,source){
 }
 async function reviewInput(option){
  const question=preview?.question;
- const selected=question?.choices.find(item=>item.id===option&&!item.other);
- if(phase!=='editing'||attachmentController||!target||!choice||!previewOK||(!selected&&!inputValid()))return;
+ const requested=Array.isArray(option)?option:[option];
+ const selected=question?.choices.filter(item=>requested.includes(item.id)&&!item.other)||[];
+ if(phase!=='editing'||attachmentController||!target||!choice||!previewOK||(!selected.length&&!inputValid()))return;
  if(question&&(attachments.length||replyReference))return;
- const answer=question?{token:question.token,choice:selected?.id??otherChoice(question)}:null;
+ const other=otherChoice(question);
+ let chosen=selected.length?(question.multiple?selected.map(item=>item.id):selected[0].id):other;
+ if(question?.multiple&&other!==0&&!selected.length)chosen=[...new Set([...questionSelection.choices,other])].sort((a,b)=>a-b);
+ const answer=question?{token:question.token,choice:chosen}:null;
  composer=false;
  clearTimeout(pollTimer);previewController?.abort();previewController=null;
- const g=generation,t=target,draft=question?(selected?.label??text):inputText(),reference=replyReference,controller=new AbortController();operationController=controller;phase='preparing';render();
+ const g=generation,t=target,draft=question?(selected.length?selected.map(item=>item.label).join(' · '):text):inputText(),reference=replyReference,controller=new AbortController();operationController=controller;phase='preparing';render();
  let reconnect=false;
  try{
   const data=await request('prepare',{epoch:capability.epoch,choice:t.choice,revision:t.revision,text:draft,
