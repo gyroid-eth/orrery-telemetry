@@ -294,11 +294,41 @@ def test_codex_reads_the_terminal_scroll_marker_without_stripping_typed_arrows()
     assert not typed.scrolled and '↑' in typed.draft
 
     rows[0] = rows[0].replace('↑', '\x1b[2m↑')
-    rows[2] += '      \x1b[2m↓'
+    rows[2] += ' \x1b[2m↓'
     partial = submission['frame'](metadata, rows, '%1')
     assert partial.scrolled and partial.draft_continues
     assert not submission['same_notice'](partial, text)
     assert not submission['ready'](partial, text)
+
+
+def test_codex_resumes_captured_notice_with_one_space_before_scroll_arrow():
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    # Captured Codex layout with the mail body and local path replaced.
+    # The right-edge scroll marker has only one space after the inline newline.
+    rows = [
+        '\x1b[1m›\x1b[0m\x1b[48;2;30;30;30m 選択モードに切り替えると、一覧に確認用の項目が並びます。 ⏎ \x1b[2m↑',
+        '  - 一覧の表示を確認する ⏎ - 画像：/Users/',
+        '  fixture/project/.orrery-',
+        '  input-images/capture.png ⏎  ⏎ 左側の一覧は、mail-',
+        '  arrival の修正の後でも表示されます。 ⏎ - 結果を報告する',
+        '  ⏎ - 変更はローカルに保存する',
+        '',
+        '  GPT-6.2-Sol high · Context 80% left',
+    ]
+    metadata = '/tmp/fixture.sock\t100\t%1\t200\t5\t0\t16\t1\tzsh'
+    notice = (
+        'ORRERY Mail notification: message from FixtureSender [normal]: 一覧の確認。 '
+        'Body (complete; no inbox fetch needed): '
+        '選択モードに切り替えると、一覧に確認用の項目が並びます。 ⏎ '
+        '- 一覧の表示を確認する ⏎ - 画像：/Users/fixture/project/.orrery-input-images/capture.png '
+        '⏎  ⏎ 左側の一覧は、mail-arrival の修正の後でも表示されます。 ⏎ - 結果を報告する '
+        '⏎ - 変更はローカルに保存する'
+    )
+    view = submission['frame'](metadata, rows, '%1')
+    assert view.editor == 'codex' and view.scrolled and not view.draft_continues
+    assert submission['ready'](view, notice)
+    assert submission['same_notice'](view, notice)
+    assert not submission['same_notice'](view, notice.replace('capture.png', 'other.png'))
 
 
 @pytest.mark.parametrize('editor', ['agy', 'claude', 'codex', 'dsh', 'hermes'])
