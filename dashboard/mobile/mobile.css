@@ -1013,6 +1013,10 @@ html[data-color-theme=light] .mobile .conversation-preview-save{border-color:var
 .conversation-step-icon.failed+.conversation-step-copy .conversation-step-outcome{color:var(--amber)}
 .conversation-step-duration{margin-left:auto;color:var(--ink-dim);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .conversation-step-target{color:var(--ink-dim);font-size:11px;line-height:1.35;overflow-wrap:anywhere;white-space:pre-wrap}
+.conversation-step.has-step-image{position:relative;min-height:40px;box-sizing:border-box}
+.has-step-image .conversation-step-target{text-decoration:underline;text-underline-offset:2px}
+.conversation-step-image:not([hidden]){position:absolute;inset:0;padding:0;border:0;border-radius:4px;background:transparent;cursor:pointer}
+.conversation-step-image:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 .conversation-step{
   --diff-add:color-mix(in srgb,var(--ln-delegate) 65%,var(--ink));
   --diff-remove:color-mix(in srgb,var(--alert) 75%,var(--ink));

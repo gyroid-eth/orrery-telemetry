@@ -158,7 +158,8 @@ def binding(runtime, name, registration, session=None):
             return unbound("launch_mismatch")
         return dict(history_binding="bound", history_binding_reason="",
                     history_binding_reason_code="bound", transcript_path=str(transcript),
-                    history_session_id=sid, history_receipt_ts=timestamp)
+                    history_session_id=sid, history_receipt_ts=timestamp,
+                    history_workspace=launch["workspace"])
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         return unbound("receipt_unavailable")
 

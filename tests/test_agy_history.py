@@ -35,6 +35,7 @@ def test_exact_receipt_binds_id_path_and_registration(launch):
     bound = agy_history.binding(runtime, NAME, REGISTRATION, generation)
     assert (bound["history_binding"], bound["history_session_id"], bound["transcript_path"]) == (
         "bound", SID, str(transcript))
+    assert bound["history_workspace"] == payload["workspacePaths"][0]
     agy_history.record(runtime, NAME, nonce, payload)
     assert agy_history.binding(runtime, NAME, REGISTRATION, generation) == bound
     assert agy_history.binding(runtime, NAME, dict(REGISTRATION, agent_id=6), generation)["transcript_path"] is None
