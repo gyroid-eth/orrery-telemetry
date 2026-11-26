@@ -272,7 +272,9 @@ def generate(document):
     # mail-only selection cannot promise to suppress unknown plugin clients.
     inherited = home / 'cordis.patch.yml'
     selection = document.get('mcp_selection', {})
-    if (selection.get('inherit') is False or selection.get('managed_screen')) and inherited.exists():
+    strict = (selection.get('inherit') is False or selection.get('managed_screen')
+              or selection.get('browser_mode') is not None)
+    if strict and inherited.exists():
         if inherited.read_text().strip() not in ('', '[]'):
             raise ValueError('inherited_mcp_conflict')
     config_dir = state / 'dsh-config'

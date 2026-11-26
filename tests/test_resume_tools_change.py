@@ -142,6 +142,33 @@ def test_permission_computer_view_preserves_browser_settings(stopped, monkeypatc
                                "screen": {"server": "orrery-screen", "access": "read"}}
 
 
+@pytest.mark.parametrize("mode", ["off", "temporary", "personal"])
+def test_permission_resumes_same_conversation_with_explicit_browser_mode(stopped, monkeypatch, mode):
+    _, record, provider, _ = stopped
+    monkeypatch.setattr(child_tools.shutil, "which", lambda name: "/usr/bin/npx" if name == "npx" else None)
+    screen = {"server": "orrery-screen", "access": "read"}
+    old = {"screen": screen, "mcp": ["reader"], "browser_mode": "off" if mode == "personal" else "temporary"}
+    save_selection(record, provider, "mail-only", old)
+    calls = []
+
+    def resume(name, **options):
+        calls.append((name, options))
+        return {"ok": True, "action": "resumed"}
+
+    monkeypatch.setattr(server, "do_resume", resume)
+    permission = {"history_session_id": SID, "browser_mode": mode}
+    result = server.do_jump(NAME, permission=permission, open_terminal=False)
+    assert result["ok"] and result["tools_changed"], result
+    assert result["base"] == "mail-only"
+    assert result["tools"] == {**old, "browser_mode": mode}
+    assert calls == [(NAME, {"open_terminal": False, "expected_history_session_id": SID})]
+    saved = json.loads(record.read_text())
+    assert saved["tools"] == result["tools"]
+    if provider == "claude":
+        assert saved["claude_chrome"] is (mode == "personal")
+        assert saved.get("browser_disabled", False) is (mode == "off")
+
+
 def test_claude_explicit_browser_off_survives_a_computer_change(stopped, monkeypatch):
     _, record, provider, _ = stopped
     if provider != "claude":
@@ -209,11 +236,18 @@ def test_permission_rejects_whole_selection_and_invalid_patch_values(monkeypatch
     browser = {"history_session_id": SID, "browser_use": True}
     for options in ({"permission": browser, "base": "mail-only"}, {"permission": browser, "tools": {}},
                     {"permission": {**browser, "computer_use": "off"}},
+                    {"permission": {**browser, "browser_mode": "temporary"}},
+                    {"permission": {"history_session_id": "../fixture", "browser_mode": "personal"}},
+                    {"permission": {"history_session_id": SID, "browser_mode": "on"}},
                     {"permission": {"history_session_id": SID, "browser_use": 1}},
                     {"permission": {"computer_use": "view"}},
                     {"check_only": True},
                     {"permission": browser, "check_only": "true"}):
         assert not server.do_jump(NAME, **options)["ok"]
+
+
+def test_permission_request_accepts_bound_native_history_id():
+    assert server._valid_permission_request({"history_session_id": "native-session.2", "browser_mode": "temporary"})
 
 
 @pytest.mark.parametrize("selection", [{}, {"mcp": ["reader"]}])
@@ -692,7 +726,8 @@ def test_permission_resume_preserves_generated_standalone(stopped, monkeypatch):
     assert result["ok"] and result["tools_changed"], result
 
 
-def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch):
+@pytest.mark.parametrize("change", [{"browser_use": True}, {"browser_mode": "temporary"}])
+def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch, change):
     runtime, record, provider, state = stopped
     mark_generated_standalone(stopped)
     configure_fixture_browser(provider)
@@ -719,7 +754,7 @@ def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch):
     monkeypatch.setattr(server, "_tmux_run", lambda args, **kw:
         calls.append(args) or subprocess.CompletedProcess(args, 0, provider, ""))
     monkeypatch.setattr(server.time, "sleep", lambda seconds: None)
-    permission = {"history_session_id": SID, "browser_use": True}
+    permission = {"history_session_id": SID, **change}
     before = (state_file.read_bytes(), record.read_bytes())
     assert server.do_jump(NAME, check_only=True, permission=permission) == {"ok": True, "action": "validated"}
     assert (state_file.read_bytes(), record.read_bytes()) == before
@@ -743,7 +778,7 @@ def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch):
     assert calls == []
 
 
-def test_permission_resumes_only_with_saved_selection(stopped, monkeypatch):
+def test_permission_uses_generated_codex_default_and_requires_claude_launch_record(stopped, monkeypatch):
     runtime, record, provider, state = stopped
     mark_generated_standalone(stopped)
     row = {"name": NAME, "program": provider, "history_binding": "bound", "history_session_id": SID,
@@ -751,10 +786,143 @@ def test_permission_resumes_only_with_saved_selection(stopped, monkeypatch):
     assert server._agent_card_fields(row, {}, {}, state, ())["permission_resume_supported"] is True
     record.unlink()
     fields = server._agent_card_fields(row, {}, {}, state, ())
+    permission = {"history_session_id": SID, "browser_mode": "off"}
+    if provider == "codex":
+        assert fields["permission_resume_supported"] is True
+        assert fields["computer_use"] is None
+        monkeypatch.setattr(server, "do_resume", lambda *a, **kw: {"ok": True, "action": "resumed"})
+        result = server.do_jump(NAME, permission=permission, open_terminal=False)
+        assert result["tools_changed"] and result["base"] == "mail-only"
+        assert child_tools.read_codex_record(str(record)) == {
+            "base": "mail-only", "tools": {"browser_mode": "off"}}
+        return
     assert fields["permission_resume_supported"] is False
     assert fields["permission_resume_reason"] == "No saved launch settings; use Resume"
     permission = {"history_session_id": SID, "browser_use": True}
     assert server.do_jump(NAME, check_only=True, permission=permission)["error"] == fields["permission_resume_reason"]
+
+
+def test_guarded_exit_records_a_verified_live_claude_default(stopped, monkeypatch):
+    runtime, record, provider, state = stopped
+    if provider != "claude":
+        pytest.skip("Claude has a launch marker separate from its tools record")
+    record.unlink()
+    live = {"session_id": "$41", "created": 17}
+    monkeypatch.setattr(server, "_tmux_session_env", lambda *a: "")
+    monkeypatch.setattr(server, "tmux_state", lambda: {NAME: live})
+    monkeypatch.setattr(server, "_do_exit", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(server, "_tmux_run", lambda args, **kwargs: subprocess.CompletedProcess(
+        args, 0, stdout="AGENTSTACK_CLAUDE_LAUNCH_ID=missing-record", stderr=""))
+    assert not server.do_exit(NAME, history_session_id=SID)["ok"]
+    assert not record.exists()
+    monkeypatch.setattr(server, "_tmux_run", lambda args, **kwargs: subprocess.CompletedProcess(
+        args, 0, stdout="-AGENTSTACK_CLAUDE_LAUNCH_ID", stderr=""))
+    assert server.do_exit(NAME, history_session_id=SID)["ok"]
+    saved = claude_chrome_policy.session_record(str(record.parent), NAME, SID)
+    assert saved["base"] == "default" and saved["tools"] == {}
+    assert saved["launch_id"].startswith(server._CLAUDE_DEFAULT_LAUNCH)
+
+
+@pytest.mark.parametrize("resume_ok", [True, False])
+def test_verified_direct_permission_requires_adoption_and_keeps_the_same_identity(stopped, monkeypatch, resume_ok):
+    runtime, record, provider, old = stopped
+    state_path = runtime / "child-agents" / f"{NAME}.json"
+    state_path.unlink()
+    record.unlink()
+    owner = {"agent_name": NAME, **{key: old[key] for key in ("agent_id", "project_key", "program")}}
+    if provider == "codex":
+        monkeypatch.setattr(server, "_codex_registration", lambda _: owner)
+        monkeypatch.setattr(server, "_codex_resume_provenance",
+                            lambda *a, **kw: ({"launch_origin": "standalone"}, None))
+    else:
+        monkeypatch.setattr(server, "_claude_registration", lambda _: owner)
+    cookie = runtime / f"agent_token_{NAME}"
+    original = cookie.read_bytes()
+    permission = {"history_session_id": SID, "browser_mode": "off"}
+    assert "Confirm the transition" in server.do_jump(NAME, permission=permission)["error"]
+    assert not state_path.exists() and not record.exists()
+    calls = []
+
+    def launch(name, *, open_terminal, expected_history_session_id):
+        calls.append((name, open_terminal, expected_history_session_id))
+        adopted = child_resume.inspect_retained(runtime, name, agent_id=7,
+            project_key=owner["project_key"], program=provider)
+        assert adopted["permission_adoption"] == SID
+        assert adopted["registration_token"].encode() == original
+        if provider == "codex":
+            assert adopted["codex_standalone"] and adopted["codex_mcp_profile"] == "inherit"
+        else:
+            assert json.loads(record.read_bytes())["standalone"] is True
+        return {"ok": resume_ok, "action": "resumed" if resume_ok else "failed"}
+
+    monkeypatch.setattr(server, "do_resume", launch)
+    result = server.do_jump(NAME, permission={**permission, "adopt": True}, open_terminal=False)
+    assert result["ok"] is resume_ok
+    assert calls == [(NAME, False, SID)]
+    assert record.exists() is resume_ok and state_path.exists() is resume_ok
+    assert cookie.read_bytes() == original
+    assert not child_resume._tools_journal(state_path).exists()
+
+
+def test_expired_standalone_permissions_explain_the_block_on_read_and_write(stopped, monkeypatch):
+    runtime, record, provider, old = stopped
+    (runtime / "child-agents" / f"{NAME}.json").unlink()
+    record.unlink()
+    owner = {"agent_name": NAME, **{key: old[key] for key in ("agent_id", "project_key", "program")}}
+    tombstones = runtime / "child-resume-tombstones"
+    tombstones.mkdir()
+    child_resume._atomic_json(tombstones / "7.json", {**owner, "reason": "retention_expired"})
+    monkeypatch.setattr(server, f"_{provider}_registration", lambda _name: owner)
+    monkeypatch.setattr(server, "_card_codex_provenance", lambda *_: {"launch_origin": "standalone"})
+    monkeypatch.setattr(server, "_codex_resume_provenance", lambda *a, **kw: ({"launch_origin": "standalone"}, None))
+    row = {"name": NAME, "program": provider, "category": "gone", "running": False,
+           **server._claude_history_binding(NAME)}
+    row.update(server._agent_card_fields(row, {}, {}, owner, ()))
+    reason = "Saved resume settings have expired"
+    assert "permission_managed_launch" not in row
+    for control in server.agent_card.permission_controls(row).values():
+        assert not control["can_change"] and control["change_reason"] == reason
+    permission = {"history_session_id": SID, "computer_use": "off", "adopt": True}
+    assert server.do_jump(NAME, check_only=True, permission=permission)["error"] == reason
+
+
+def test_resident_permissions_block_cards_preflight_and_exit(stopped, monkeypatch):
+    _runtime, _record, provider, _old = stopped
+    live = {"session_id": "$7", "created": 17, "pane_pid": 19}
+    row = {"name": NAME, "program": provider, "category": "agent", "running": True}
+    tree = ({19: "zsh", 21: "claude"}, {19: [21]})
+    monkeypatch.setattr(server, "_process_tree_snapshot", lambda *, fresh: tree)
+    monkeypatch.setattr(server.agent_process, "argv", lambda pid: ["claude", "--channels", "fixture"] if pid == 21 else None)
+    monkeypatch.setattr(server, "_child_session_live", lambda *_args: True)
+    monkeypatch.setattr(server, "tmux_state", lambda: {NAME: live})
+    monkeypatch.setattr(server, "_do_exit", lambda *a, **kw: pytest.fail("Resident must stay running"))
+    if provider == "claude":
+        reason = "Changing permissions would disconnect Claude Channels"
+    else:
+        monkeypatch.setenv("AGENTSTACK_PERMISSION_RESIDENT_AGENTS", f"Other, {NAME}")
+        reason = "This operator-managed resident cannot change permissions on resume"
+
+    row.update(server._agent_card_fields(row, live, {}, None, (), process_tree=tree))
+    for control in server.agent_card.permission_controls(row).values():
+        assert not control["can_change"] and control["change_reason"] == reason
+    request = {"history_session_id": SID, "browser_mode": "off"}
+    assert server.do_jump(NAME, check_only=True, permission=request)["error"] == reason
+    assert server.do_exit(NAME, history_session_id=SID)["error"] == reason
+
+
+def test_permission_stopped_terminal_accepts_only_the_single_idle_shell(monkeypatch):
+    sessions = {NAME: {"session_id": "$41", "created": 17, "server_pid": 19}}
+    monkeypatch.setattr(server, "lookup_agent", lambda *a, **kw: {"category": "finished", "running": False})
+    monkeypatch.setattr(server, "_tmux", lambda _: "101|zsh")
+    def ps(lines):
+        monkeypatch.setattr(server.subprocess, "run",
+            lambda args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=lines))
+    ps("101 50 /bin/zsh\n")
+    assert server._permission_stopped_terminal(NAME, sessions) == "$41|17|19"
+    ps("101 50 /bin/zsh\n102 101 /usr/bin/sleep\n")
+    assert server._permission_stopped_terminal(NAME, sessions) is None
+    monkeypatch.setattr(server, "_tmux", lambda _: "101|zsh\n314|zsh")
+    assert server._permission_stopped_terminal(NAME, sessions) is None
 
 
 def test_codex_permission_readiness_waits_for_own_binding_and_prompt(stopped, monkeypatch):

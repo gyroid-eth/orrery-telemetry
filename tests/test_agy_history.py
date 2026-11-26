@@ -1,5 +1,6 @@
 """Antigravity Reader receipts and phone projection on private fixtures."""
 import json
+from pathlib import Path
 import time
 
 import pytest
@@ -46,6 +47,18 @@ def test_accepts_the_full_transcript_path_issued_by_agy(launch):
     transcript.rename(full)
     agy_history.record(runtime, NAME, nonce, dict(payload, transcriptPath=str(full)))
     assert agy_history.binding(runtime, NAME, REGISTRATION, generation)["transcript_path"] == str(full)
+
+
+def test_direct_permission_resume_uses_the_bound_workspace(launch):
+    runtime, generation, _, nonce, _, payload = launch
+    workspace = Path(payload["workspacePaths"][0])
+    workspace.mkdir()
+    agy_history.record(runtime, NAME, nonce, payload)
+    assert agy_history.resume_workspace(runtime, NAME, REGISTRATION, SID, session=generation) == workspace
+    with pytest.raises(ValueError, match="workspace and conversation"):
+        agy_history.resume_workspace(runtime, NAME, REGISTRATION, OTHER_SID, session=generation)
+    with pytest.raises(ValueError, match="workspace and conversation"):
+        agy_history.resume_workspace(runtime, NAME, REGISTRATION, SID, session={**generation, "created": 1})
 
 
 def test_old_or_unrelated_callbacks_never_select_a_transcript(launch):
