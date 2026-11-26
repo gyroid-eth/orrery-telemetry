@@ -248,7 +248,10 @@ def test_mcp_setup_check_reports_availability_without_writing(tmp_path):
     command.parent.mkdir(parents=True)
     command.write_text('#!/bin/sh\nexit 1\n')
     command.chmod(0o700)
-    assert _run_setup(config, '--check').returncode != 0
+    missing = _run_setup(config, '--check')
+    assert missing.returncode != 0
+    assert 'scripts/install-gemini-provider.sh --dry-run --configure-mcp' in missing.stderr
+    assert 'scripts/install-gemini-provider.sh --configure-mcp' in missing.stderr
     assert not config.exists()
 
     config.write_text(json.dumps({'mcpServers': {'orrery-mail': dict(entry, disabled=True)}}))

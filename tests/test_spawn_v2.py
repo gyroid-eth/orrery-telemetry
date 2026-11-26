@@ -244,10 +244,14 @@ def test_spawn_names_keeps_an_explicit_spawn_dirs_unchanged(monkeypatch):
 
 def test_spawn_names_advertises_codex_provider(monkeypatch):
     monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-test-a, gpt-test-b")
+    monkeypatch.setattr(server.codex_models, "resolve_launcher",
+                        lambda: server.codex_models.LauncherPolicy(version=(0, 160, 1)))
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
     providers = server.spawn_names_payload()["providers"]
     assert next(provider for provider in providers if provider["id"] == "codex") == {
         "id": "codex", "label": "Codex", "program": "codex-cli",
+        "harnesses": [{"id": "codex-cli", "label": "Codex", "available": False,
+                       "default": False, "reason": "runtime_not_prepared"}],
         "models": ["gpt-test-a", "gpt-test-b"], "default_model": "gpt-6.1-sol",
         "model_source": "override", "model_error": "", "default_error": "",
         "default_effort_error": "", "overflow_models": [],
@@ -256,6 +260,27 @@ def test_spawn_names_advertises_codex_provider(monkeypatch):
         "model_effort_defaults": {"gpt-test-a": "", "gpt-test-b": ""},
         "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "effort_default": "xhigh",
     }
+
+
+def test_spawn_names_refreshes_claude_and_codex_cli_availability(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda _, names: dict.fromkeys(names, "unknown"))
+    claude_path = tmp_path / ".local/bin/claude"
+    codex_path = tmp_path / ".local/bin/codex"
+    monkeypatch.setattr(server.claude_models_mod, "child_cli_path", lambda: "")
+    monkeypatch.setattr(server.codex_models, "resolve_launcher",
+                        lambda: server.codex_models.LauncherPolicy(binary=str(codex_path) if codex_path.exists() else ""))
+
+    def availability():
+        return {p["id"]: p["harnesses"][0]["available"] for p in server.spawn_names_payload()["providers"]
+                if p["id"] in ("claude", "codex")}
+
+    assert availability() == {"claude": False, "codex": False}
+    claude_path.parent.mkdir(parents=True)
+    for binary in (claude_path, codex_path):
+        binary.write_text("#!/bin/sh\nexit 1\n")
+        binary.chmod(0o700)
+    assert availability() == {"claude": True, "codex": True}
 
 
 def test_spawn_names_uses_current_codex_defaults(monkeypatch, tmp_path):
