@@ -1153,6 +1153,19 @@ def test_api_passes_chrome_extension_selection_to_codex_launcher():
     assert server._spawn_tools_args(payload, "codex", False, "") == (("--tools", "chrome-extension"), None)
 
 
+def test_api_preserves_explicit_screen_off_in_launcher_arguments():
+    tools = {"screen_off": True, "mcp": ["reader"]}
+    args, error = server._spawn_tools_args({"tools": tools}, "claude", False, "")
+    assert error is None
+    assert child_tools.normalize(tools=child_tools.parse_cli(list(args[1::2])))["tools"] == tools
+
+
+@pytest.mark.parametrize("selection", [{"screen": "read"}, {"mcp": ["orrery-screen"]}])
+def test_screen_off_rejects_simultaneous_screen_selection(selection):
+    with pytest.raises(child_tools.ToolsError, match="Computer use Off"):
+        child_tools.normalize(tools={"screen_off": True, **selection})
+
+
 @pytest.mark.parametrize("payload, message", [
     ({"base": "all"}, "base must be"),
     ({"tools": ["mcp"]}, "tools must be an object"),

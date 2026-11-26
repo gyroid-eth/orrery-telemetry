@@ -142,6 +142,42 @@ def test_permission_computer_view_preserves_browser_settings(stopped, monkeypatc
                                "screen": {"server": "orrery-screen", "access": "read"}}
 
 
+def test_restart_with_computer_off_reports_off_on_linux(stopped, monkeypatch):
+    _, record, provider, state = stopped
+    monkeypatch.setattr(child_tools.sys, "platform", "linux")
+    monkeypatch.setattr(server, "_card_codex_provenance", lambda *_: {"launch_origin": "child"})
+    save_selection(record, provider, "default", {
+        "screen": {"server": "orrery-screen", "access": "read"}, "mcp": ["reader"],
+    })
+    row = {"name": NAME, "program": provider, "category": "agent", "history_binding": "bound",
+           "history_session_id": SID, "transcript_path": f"{state['project_key']}/{SID}.jsonl"}
+    assert server._agent_card_fields(row, {}, {}, state, ())["computer_use"] == "view"
+
+    def resume(name, *, expected_history_session_id, **_):
+        assert (name, expected_history_session_id) == (NAME, SID)
+        if provider == "claude":
+            _, plan, error = server._claude_resume_tools(name, SID, state["project_key"], False)
+            assert not error and set(plan["servers"]) == {"reader"}
+            assert "orrery-screen" not in " ".join(plan["flags"])
+        else:
+            config = {"mcp_servers": {
+                "reader": {"command": "/bin/true"}, "orrery-screen": {"command": "/bin/false"},
+            }}
+            child_tools.codex_apply(config, child_tools.read_codex_record(str(record)))
+            assert config["mcp_servers"]["reader"]["enabled"] is True
+            assert config["mcp_servers"]["orrery-screen"]["enabled"] is False
+        return {"ok": True, "action": "resumed"}
+
+    monkeypatch.setattr(server, "do_resume", resume)
+    permission = {"history_session_id": SID, "computer_use": "off"}
+    assert server.do_jump(NAME, open_terminal=False, permission=permission)["action"] == "resumed"
+    row["running"] = True
+    row.update(server._agent_card_fields(row, {}, {}, state, ()))
+    assert row["computer_use"] == "off"
+    assert row["computer_use_source"] == "launch"
+    assert server.agent_card.permission_controls(row)["computer_use"]["value"] == "off"
+
+
 @pytest.mark.parametrize("mode", ["off", "temporary", "personal"])
 def test_permission_resumes_same_conversation_with_explicit_browser_mode(stopped, monkeypatch, mode):
     _, record, provider, _ = stopped

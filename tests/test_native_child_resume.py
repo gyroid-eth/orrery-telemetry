@@ -177,12 +177,19 @@ def test_hermes_permission_resume_confirms_loaded_id_in_its_new_terminal(monkeyp
 
 @pytest.mark.parametrize('harness', ['dsh', 'hermes'])
 @pytest.mark.parametrize('parent', [None, 'FixtureParent'])
-@pytest.mark.parametrize('launch_ok', [True, False])
-def test_permission_restart_keeps_native_conversation_and_parent(tmp_path, monkeypatch, harness, parent, launch_ok):
+@pytest.mark.parametrize(('key', 'launch_ok'), [
+    ('browser_mode', True), ('browser_mode', False), ('computer_use', True),
+])
+def test_permission_restart_keeps_native_conversation_and_parent(tmp_path, monkeypatch, harness, parent, key, launch_ok):
     name, session_id = 'FirstAgent', 'owned-session'
     runtime, state, document, _ = child(tmp_path, name, harness, session_id)
     directory = Path(state['harness_state_dir'])
     selection = {'base': 'default', 'tools': {'browser_mode': 'personal'}}
+    expected = {'base': 'default', 'tools': {'browser_mode': 'off'}}
+    if key == 'computer_use':
+        monkeypatch.setattr(sys, 'platform', 'linux')
+        selection['tools']['screen'] = {'server': 'orrery-screen', 'access': 'read'}
+        expected['tools'] = {'browser_mode': 'personal', 'screen_off': True}
     if parent:
         state['parent_agent'] = parent
     document.update(parent_agent=parent, tools=selection)
@@ -201,7 +208,7 @@ def test_permission_restart_keeps_native_conversation_and_parent(tmp_path, monke
     monkeypatch.setattr(server, '_child_session_live', lambda *args: True)
     history = lambda *args, **kw: {'history_binding': 'bound', 'history_session_id': session_id}
     monkeypatch.setattr(server, f'_{harness}_history_binding', history)
-    permission = {'history_session_id': session_id, 'browser_mode': 'off'}
+    permission = {'history_session_id': session_id, key: 'off'}
     record = resume.tools_record_path(runtime, name)
     assert not server.do_jump(name, permission={**permission, 'history_session_id': 'different'},
                               check_only=True)['ok']
@@ -222,7 +229,7 @@ def test_permission_restart_keeps_native_conversation_and_parent(tmp_path, monke
         assert saved['parent_agent'] == retained.get('parent_agent') == parent
         assert saved['tools'] == selection
         changed = resume.native_tools_selection(runtime, retained, saved)
-        assert changed == {'base': 'default', 'tools': {'browser_mode': 'off'}}
+        assert changed == expected
         calls.append(expected_history_session_id)
         return {'ok': launch_ok, 'action': 'resumed' if launch_ok else 'failed'}
 
@@ -232,6 +239,10 @@ def test_permission_restart_keeps_native_conversation_and_parent(tmp_path, monke
     assert calls == [session_id]
     assert record.exists() is launch_ok
     assert not resume._tools_journal(state_path).exists()
+    if key == 'computer_use':
+        row = {'name': name, 'program': harness, 'running': True, 'transcript_path': str(directory / 'fixture.jsonl'),
+               **history()}
+        assert server._agent_card_fields(row, {}, {}, state, ())['computer_use'] == 'off'
 
 
 def prepared_native(tmp_path, monkeypatch, harness='dsh'):
