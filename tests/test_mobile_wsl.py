@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from dashboard import mobile_serve as serve, mobile_settings as mobile, mobile_systemd as systemd, server
+from scripts.lib import mobile_relay_restart as refresh
 
 HOST = 'computer.example.ts.net'
 ENABLE = {'access': True, 'owner_login': 'owner@example.test',
@@ -54,6 +55,11 @@ elif args[0] == 'enable':
 elif args[0] in {'stop', 'disable'}:
     assert args[-2:] == ['--', unit.name]
     active.unlink(missing_ok=True)
+elif args[0] == 'try-restart':
+    assert args[1:] == ['--', unit.name] and active.exists()
+elif args[0] == 'is-enabled':
+    assert args[1:] == ['--quiet', '--', unit.name]
+    sys.exit(1 if os.environ.get('FAKE_SYSTEMD_DISABLED') else 0)
 else:
     assert args == ['daemon-reload']
 '''
@@ -213,6 +219,33 @@ def test_foreign_unit_is_never_started_or_stopped(wsl, monkeypatch, conflict):
         mobile.apply(ENABLE)
     assert all(args[0] == 'show' for args in calls(wsl.system_calls))
     assert not mobile.settings_path().exists()
+
+
+@pytest.mark.parametrize('mode', ['running', 'dry-run', 'stopped', 'disabled', 'foreign'])
+def test_refresh_only_restarts_the_configured_active_systemd_unit(wsl, monkeypatch, capsys, mode):
+    mobile.apply(ENABLE)
+    config, unit = mobile.settings_path().read_bytes(), wsl.unit.read_bytes()
+    if mode == 'stopped':
+        wsl.active.unlink()
+    elif mode == 'disabled':
+        monkeypatch.setenv('FAKE_SYSTEMD_DISABLED', '1')
+    if mode == 'foreign':
+        monkeypatch.setenv('FAKE_SYSTEMD_FRAGMENT', '/usr/lib/systemd/user/other.service')
+        with pytest.raises(systemd.UnitError, match='systemd_unit_conflict'):
+            refresh.restart(mobile.home(), dry_run=False)
+    else:
+        wsl.system_calls.write_text('')
+        refresh.restart(mobile.home(), dry_run=mode == 'dry-run')
+    commands = calls(wsl.system_calls)
+    if mode == 'running':
+        assert [args[0] for args in commands] == ['show', 'is-enabled', 'try-restart']
+        assert commands[-1] == ['try-restart', '--', systemd.UNIT]
+    else:
+        assert not any(args[0] == 'try-restart' for args in commands)
+    if mode == 'dry-run':
+        assert commands == [] and 'DRY-RUN would restart' in capsys.readouterr().out
+    assert mobile.settings_path().read_bytes() == config
+    assert wsl.unit.read_bytes() == unit
 
 
 def test_uninstall_is_scoped_and_dry_run_keeps_own_unit(wsl, tmp_path, capsys):
