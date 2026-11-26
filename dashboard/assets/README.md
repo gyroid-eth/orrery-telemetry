@@ -24,3 +24,9 @@ Qwenと同じalpha filterでbone `#ece2cc` にし、lightでは既存の黒logo 
 確認した [Z.ai Terms of Use](https://chat.z.ai/legal-agreement/terms-of-service)（更新日2026-04-14）のV.2は、事前の書面の同意なしのlogo・商標等の利用を制限している。
 専用の再配布・再着色の許可は、確認した公式資料では見つからなかった。
 この制限を承知の上で、運営者が2026-11-08にbone色の公式ロゴを使うと決めた記録であり、権利者からの許諾を主張しない。
+
+## Thinking Machines Lab (`thinking-machines.svg`)
+
+- Inkling 2 Mini の作者は Thinking Machines Lab です。[公式モデルカード](https://thinkingmachines.ai/model-card/inkling-2-mini/) · [配布元とモデルカード](https://huggingface.co/thinkingmachines/Inkling-2-Mini)
+- 公式サイトの favicon を SVG に埋め込み、元の画素と形状を保って明るさを bone 色の濃淡に変換しています。light テーマの既存フィルターでも濃淡を保ちます。[公式 favicon](https://thinkingmachines.ai/images/favicon-32x32.png)
+- この印はモデルの作者を示します。モデルの Apache 2.0 ライセンスは重みのものです。[Thinking Machines Lab の利用規約](https://thinkingmachines.ai/legal/terms/)

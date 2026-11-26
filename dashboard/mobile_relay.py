@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit, urlencode
 
 try:
     from dashboard import legacy_http_admission as admission
+    from dashboard.local_model_makers import LOCAL_MAKER_ASSETS
     from dashboard.mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
     from dashboard import mobile_input
     from dashboard import mobile_history
@@ -28,6 +29,7 @@ try:
     from dashboard import mobile_spawn
 except ModuleNotFoundError:
     import legacy_http_admission as admission
+    from local_model_makers import LOCAL_MAKER_ASSETS
     from mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
     import mobile_input
     import mobile_history
@@ -233,6 +235,7 @@ def static_assets(root=HERE):
         '/reader_send_motion.js': (root/'mobile/reader_send_motion.js', 'text/javascript; charset=utf-8'),
         '/reader_send_motion.css': (root/'mobile/reader_send_motion.css', 'text/css; charset=utf-8'),
         '/network_core.js': (root/'network_core.js', 'text/javascript; charset=utf-8'),
+        '/local_model_makers.js': (root/'local_model_makers.js', 'text/javascript; charset=utf-8'),
         '/network_node.js': (root/'network_node.js', 'text/javascript; charset=utf-8'),
     }
     for icon in ('orbit-192.png','orbit-512.png','orbit-maskable-512.png','apple-touch-icon.png'):
@@ -240,8 +243,8 @@ def static_assets(root=HERE):
     for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600',
                  'ibm-plex-sans','ibm-plex-sans-jp-400'):
         fixed['/fonts/'+font+'.woff2']=(root/'mobile/fonts'/(font+'.woff2'),'font/woff2')
-    for logo in ('orbit','orbit-light','anthropic','openai','google','qwen','glm'):
-        fixed['/assets/'+logo+'.svg']=(root/'assets'/(logo+'.svg'),'image/svg+xml')
+    for logo in ('orbit.svg','orbit-light.svg','anthropic.svg','openai.svg','google.svg',*LOCAL_MAKER_ASSETS):
+        fixed['/assets/'+logo]=(root/'assets'/logo,'image/svg+xml')
     # Byte-identical canonical icon, bundled for the manual mobile reader even
     # when ordinary dashboard DeepSeek presentation is not opted in.
     fixed['/assets/deepseek.svg']=(root/'mobile/assets/deepseek.svg','image/svg+xml')

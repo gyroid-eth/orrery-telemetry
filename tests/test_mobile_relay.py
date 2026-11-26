@@ -97,6 +97,10 @@ def test_owner_and_outer_authority_accept_originless_get_and_assets(reader):
     assert directives['script-src'] == directives['connect-src'] == "'self'"
     status,_,body=request(port,'/network_node.js')
     assert status==200 and b'OrreryNetworkNode' in body
+    status,_,body=request(port,'/local_model_makers.js')
+    assert status==200 and b'Thinking Machines Lab' in body
+    status,headers,body=request(port,'/assets/thinking-machines.svg')
+    assert status==200 and headers['Content-Type']=='image/svg+xml' and b'<svg ' in body
     status,_,css=request(port,'/network.css')
     assert status==200 and b'--serif:' in css and b'--ln-local:' in css
     for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600',
@@ -133,7 +137,7 @@ def test_mobile_default_is_one_day_and_fine_window_is_allowlisted(reader):
 def test_every_fixed_logo_is_authenticated_svg_and_matches_canonical_bytes(reader):
     from pathlib import Path
     port,store=reader;root=Path(__file__).resolve().parents[1]
-    for logo in ('orbit','anthropic','openai','google','deepseek','qwen','glm'):
+    for logo in ('orbit','anthropic','openai','google','deepseek','qwen','glm','thinking-machines'):
         path='/assets/'+logo+'.svg'
         source=(root/'integrations/dsh/assets/deepseek.svg' if logo=='deepseek'
                 else root/'dashboard/assets'/(logo+'.svg'))
