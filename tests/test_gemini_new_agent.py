@@ -1223,6 +1223,8 @@ selectSpawnProvider('claude');
 out.claudeAfterGemini=state();
 selectSpawnProvider('gemini');
 SPM('spm-resources').value='tests/**';chooseEffort('high');
+selectSpawnModel('gemini-pro-orchestrator');
+out.geminiFixed={...state(),effortHidden:SPM('spm-effort-row').hidden};
 selectSpawnProvider('codex');
 out.codexAfterGemini=state();
 selectSpawnProvider('claude');
@@ -1271,7 +1273,7 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
         {"id": "codex", "label": "Codex", "program": "codex-cli",
          "models": ["gpt-5.6-sol"], "default_model": "gpt-5.6-sol",
          "efforts": ["low", "medium", "high", "xhigh"], "effort_default": "xhigh"},
-        gemini_runtime._catalog_item(list(gemini_runtime._DEFAULT_MODELS)),
+        gemini_runtime._catalog_item([*gemini_runtime._DEFAULT_MODELS, "gemini-pro-orchestrator"]),
     ]}
     script = (f"const CATALOG={json.dumps(catalog)};\n"
               + _extract_ui_script(_rendered_index()) + "\n" + _UI_HARNESS)
@@ -1305,6 +1307,12 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     assert out["geminiReady"]["payload"] == {
         **base_payload, "provider": "gemini", "model": "gemini-3.8-flash-high",
         "effort": "medium", "resources": "src/**", "worktree": True,
+    }
+    fixed = out["geminiFixed"]
+    assert fixed["effortHidden"] and not fixed["launchDisabled"]
+    assert fixed["payload"] == {
+        **base_payload, "provider": "gemini", "model": "gemini-pro-orchestrator",
+        "resources": "tests/**", "worktree": True,
     }
     for key, provider, model, effort in (
             ("claudeAfterGemini", "claude", "claude-sonnet-5", None),

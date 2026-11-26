@@ -38869,7 +38869,8 @@ function spawnProviderAcceptsResources(caps){
 }
 function spawnProviderHasFixedEffort(provider,modelId=spmSelectedModel){
   const levels=provider?.modelEfforts?.[modelId];
-  return Array.isArray(levels)&&levels.length===0;
+  // An empty list exempts a model only when the provider requires effort.
+  return provider?.capabilities?.effort_required===true&&Array.isArray(levels)&&levels.length===0;
 }
 function spawnProviderDisplayModelLabel(provider,modelId){
   const id=String(modelId||'').trim();
