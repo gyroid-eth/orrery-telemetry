@@ -12,6 +12,18 @@
 
 ## 2026.11.27
 
+### 試験用fresh Mailへ固定宛先の追加指示を送る任意MCPアダプター
+
+[第2段階のfresh送信アダプター](integrations/chatgpt_mcp/FRESH_MESSAGES.md)を追加しました。既定OFFで、運用者が準備した保護clientと最大16件の宛先に固定し、全文preview・digest・永続claimを通して送信します。保存した受領だけをstatusで読み、不明な結果を再送しません。送信権の事前委任、Tunnel共有範囲、無効時の確認と証拠保全を日本語・英語で説明しています。
+
+本番fresh切替の受入前は試験用instance限定です。従来の読み取り入口、通常installer・daemon・UIは維持し、常駐化・spawn・資格移行を含みません。Dashboard API世代とMail公開APIの変更はありません。
+
+### fresh Mail の送信結果を再取得するときに保存内容を照合
+
+同じ request ID の送信を明示的に再実行したとき、以前の受領結果を返す前に、保存された件名・本文・重要度・ACK 要求・topic と元の送信内容を照合します。内容が異なる場合は `RESULT_CONTENT_MISMATCH`、保存された thread と受領結果が異なる場合は `RESULT_REFERENCE_MISSING` で拒否し、既存のメッセージや受領結果を保持します。正しい保存内容では同じ受領結果を返し、重複配送しません。
+
+既存の request ID・intent hash・受領形式と、受信者の退役後にも過去の受領結果を取得できる動作を維持します。既定値を含む送信を対象とし、返信の継承規則、legacy 運用、本番切替、Dashboard API 世代は変更しません。
+
 ### 最終活動時刻に会話記録の更新を反映（API 57）
 
 稼働中の tmux agent は、tmux・Mail・紐づけ済みの会話記録のうち最も新しい時刻を最終活動として表示します。Claude・Codex・dsh・Antigravity は履歴ファイルの更新時刻、Hermes は該当する会話の最後のメッセージ時刻を使います。会話記録が無い場合は、従来どおり tmux と Mail の活動時刻を表示します。

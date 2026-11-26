@@ -137,6 +137,8 @@ def _error(identity: Any, code: int, message: str) -> dict:
 
 
 class Gateway:
+    read_only = True
+
     def __init__(self, config: Config, dashboard: Dashboard | None = None):
         self.config = config
         self.dashboard = dashboard or Dashboard(config.dashboard_url)
@@ -197,7 +199,7 @@ class Gateway:
 
 def handler(gateway: Gateway):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "orrery-mcp-readonly"
+        server_version = "orrery-mcp-readonly" if gateway.read_only else "orrery-mcp-fresh-message"
         sys_version = ""
         protocol_version = "HTTP/1.1"
         timeout = 10
@@ -244,7 +246,7 @@ def handler(gateway: Gateway):
             if not self._admit():
                 return
             if self.path == "/healthz":
-                self._send(200, {"ok": True, "read_only": True})
+                self._send(200, {"ok": True, "read_only": gateway.read_only})
             elif gateway.path_allowed(self.path):
                 self._send(405, {"error": "method_not_allowed"}, {"Allow": "POST"})
             else:
