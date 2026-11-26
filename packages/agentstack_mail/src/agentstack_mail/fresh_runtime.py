@@ -207,6 +207,14 @@ class FreshMailCore(StorageOriginCore):
                 if (saved is None or saved.sender_id != actor.id
                         or {(r.agent_id, r.kind) for r in pairs} != expected):
                     raise B1Error('RESULT_REFERENCE_MISSING')
+                if operation == 'send':
+                    expected_content = dict(subject=subject, body_md=body_md, topic=topic,
+                        importance=importance if importance is not None else 'normal',
+                        ack_required=ack_required if ack_required is not None else False)
+                    if any(getattr(saved, key) != value for key, value in expected_content.items()):
+                        raise B1Error('RESULT_CONTENT_MISMATCH')
+                    if saved.thread_id != result.get('thread_id'):
+                        raise B1Error('RESULT_REFERENCE_MISSING')
                 return result
             try:
                 decision = await self._decision(s, state, records, actor, operation,

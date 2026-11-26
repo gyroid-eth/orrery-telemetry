@@ -379,3 +379,40 @@ def test_explicit_cli_http_process_config_health_send_peek_and_shutdown(tmp_path
                         process.wait(timeout=5)
                     assert process.poll() is not None
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('field,value', [
+    ('subject', 'changed subject'), ('body_md', 'changed body'),
+    ('importance', 'urgent'), ('ack_required', True), ('topic', 'changed-topic'),
+    ('thread_id', 'changed-thread'),
+])
+def test_replayed_send_rejects_changed_stored_content_without_effects(tmp_path, field, value):
+    async def run():
+        async with state(tmp_path) as (runtime, people):
+            args = send_args(runtime, people)
+            sent = await runtime.core.write_message('send', **args)
+            async with runtime.sessions() as session:
+                message = await session.get(Message, sent['message_id'])
+                setattr(message, field, value)
+                await session.commit()
+            before = await snapshot(runtime)
+            code = 'RESULT_REFERENCE_MISSING' if field == 'thread_id' else 'RESULT_CONTENT_MISMATCH'
+            with pytest.raises(B1Error, match=code):
+                await runtime.core.write_message('send', **args)
+            assert await snapshot(runtime) == before
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('options', [
+    {}, {'importance': 'normal', 'ack_required': False},
+    {'importance': 'high', 'ack_required': True, 'topic': 'fixture-topic', 'thread_id': 'fixture-thread'},
+])
+def test_replayed_send_preserves_default_and_explicit_content(tmp_path, options):
+    async def run():
+        async with state(tmp_path) as (runtime, people):
+            args = send_args(runtime, people, **options)
+            sent = await runtime.core.write_message('send', **args)
+            before = await snapshot(runtime)
+            assert await runtime.core.write_message('send', **args) == sent
+            assert await snapshot(runtime) == before
+    asyncio.run(run())
