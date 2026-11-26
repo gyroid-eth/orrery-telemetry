@@ -177,11 +177,7 @@ After the runtime paths and credential references have been checked and validati
    To keep several Local servers, [configure separate connection IDs and server names](configuration.en.md#native-connections), then choose the row for workstation, EPYC, or your intended server. Equal model IDs still select different connections.
 3. Use a new work folder and send one short task. Once you have a model response, continue with the [Mail end-to-end check](getting-started.en.md#5-play-shiritori-as-an-end-to-end-check).
 
-![Local models and Hermes selected in the real WSL Telemetry interface](img/wsl-native-harness-picker.png)
-
-[Watch the selection sequence](img/wsl-native-harness-selection.gif) (10.8 seconds): Claude, Codex, DeepSeek and Local models, including dsh/Hermes choices. This is the real Ubuntu WSL backend viewed in Chrome on a Mac. The scientist portraits and choices come from the actual interface. The launch button was not pressed; this recording does not demonstrate key storage or a successful API response.
-
-The Local entry in the image is an example using a Qwen model on Strata. The internal ID `strata` is not a hostname restriction. Before using another server, check the API, HTTPS and key-reference requirements in step 1.
+For example, a Local entry can use a Qwen model on Strata. The internal ID `strata` is not a hostname restriction. Before using another server, check the API, HTTPS and key-reference requirements in step 1.
 
 Seeing a model in the picker, receiving a reply, and using tools, Mail, exit and resume are separate checks. See the [current limitations](managed-catalog.en.md#current-limitations).
 

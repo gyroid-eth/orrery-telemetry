@@ -144,9 +144,7 @@ For **Browser**, choose from the modes the catalog offers.
 See [computer use requirements and setup](computer-use.en.md) and the
 [launch API](api.en.md#get-apispawn-names).
 
-![NEW AGENT with the Antigravity tab selected: the resources row sits under the task, and the footer explains what is still required](images/new_agent_capabilities_dark.png)
-
-![The same state in the light theme](images/new_agent_capabilities_light.png)
+![Antigravity selected in Telemetry NEW AGENT. Parent is set to Standalone and the Resources field is hidden](images/new_agent_capabilities_dark.png)
 
 The dashboard checks launch requirements before registering with ORRERY Mail.
 

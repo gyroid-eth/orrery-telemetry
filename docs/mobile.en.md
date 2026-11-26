@@ -41,8 +41,6 @@ The cockpit's **Settings** has a **Phone** section with two switches:
 
 **It cannot be set up in demo mode.** Demo mode does not put the login and the address on the page, so step 2 shows no fields. Turn off **Demo mode** in Settings once and go through step 4 below (`?demo=0` in the URL affects only that page; reloading brings demo mode back). After that you can go back to demo mode ([In demo mode](#in-demo-mode)).
 
-The names and addresses in these screens are made-up examples; yours come from your own Tailscale.
-
 ### Before you start (you, once)
 
 Two things cannot be changed from the cockpit. They are the same as steps 2 and 4 in the table under [Ask your agent to set it up](#ask-your-agent-to-set-it-up).
@@ -54,8 +52,6 @@ Two things cannot be changed from the cockpit. They are the same as steps 2 and 
 
 The badge next to **Phone** says **OFF**. Press the **Phone access** switch.
 
-<img src="images/phone-settings-1-off.png" width="360" alt="The Phone section of Settings. The badge says OFF; the Phone access and Send from phone switches are listed">
-
 ### Steps 1 and 2: Tailscale, owner and address (you, once)
 
 The first press **leaves the switch off**. Right under the switch it says "Not on yet: check the owner and address in step 2 below, then press Confirm and turn on.", the **Setup** steps open below, and the cursor moves to step 2.
@@ -64,15 +60,11 @@ The first press **leaves the switch off**. Right under the switch it says "Not o
 - In step 2, **Owner (Tailscale login)** is the only login the reader lets in, and **Address on the phone** is the address the phone opens (`https://<this computer's Tailscale name>:9443`). Both are filled in from `tailscale status`; check them and press **Confirm and turn on**. This is what turns Phone access on.
 - **Check:** the badge says **SETUP** and step 2 has a ✓.
 
-<img src="images/phone-settings-2-owner.png" width="360" alt="After the first press of Phone access. Under the switch, a line points to step 2; step 2 has the owner and address fields and the Confirm and turn on button">
-
 ### Step 3: Serve 9443 → reader (you, terminal)
 
 On macOS, **Copy** the `tailscale serve --https=9443 http://127.0.0.1:8781` shown in step 3, run it once in a terminal, then press **Check again**. On WSL2, use [Telemetry Settings](#use-phone-access-on-wsl2) to preview and confirm the change.
 
 **Check:** **Check again** puts a ✓ on step 3. If it does not, read the output of `tailscale serve`. With HTTPS Certificates off, it asks you to enable them here ([Before you start](#before-you-start-you-once)).
-
-<img src="images/phone-settings-3-serve.png" width="360" alt="Badge SETUP. Step 3 shows the tailscale serve command with Copy and Check again">
 
 ### Step 4: Who can reach it (you, admin console)
 
@@ -82,13 +74,9 @@ When step 3 has a ✓, check in the Tailscale admin console who and which device
 
 **Check:** ORRERY cannot check the policy, so check it yourself. In every case, see in the admin console that only the people and devices you mean to allow can reach tcp:9443. If you restricted devices, also check that an excluded device cannot open it, as in [Verify on real devices](#verify-on-real-devices).
 
-<img src="images/phone-settings-4-policy.png" width="360" alt="Steps 1 to 3 have a check mark. Under the switch, one line says Conversation and Send stay off until step 4. Step 4 has the I reviewed the policy button">
-
 ### When it is on
 
 The badge says **ON** and the setup steps are gone. **Check it yourself:** all four Status lines are green (reader, Serve, Funnel off, policy). To change the login or the address, use **Change owner or address**.
-
-<img src="images/phone-settings-5-on.png" width="360" alt="Badge ON. Status lists reader running, Serve, Funnel off and Policy reviewed, all green">
 
 ### Conversations on the phone
 
@@ -110,8 +98,6 @@ The phone checks Demo state before its first display. Communication errors hide 
 If you press **Phone access** in demo mode before the login and address are set, the line right under the switch says "Turn off demo mode to set up phone access (once). After that you can switch it on and off in demo mode." **Turn off demo mode** turns demo mode off and reloads the page. Settings closes, so open **Settings** again, press **Phone access**, and go through the steps above.
 
 Once it is set up, you can go back to demo mode and the switch keeps working. The login and the address read "hidden in demo mode" and are not put on the page. Turn demo mode off only to change them.
-
-<img src="images/phone-settings-demo.png" width="360" alt="First press in demo mode. Under the switch, a line says to turn off demo mode once for the setup, with a Turn off demo mode button"> <img src="images/phone-settings-demo-on.png" width="360" alt="Demo mode after the setup. Badge ON; the owner and address read hidden in demo mode">
 
 ### What runs behind it
 
@@ -200,11 +186,11 @@ Context, state and Role changes update the affected node without restarting layo
 
 Use **Expand** at the top right of Graph to fill the screen. If the browser's fullscreen API is unavailable or refused, Graph fills the page instead. Find, Focus/All, Fit, pinch, drag, Mail-pair lists and the Terminal sheet remain available. **Close** restores the normal view. Back or Escape closes the foreground sheet first, then exits the expanded Graph. If the OS or browser exits fullscreen, the normal view returns and open sheets close. The layout follows orientation changes and retains your selection and manual zoom. Fullscreen, back gestures and keyboard behavior on an actual phone require separate acceptance.
 
-<img src="images/mobile-graph-fullscreen.png" width="300" alt="Graph expanded with Expand, showing every agent and Mail line in All">
+<img src="images/mobile-graph-to-terminal.gif" width="300" alt="On a phone, select an agent from All, switch to Focus, check Terminal and Conversation, and send an input line">
 
 Subjects are limited to 512 characters and bodies to 64 KiB of UTF-8, with explicit truncation notices. HTML and Markdown remain literal text; links, images and attachments do not execute. No read receipt, ACK or reply is sent. Closing, choosing another message, changing the period or view, and moving to the background clear the displayed content. Late responses cannot restore it. Unavailable, deleted, changed or expired events show an error, never the previous message's body.
 
-<img src="images/mobile-mail.png" width="300" alt="One opened Mail: sender, recipient, subject and body as literal text; no read receipt or ACK is sent">
+<img src="images/mobile-mail.png" width="300" alt="Open a Mail message on a phone to read its subject, sender, recipient, and body">
 
 After an owner-authenticated snapshot request, the Mac reader prepares a fixed last 24 h in memory: up to 2000 distinct messages and 32 MiB of serialized content plus metadata. This is a logical JSON byte budget, not an RSS guarantee. Multiple To/Cc recipients share one body. Capacity, time or read failures are shown as **partial / unavailable**, rather than complete coverage. Every tap rechecks the current delivery and revision, including cache hits. Older displayed events remain readable one at a time and are not cached. Stopping the reader clears all caches. Subjects and bodies are never bulk-sent to the phone.
 

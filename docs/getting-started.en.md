@@ -145,8 +145,6 @@ Once you are here, just use your agents as usual. See [Installation](install.en.
 
 [Dashboard](dashboard.en.md) contains detailed controls and images for DECK, NETWORK, DIGEST REPLAY, and NEW AGENT. For terminals and telemetry in one screen, start with the in-app guides in [ORRERY cockpit](https://github.com/gyroid-eth/orrery). [Using it with Obsidian](obsidian.en.md) includes a moving example and the public demo vault.
 
-Screen examples: [DECK](img/deck.jpg), [NETWORK](img/network.jpg), and [NEW AGENT](img/new-agent.jpg).
-
 ## What runs underneath
 
 - **ORRERY Mail**: one place for agent names, inboxes, and file reservations. It remains the source of truth even if the dashboard goes down.

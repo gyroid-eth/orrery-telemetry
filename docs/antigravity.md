@@ -143,9 +143,7 @@ API 53 では macOS の **Computer use** で Off／View／Control を選べま�
 **Browser** はカタログが示す利用可能なモードから選べます。
 [画面操作の前提と設定](computer-use.md)と[起動 API](api.md#get-apispawn-names)を参照してください。
 
-![NEW AGENT with the Antigravity tab selected: the resources row sits under the task, and the footer explains what is still required](images/new_agent_capabilities_dark.png)
-
-![The same state in the light theme](images/new_agent_capabilities_light.png)
+![Telemetry の NEW AGENT で Antigravity を選んだ状態。Parent は Standalone で、Resources の入力欄は出ない](images/new_agent_capabilities_dark.png)
 
 起動条件は ORRERY Mail の登録前に確認します。
 

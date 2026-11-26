@@ -57,11 +57,7 @@ Codex 自身が固定エラー文を折り返す場合も検知します。固�
 
 最初は DECK を開きます。**1エージェントが1枚のカード**として並ぶため、誰が何をしているか、入力待ちで止まっていないかを個別に読めます。
 
-次の画像では、上部のカウンタが3体、カードも3枚です。カウンタは全体の数、カードは各エージェントの状態を示します。
-
-![DECK の初期状態。3体のエージェントが1枚ずつのカードで表示されている](images/deck_start.png)
-
-本ページの6枚の画面写真は隔離したデモ環境の実画面です。エージェント名、task、mail、transcript はすべて架空で、実在の作業内容ではありません。
+本ページの画面写真は隔離したデモ環境の実画面です。エージェント名、task、mail、transcript はすべて架空で、実在の作業内容ではありません。
 
 ### カードを上から読む
 
@@ -79,9 +75,8 @@ Codex 自身が固定エラー文を折り返す場合も検知します。固�
 
 `NO LIVE SUMMARY` は表示用の要約が無いことを示し、待機・停止の判定ではありません。現在の状態は右上の表示と分けて読みます。Codex App の登録中も既存の work 分類を表示し、進捗を保証しません。
 
-次の画像では12枚に増え、Warm-Lovelace などのカードに `RX` が現れています。`ORD` と見比べると「担当」と「最後に誰から何を受け取ったか」を分けて読めます。
 
-![DECK で12体に増え、複数のカードに ORD と RX が表示されている](images/deck_growing.png)
+![ORRERY Telemetry の DECK。エージェントごとのカードに状態、モデル、タスクが並ぶ](images/deck_growing.png)
 
 ### ヘッダのカウンタとカードの状態を分ける
 
@@ -128,7 +123,7 @@ API は `GET /api/quotas` です。Claude route はローカルの statusLine �
 
 次の画像で見る場所は、Bright-Curie カード右上の `?` と、Swift-Noether カードの赤い枠と `APPROVAL` です。
 
-![DECK の介入待ち。Bright-Curie に質問マーク、Swift-Noether に赤枠の APPROVAL が表示されている](images/deck_humanloop.png)
+![DECK の質問待ちは ?、承認待ちは赤い枠と APPROVAL。ヘッダーの NEED YOU に件数が出る](images/deck_humanloop.png)
 
 | 合図 | 意味 | 解除方法 |
 | --- | --- | --- |
@@ -198,8 +193,6 @@ Claude / Codex resume は `AGENTSTACK_AUTO_OPEN_CHILD` に従います。`0` な
 
 このため、完了した child のカードは DECK の通常表示から消えますが、失敗ではありません。history を `30d` にすると直近30日の、`all` にすると全期間の `gone` / `retired` agent もカードとして表示されます。検索が 0 件のときは、どの範囲を見て 0 件だったかと、次に広い範囲へのリンクを空状態に出します。
 
-![DECK history 30d — FINISHED / GONE / RETIRED の各セクション](img/deck-show-all.jpg)
-
 NETWORK は現在の稼働状態と選択した time window を重ねる表示です。完了や retire だけを理由に node を即座に隠すわけではありませんが、last activity が window 外になると child node と、それに接続する spawn / mail edge は表示されません。現在の window に見えないことだけでは task failure を意味しません。履歴を確認する場合は NETWORK の `ALL`、個別の終了状態を確認する場合は DECK の history（`30d` / `all`）を使います。
 
 ## Output / deliverables
@@ -223,11 +216,11 @@ Codex App runtime には tmux pane がありません。terminal attach、dashbo
 
 ## NETWORK
 
+![Telemetry の NETWORK。agent のノードを親子の線と Mail の線で結ぶ](img/network.jpg)
+
 NETWORK は「誰から生まれたか」と「誰と通信したか」を一枚の force graph に重ねます。まず、**ノードはエージェント、線は関係**と読んでください。
 
 次の初期状態では3ノードに対して `0 links · 0 spawn` なので、まだ親子関係も通信もありません。配置の調整は header 右端の `SETTINGS` から開く drawer の NETWORK で行います。
-
-![NETWORK の初期状態。3ノードで通信線と spawn 線はまだない](images/net_start.png)
 
 ### Node
 
@@ -239,8 +232,6 @@ NETWORK は「誰から生まれたか」と「誰と通信したか」を一枚
 
 詳細 panel の History は transcript と24時間 event sparkline、Output は project-scoped な成果物です。ROLE ASSIGN では role / group annotation を保存または削除できます。
 
-![node 詳細 panel — CTX / STATE / History / ROLE ASSIGN / transcript](img/agent-detail.jpg)
-
 ### Edge と mail
 
 - spawn edge: parent-child lineage
@@ -251,17 +242,9 @@ NETWORK は「誰から生まれたか」と「誰と通信したか」を一枚
 - drawer に subject、importance、時刻、本文
 - live message は comet animation
 
-次の画像は、12ノードに `6 links · 6 spawn` ができた段階です。系統色のリングで親・子・中間を見分け、線上の `1` からその組み合わせの通信が1回だと読めます。
 
-![NETWORK で12ノードへ増え、親子の spawn 線と通信回数1の線が表示されている](images/net_growing.png)
-
-通信が増えると、同じ2者間の線上の数字も増えます。次の画像では `29 links · 9 spawn` となり、中央付近に `2` や `3` が見えます。数字はノード数や子の数ではなく、**通信回数**です。
-
-![NETWORK の通信が増え、エッジ上に通信回数2や3が表示されている](images/net_humanloop.png)
 
 `AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT` がないと mail edge と drawer は `NOT CONFIGURED` になります。tmux telemetry は残るため、mail 設定不足と dashboard 全停止を区別できます。
-
-![edge click 後の mail drawer — 二者間の subject / importance / 時刻 / 本文](img/network-edge-drawer.jpg)
 
 ### 表示制御
 
@@ -286,11 +269,7 @@ SELECT mode では drag rectangle または node click で複数選択できま�
 
 EXIT / RESUME は二段確認し、60 ms 間隔で順次送信します。誤操作と service spike を避けるため、安全弁のない並列 request にはしません。
 
-![SELECT mode — 矩形 drag で13体を選択し、下部に EXIT / RESUME / REPLAY](img/network-select.jpg)
-
 ## DIGEST REPLAY
-
-![DIGEST REPLAY — 選択した11エージェントの event を時系列再生](img/digest-replay.jpg)
 
 選択 agent の mail、spawn、exit / retire、承認待ち event を時系列再生します。
 
@@ -310,7 +289,7 @@ TIME-TRAVEL ON は initial snapshot から node、edge、state を再構築し�
 
 ## NEW AGENT
 
-![NEW AGENT で設定済み Local Qwen の Model と dsh / Hermes の Harness を選ぶ](img/native-harness-picker.png)
+![Telemetry の NEW AGENT で DeepSeek と Local Qwen を選び、利用可能な dsh と Hermes を確認する](img/native-harness-selection.gif)
 
 `+ NEW AGENT` は identity、engine、directory、task を順に確認する launch manifest です。通常項目を一方向に並べ、parent / role / group / isolation は ADVANCED に畳むことで、standalone agent の起動を最短経路にしています。
 
@@ -341,15 +320,9 @@ server の provider / model / effort allow-list を catalog と validation の�
 <a id="native-models-and-harnesses"></a>
 ### DeepSeek / Local と dsh / Hermes
 
-設定済みの provider、Model、利用可能な Harness を順に選びます。GIF は SPAWN の手前までです。[Model / Harness の選択操作を見る](img/native-harness-selection.gif)。
-
-NEW AGENT の画像と GIF は、実際の catalog・科学者名・正規の肖像を使った Telemetry 同梱画面です。Claude / Codex / DeepSeek / Local models と dsh / Hermes の選択を起動前まで撮影し、作業ディレクトリと task は切り取っています。[cockpit の NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/usage.md)とは画面が異なります。以下の DECK / NETWORK は引き続き合成データの表示例です。いずれも資格の登録や全組合せの通し受け入れを示すものではありません。
-
-![DECK で DeepSeek と Local Qwen の dsh / Hermes agent を見分ける画面例](img/native-local-deck.png)
+設定済みの provider、Model、利用可能な Harness を順に選びます。録画は架空のカタログで SPAWN の手前までを示します。
 
 Local Qwen は六角形の中に Qwen のロゴを表示し、DeepSeek は接続先の badge を表示します。agent を比べるときは Harness も別に確認してください。
-
-![NETWORK のメダリオンで Local Qwen と DeepSeek を見分ける画面例](img/native-local-network.png)
 
 ### Directory
 

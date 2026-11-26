@@ -135,9 +135,14 @@ def test_both_readmes_route_to_guides_and_standalone_setup() -> None:
             assert needle in text, (name, needle)
         for needle in ("--dry-run", "agentstack-doctor", "agentstack-selftest", "/delegate", "http://127.0.0.1:8770/"):
             assert needle in _read(setup), (setup, needle)
-    for image in ("img/deck.jpg", "img/network.jpg", "img/new-agent.jpg"):
-        assert image in _read("docs/getting-started.md"), image
-        assert image in _read("docs/getting-started.en.md"), image
+    for setup, dashboard in (
+        ("docs/getting-started.md", "dashboard.md"),
+        ("docs/getting-started.en.md", "dashboard.en.md"),
+    ):
+        assert f"]({dashboard})" in _read(setup), (setup, dashboard)
+        guide = _read(f"docs/{dashboard}")
+        for image in ("images/deck_growing.png", "img/network.jpg", "img/native-harness-selection.gif"):
+            assert f"]({image})" in guide, (dashboard, image)
 
 
 def test_documentation_indexes_cover_the_actual_tree() -> None:

@@ -56,9 +56,7 @@ DECK opens first. **One card represents one agent**, so you can inspect who is d
 
 In the following image, the top counter and card area both show three agents. The counter is the total; each card shows an individual state.
 
-![Initial DECK state, with three agents shown as one card each](images/deck_start.png)
-
-The six screenshots on this page are real screens from an isolated demo environment. Every agent name, task, mail message, and transcript is fictional and does not represent real work.
+The screenshots on this page are real screens from an isolated demo environment. Every agent name, task, mail message, and transcript is fictional and does not represent real work.
 
 ### Reading a card from top to bottom
 
@@ -76,9 +74,9 @@ The six screenshots on this page are real screens from an isolated demo environm
 
 `NO LIVE SUMMARY` means no display summary is available; it does not classify the agent as waiting or stopped. Read the separate top-right state. Codex App registering also retains its existing work classification; this does not guarantee progress.
 
-The next image has grown to 12 cards, and cards such as Warm-Lovelace show `RX`. Comparing `ORD` and `RX` separates “assignment” from “the last thing received and its sender.”
+As the team grows, compare `ORD` on each card with `RX` to see the assignment and the last incoming message.
 
-![DECK with 12 agents and ORD and RX on several cards](images/deck_growing.png)
+![ORRERY Telemetry DECK showing each agent’s status, model, and task on a card](images/deck_growing.png)
 
 ### Separating header counters from card states
 
@@ -123,9 +121,7 @@ Reading usage sends one authenticated GET to Anthropic's usage endpoint and noth
 
 ### Do not miss human intervention
 
-In the next image, look at the `?` on Bright-Curie's card and the red border plus `APPROVAL` on Swift-Noether's card.
-
-![DECK waiting for intervention, with a question mark on Bright-Curie and red APPROVAL on Swift-Noether](images/deck_humanloop.png)
+![In DECK, a question mark marks a question and an APPROVAL badge with a red border marks an approval. The header counts both under NEED YOU](images/deck_humanloop.png)
 
 | Signal | Meaning | How to clear it |
 | --- | --- | --- |
@@ -176,8 +172,6 @@ In a normal completion flow, a child started by `/delegate` sends an ORRERY Mail
 
 Thus a completed child's card disappears from the normal DECK view, but this is not a failure. History `30d` displays `gone` / `retired` agents from the last 30 days and `all` displays every period. When a search comes up empty, the empty state names the range it searched and links to the next wider one.
 
-![DECK history 30d — FINISHED / GONE / RETIRED sections](img/deck-show-all.jpg)
-
 NETWORK overlays current runtime state with the selected time window. Completion or retirement alone does not hide a node immediately, but when last activity leaves the window, the child node and connected spawn / mail edges disappear. Absence from the current window alone does not mean task failure. Use NETWORK `ALL` for history and DECK history (`30d` / `all`) for an individual final state.
 
 ## Output / deliverables
@@ -201,11 +195,11 @@ A Codex App runtime has no tmux pane. The dashboard performs no terminal attach,
 
 ## NETWORK
 
+![Telemetry NETWORK showing agent nodes connected by lineage and Mail edges](img/network.jpg)
+
 NETWORK overlays “who spawned whom” and “who communicated” in one force graph. Read **nodes as agents and lines as relationships**.
 
-The initial state below has three nodes and `0 links · 0 spawn`, so there are no parent-child relationships or communications yet. Layout is adjusted under NETWORK in the drawer opened by `SETTINGS` at the right end of the header.
-
-![Initial NETWORK state with three nodes and no communication or spawn lines](images/net_start.png)
+Before agents exchange Mail or spawn children, each one appears on its own. Layout is adjusted under NETWORK in the drawer opened by `SETTINGS` at the right end of the header.
 
 ### Nodes
 
@@ -217,8 +211,6 @@ The initial state below has three nodes and `0 links · 0 spawn`, so there are n
 
 History in the detail panel contains transcript and a 24-hour event sparkline; Output contains project-scoped artifacts. ROLE ASSIGN saves or removes role / group annotations.
 
-![Node detail panel — CTX / STATE / History / ROLE ASSIGN / transcript](img/agent-detail.jpg)
-
 ### Edges and mail
 
 - spawn edge: parent-child lineage
@@ -229,17 +221,11 @@ History in the detail panel contains transcript and a 24-hour event sparkline; O
 - drawer contents: subject, importance, time, body
 - live messages use comet animation
 
-The next image shows 12 nodes with `6 links · 6 spawn`. Lineage-colored rings distinguish parents, children, and intermediates, while `1` on an edge means one communication for that pair.
+Lineage-colored rings distinguish agents in each tree, and the number on a Mail edge counts messages for that pair.
 
-![NETWORK with 12 nodes, parent-child spawn lines, and message-count-one lines](images/net_growing.png)
-
-As communication increases, the number on the same pair's edge rises. The next image shows `29 links · 9 spawn` and `2` or `3` near the center. These numbers are **message counts**, not node or child counts.
-
-![NETWORK with more communication and message counts two and three on edges](images/net_humanloop.png)
+The count on a pair’s edge rises as they exchange Mail.
 
 Without `AGENTSTACK_PROJECT_KEY` / `AGENTSTACK_VAULT`, mail edges and the drawer show `NOT CONFIGURED`. tmux telemetry remains, distinguishing missing mail configuration from a complete dashboard failure.
-
-![Mail drawer after an edge click — pairwise subject / importance / time / body](img/network-edge-drawer.jpg)
 
 ### Display controls
 
@@ -264,11 +250,7 @@ SELECT mode supports selecting several nodes by drag rectangle or node click.
 
 EXIT / RESUME require two-step confirmation and are sent sequentially at 60 ms intervals. They are not parallel requests without a safety valve, avoiding accidental operations and service spikes.
 
-![SELECT mode — 13 agents selected by rectangle, with EXIT / RESUME / REPLAY below](img/network-select.jpg)
-
 ## DIGEST REPLAY
-
-![DIGEST REPLAY — chronological events for 11 selected agents](img/digest-replay.jpg)
 
 Chronologically replays mail, spawn, exit / retire, and approval-wait events for selected agents.
 
@@ -288,7 +270,7 @@ The history range auto-fits to the oldest and newest events, widening ranges too
 
 ## NEW AGENT
 
-![Configured Local Qwen model and dsh / Hermes Harness choices in NEW AGENT](img/native-harness-picker.png)
+![Select DeepSeek and Local Qwen in Telemetry NEW AGENT and inspect the available dsh and Hermes harnesses](img/native-harness-selection.gif)
 
 `+ NEW AGENT` is a launch manifest that confirms identity, engine, directory, and task in order. Common fields form a one-way path; parent / role / group / isolation are folded into ADVANCED, creating the shortest path for a standalone agent.
 
@@ -319,15 +301,10 @@ This section describes the bundled Telemetry screen. Model / Harness uses the sa
 <a id="native-models-and-harnesses"></a>
 ### DeepSeek / Local with dsh / Hermes
 
-Choose a configured provider, its Model, and an available Harness. The selection GIF stops before SPAWN: [watch the Model / Harness selection](img/native-harness-selection.gif).
+Choose a configured provider, its Model, and an available Harness. The recording uses a fictional catalog and stops before SPAWN.
 
-The NEW AGENT image and GIF show the actual bundled Telemetry screen, real catalog, scientist names and official portraits. They show Claude / Codex / DeepSeek / Local models and dsh / Hermes selection before launching, with the working directory and task cropped out. The [cockpit NEW AGENT](https://github.com/gyroid-eth/orrery/blob/master/docs/en/usage.md) is a different screen. The DECK / NETWORK examples below still use synthetic data. These images do not demonstrate credential setup or end-to-end acceptance of every combination.
-
-![DECK examples for DeepSeek and Local Qwen with dsh and Hermes](img/native-local-deck.png)
 
 Local Qwen uses the Qwen logo inside a hexagon; DeepSeek uses its provider badge. Check Harness separately when comparing agents.
-
-![NETWORK medallions distinguish Local Qwen from DeepSeek](img/native-local-network.png)
 
 ### Directory
 

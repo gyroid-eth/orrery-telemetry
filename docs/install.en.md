@@ -320,13 +320,13 @@ The steps are the same on macOS and on WSL (inside Ubuntu).
    "$AGENTSTACK_CODEX_BIN" -C "$AGENTSTACK_PROJECT_KEY"
    ```
 
-   Do not use a bare `codex`: on WSL the first `codex` on PATH is often the Windows install, which cannot run inside Ubuntu. `/hooks` lists the hooks that need review, for example `⚠ 6 hooks need review`.
+   Do not use a bare `codex`: on WSL the first `codex` on PATH is often the Windows install, which cannot run inside Ubuntu. `/hooks` lists the hooks that need review, with the review count for the installed plugin.
 
-   ![/hooks before approval](images/codex-hooks-review.png)
+   ![The /hooks panel before approval, shown in an earlier CLI version. Hooks awaiting approval are listed for review](images/codex-hooks-review.png)
 
-3. Check them, then approve (`t` trusts all). SessionStart, UserPromptSubmit and PostToolUse become Active.
+3. Check them, then approve (`t` trusts all). The approved hooks appear as active.
 
-   ![/hooks after approval](images/codex-hooks-after-trust.png)
+   ![The /hooks panel after approval, shown in an earlier CLI version. Approved hooks appear active](images/codex-hooks-after-trust.png)
 
 4. Quit that `codex`. The approval applies to Codex processes started afterwards, not to Codex children already running.
 

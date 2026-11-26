@@ -6,8 +6,6 @@
 
 ORRERY Telemetry は Obsidian が無くても使えます。このページは、Obsidian の vault を作業場所にすると便利になる、使い方の 1 つを紹介します。
 
-![左に Obsidian、右に ORRERY から独立させた 1 agent の窓。窓の agent に /adddone と打つと、Obsidian の Daily Note の「今日完了した」に完了したタスクが増える](img/obsidian-daily.gif)
-
 ## 何が便利か
 
 - **agent の成果物が、そのまま Markdown のノートになる**

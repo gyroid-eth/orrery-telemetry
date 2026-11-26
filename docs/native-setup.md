@@ -177,10 +177,6 @@ agentが合わせるのは、manifestからdsh/Hermesの設定を指す2箇所�
    Localを複数残す場合は、[複数接続の設定](configuration.md#native-connections)で別IDとserver名を付け、workstation / EPYCなどの表示を見て選びます。同じmodel IDでも接続先は別です。
 3. 新しい作業フォルダーを指定し、まず短い依頼を1つ送ります。modelの応答を確認してから、[Mailの通し確認](getting-started.md#5-しりとりで通しの確認をする)へ進みます。
 
-![WSLの実TelemetryでLocal modelsとHermesを選択した画面](img/wsl-native-harness-picker.png)
-
-[選択の流れをGIFで見る](img/wsl-native-harness-selection.gif)（10.8秒）：Claude、Codex、DeepSeek、Local modelsと、dsh/Hermesの選択を示します。Ubuntu WSLの実backendをMacのChromeから表示した画面です。科学者の肖像や候補は実画面のもので、起動ボタンは押していません。キー保存やAPI応答の成功を示す録画ではありません。
-
 画像のLocalはStrata上のQwenモデルを設定した例です。内部IDの`strata`は接続先ホストの制限ではありません。別のサーバーには、手順1のAPI・HTTPS・キー参照の条件を確認してから接続します。
 
 候補が見えること、応答が返ること、道具・Mail・終了・会話再開が使えることは、それぞれ別の確認です。[対応範囲](managed-catalog.md#現在の制限)も参照してください。
