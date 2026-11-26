@@ -441,7 +441,9 @@ def test_task_file_is_embedded_literally_for_both_launch_paths(
         assert "ARGV_TASK\034600\034" in injected, "the first prompt file must be private"
     assert "IGNORED POSITIONAL TASK" not in injected
     assert "登録は親が完了済み・儀式不要です" in injected
-    assert "ensure_project・register_agent・fetch_inbox は実行しないでください" in injected
+    assert "ensure_project・register_agent は実行しないでください" in injected
+    assert "起動時の確認として fetch_inbox を実行する必要はありません" in injected
+    assert "本文を読む必要がある場合は fetch_inbox を使ってください" in injected
     assert f"あなたは {child_name}（親: ParentAgent）" in injected
     assert "現在時刻:" in injected
     assert "project_key は /shared/project" in injected
