@@ -2,6 +2,8 @@
 
 Phase 1 of upstream Issue #395 exposes exactly orrery_status, orrery_list_agents and orrery_get_agent. There is no spawning, messaging, OAuth or service installation. The regular installer, service startup configuration, UI, hooks and Mail operations are unchanged. Dashboard calls are limited to GET /api/version, fresh GET /api/agents, and legacy GET /api/agents?days=30.
 
+For instructions to a test fresh Mail instance, explicitly enable the separate [phase-two adapter](FRESH_MESSAGES.en.md). The entrypoints documented in this README remain read-only.
+
 ## Compatibility and exposed scope
 
 Python 3.11+ and explicit ORRERY_MCP_MODE=legacy or fresh are required. Accepted Dashboard API generations are exactly 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 52, 53 for legacy and 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 52, 53 for fresh. Both generation and payload shape are checked. Generations never determine mode: legacy must omit runtime_mode; fresh must report runtime_mode=fresh with instance identity and capabilities. Unknown generations, global and mismatches fail closed before reading a roster or opening the listener.

@@ -2,6 +2,8 @@
 
 upstream Issue #395 の第1段階です。公開ツールは `orrery_status`、`orrery_list_agents`、`orrery_get_agent` の3個だけです。spawn・追加指示・Mail送信・OAuth・常駐化は実装しません。通常のinstaller・サービスの起動設定・UI・hook・Mail操作は変えません。Dashboardの呼び出しは `GET /api/version`、freshの `GET /api/agents`、legacyの `GET /api/agents?days=30` だけです。
 
+試験用fresh Mailへの追加指示は、別入口の[第2段階アダプター](FRESH_MESSAGES.md)で明示的に有効化できます。このREADMEの入口は引き続き読み取り専用です。
+
 ## 互換性と公開範囲
 
 Python 3.11以上と、明示した `ORRERY_MCP_MODE=legacy` または `fresh` が必要です。受け付けるDashboard API世代はlegacyが37・38・39・40・41・42・43・44・45・46・47・48・49・50・52・53、freshが34・35・36・37・38・39・40・41・42・43・44・45・46・47・48・49・50・52・53です。世代番号と応答の形を両方検証します。方式は番号から推測せず、legacyはruntime_modeのない契約、freshはruntime_mode=freshとinstance/capabilityの契約を必要とします。未知の世代、global、方式不一致は一覧を読む前、または待受を開く前に拒否します。
