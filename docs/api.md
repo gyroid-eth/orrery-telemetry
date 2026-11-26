@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":56}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":57}
 ```
 
 version の解決順は [インストール](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md#version)を参照してください。
@@ -363,7 +363,7 @@ API 41 から利用できます。前後の空白を除いた `q` をフォル�
 
 ## GET `/api/agents`
 
-`last_active` は最後に記録された活動の時刻です。legacy の tmux 行では、tmux session と Mail の活動時刻のうち新しい方を返します。`last_active_rel` はその相対表示です。現在の作業状態は `running` と nullable な `act_state` で確認できます。稼働中の DECK カードは `act_state=work` を所要時間やコンテキスト使用率が無い場合も表示します。長い処理の間に最終イベント時刻が古いままでも、作業状態は別に表示されます。
+`last_active` は最後に記録された活動の時刻です。API 57 から、稼働中の legacy tmux agent では tmux session、Mail の活動、紐づけを確認済みの会話記録のうち最も新しい時刻を返します。Claude・Codex・dsh・Antigravity は履歴ファイルの更新時刻、Hermes は該当する SQLite session の最後のメッセージ時刻を使います。会話記録の時刻を確認できないときは tmux と Mail の時刻を使います。`last_active_rel` はその相対表示です。現在の作業状態は `running` と nullable な `act_state` で確認できます。稼働中の DECK カードは `act_state=work` を所要時間やコンテキスト使用率が無い場合も表示します。長い処理の間に記録が書き込まれないと、最終活動時刻は進まない場合があります。
 
 ### エージェントの実行情報（legacy、API 41）
 

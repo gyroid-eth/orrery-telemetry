@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":56}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":57}
 ```
 
 See [Installation](https://github.com/gyroid-eth/orrery/blob/master/docs/en/telemetry-install.md#version) for version resolution order.
@@ -364,7 +364,7 @@ The optional `under` parameter sets the starting directory. It accepts an existi
 
 ## GET `/api/agents`
 
-`last_active` is the time of the last recorded activity. For legacy tmux rows it is the later of the tmux session and Mail activity timestamps. `last_active_rel` gives the relative age. Use `running` and nullable `act_state` to read the current state. Running DECK cards show `act_state=work` even when elapsed time and context usage are unavailable. The last event can stay old during a long operation while the card still shows the current state.
+`last_active` is the time of the last recorded activity. From API 57, running legacy tmux agents use the newest of the tmux session, Mail activity, and verified conversation timestamps. Claude, Codex, dsh and Antigravity use the bound transcript file's modification time. Hermes uses the latest recorded message in the bound SQLite session. Without a verified, readable timestamp, the tmux and Mail timestamps still apply. `last_active_rel` gives the relative age. Use `running` and nullable `act_state` to read the current state. Running DECK cards show `act_state=work` even when elapsed time and context usage are unavailable. The last event can stay old while a long operation writes no record.
 
 ### Agent runtime details (legacy, API 41)
 
