@@ -190,6 +190,12 @@ Instruction `data` follows the shared [status schema](../bin/lib/instruction_con
 
 In API 12 distributions, bundled ORRERY Mail's MCP `health_check` returns `server_instance_id`, the same persistent UUID as management-socket inspect. It is neither a secret nor authentication. Daemons compare both transports with the operator-pinned connection UUID, refusing older builds without the field or mismatches. Existing `status`, `environment`, `http_host`, and `http_port` fields remain. This adds no dashboard HTTP route. See [daemon bindings and notifications](daemon-agents.en.md).
 
+### Show files over a direct Mail connection
+
+Sessions connected directly to loopback ORRERY Mail can discover `show_files` via MCP `tools/list`. Pass one to eight absolute paths inside the working folder as `paths`. A direct connection has no working-folder information, so the tool rejects relative paths with a reason. The response's `files` gives existence, kind, and size metadata. `present` lists the paths of the regular files and images it found.
+
+The cockpit and the phone turn the recorded call into file chips. The preview checks the working folder, file kind, and size when opened. See the [Codex App tool contract](codex-app.en.md#agent-usage) for how bound proxies handle relative paths.
+
 ## GET `/api/quotas` — 任意のDeepSeek残高（API 21）
 
 dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える。

@@ -25,7 +25,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 FULL_GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 EXPECTED_AUTHORIZATION_FIXTURE_SHA256 = (
-    "6609e7b2c6816c039ab55432de3bda15ad7c491bad5fb5764b9ae77a2aeda607"
+    "9723a4e8c3a4244bdfb505085dd0934c4da50036ee788ec6547b8f74a0675358"
 )
 
 EXPECTED_BASELINES = {
@@ -1562,6 +1562,7 @@ def _assert_authorization_fixture(
         artifact=artifact,
     )
     expected_names = set(compatibility.get("compatibility_union", []))
+    expected_names.update(compatibility.get("direct_local_published", []))
     tools = fixture.get("tools")
     if not isinstance(tools, dict) or set(tools) != expected_names:
         raise SystemExit(
@@ -1572,7 +1573,7 @@ def _assert_authorization_fixture(
     if fixture.get("default_principal_candidate") != "local-single-principal":
         raise SystemExit(f"{artifact} authorization default principal changed")
     if fixture.get("rule_status") != (
-        "current_loopback_retire_unretire_boundary_other_rules_prospective_non_binding"
+        "current_loopback_retire_unretire_show_files_boundary_other_rules_prospective_non_binding"
     ):
         raise SystemExit(f"{artifact} authorization rule status changed")
     if fixture.get("default_policy") != {
@@ -1957,6 +1958,7 @@ def _assert_expected_divergences_manifest(
         artifact=artifact,
     )
     compatibility_names = compatibility.get("compatibility_union")
+    direct_tools = compatibility.get("direct_local_published")
     live_tool_records = live_tools.get("tools")
     if (
         compatibility.get("contract_version") != 1
@@ -1973,6 +1975,9 @@ def _assert_expected_divergences_manifest(
         raise SystemExit(f"{artifact} live tool fixture has invalid records")
     if len(set(compatibility_names)) != len(compatibility_names):
         raise SystemExit(f"{artifact} compatibility fixture has duplicate tools")
+    if direct_tools != ["show_files"] or set(direct_tools) & set(compatibility_names):
+        raise SystemExit(f"{artifact} unexpected direct local tools")
+    published_names = sorted(compatibility_names + direct_tools)
     live_by_name = {tool["name"]: tool for tool in live_tool_records}
     if len(live_by_name) != len(live_tool_records):
         raise SystemExit(f"{artifact} live tool fixture has duplicate tools")
@@ -1989,14 +1994,14 @@ def _assert_expected_divergences_manifest(
         "tool_names": sorted(live_by_name),
     }
     expected_core_topology = {
-        "tool_count": 25,
+        "tool_count": len(published_names),
         "resource_count": 0,
         "resource_names": [],
         "resource_template_count": 0,
         "resource_template_uris": [],
         "prompt_count": 0,
         "prompt_names": [],
-        "tool_names": sorted(compatibility_names),
+        "tool_names": published_names,
     }
     if (
         topology_entry["category"] != "server_topology"
@@ -2015,7 +2020,7 @@ def _assert_expected_divergences_manifest(
             "prompt_count": 0,
         },
         "core": {
-            "tool_count": 25,
+            "tool_count": len(published_names),
             "resource_count": 0,
             "resource_template_count": 0,
             "prompt_count": 0,

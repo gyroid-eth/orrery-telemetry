@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from agentstack_mail.contract import COMPATIBILITY_TOOLS
+from agentstack_mail.contract import COMPATIBILITY_TOOLS, PUBLISHED_TOOLS
 from differential_source import (
     CORE_NAMESPACE,
     LIVE_NAMESPACE,
@@ -542,7 +542,7 @@ def _assert_raw_integrity(
     ]
     assert output["server"]["prompt_names"] == topology["prompt_names"]
     if namespace == CORE_NAMESPACE:
-        assert frozenset(output["server"]["tool_names"]) == COMPATIBILITY_TOOLS
+        assert frozenset(output["server"]["tool_names"]) == PUBLISHED_TOOLS
 
     checkpoints = output["checkpoints"]
     expected_events = _EXPECTED_EVENTS.get(scenario)

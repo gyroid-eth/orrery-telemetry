@@ -23,6 +23,9 @@ surface が獲得したもの（同じ fixture の `post_cutover_published` を�
 足したものです。Permission deny entry、negative instruction、Codex
 Bridge-local の operation は source-extraction の root にはなりません。
 
+標準の loopback MCP server は、ファイルの chip を表示する `show_files` も公開します。
+同じ fixture の `direct_local_published` に含まれます。[直接接続での使い方](api.md#mail-に直接つないでファイルを表示する)を参照してください。
+
 実装は次の順で進めました。
 
 1. provenance、live tool schema、caller-derived tool contract を freeze する。
@@ -56,7 +59,7 @@ ownership によって決まります。
 core の実装は、live の data/archive/tool-body の境界をそのまま renamed
 package へ copy し、fail-closed な FastMCP subclass を通して contract が
 名指す versioned tool だけを厳密に publish します。MCP resource と
-compatibility 対象外の 16 個の tool は publish されません。それらの本体は、
+compatibility 対象外の upstream tool は publish されません。それらの本体は、
 differential な作業で pruning してもマクロや storage の依存を壊さないと
 証明できるまで、internal only のままです。
 

@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 from agentstack_mail.app import build_mcp_server
-from agentstack_mail.contract import COMPATIBILITY_TOOLS
+from agentstack_mail.contract import PUBLISHED_TOOLS
 from agentstack_mail.tool_descriptions import COMPACT_TOOL_DESCRIPTIONS
 
 # Frozen by live-tools-list.json (test_actual_tool_schemas_match_the_frozen
@@ -35,13 +35,13 @@ def _dump_tools() -> list[dict[str, Any]]:
 
 
 def test_compact_table_covers_exactly_the_replaceable_tools() -> None:
-    replaceable = COMPATIBILITY_TOOLS - FROZEN_DESCRIPTION_TOOLS
+    replaceable = PUBLISHED_TOOLS - FROZEN_DESCRIPTION_TOOLS
     assert set(COMPACT_TOOL_DESCRIPTIONS) == replaceable
 
 
 def test_published_descriptions_come_from_the_compact_table() -> None:
     published = {t["name"]: t.get("description", "") for t in _dump_tools()}
-    assert set(published) == COMPATIBILITY_TOOLS
+    assert set(published) == PUBLISHED_TOOLS
     for name, description in published.items():
         if name in FROZEN_DESCRIPTION_TOOLS:
             continue

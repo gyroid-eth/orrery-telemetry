@@ -84,7 +84,9 @@
     "release_reservations",
     "renew_reservations",
     "reserve_files",
-    "runtime_status",
+    "runtime_status"
+  ],
+  "direct_local_published": [
     "show_files"
   ],
   "non_compatibility_upstream": [

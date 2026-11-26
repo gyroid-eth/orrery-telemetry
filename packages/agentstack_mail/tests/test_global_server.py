@@ -823,7 +823,7 @@ def test_invalid_explicit_config_is_rejected_without_fallback(
 
 
 def test_default_cli_keeps_real_legacy_tools_database_and_management(server):
-    from agentstack_mail.contract import COMPATIBILITY_TOOLS
+    from agentstack_mail.contract import PUBLISHED_TOOLS
 
     root = server["root"] / "legacy"
     root.mkdir(mode=0o700)
@@ -873,7 +873,7 @@ def test_default_cli_keeps_real_legacy_tools_database_and_management(server):
                 time.sleep(0.1)
         assert {
             tool.name for tool in asyncio.run(invoke(endpoint, "tools"))
-        } == COMPATIBILITY_TOOLS
+        } == PUBLISHED_TOOLS
         call(old, "ensure_project", human_key="/fixture/legacy")
         token = "legacy-owner-token-00001"
         registered = call(

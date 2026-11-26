@@ -1,4 +1,4 @@
-"""show_files: a local proxy tool that names files for the cockpit's History.
+"""Shared path checks for naming files in the cockpit's History.
 
 The recorded call is what the cockpit turns into preview chips, under its own
 checks (the working folder, the kind and the size). The proxy only gives the
@@ -11,6 +11,7 @@ example a Codex App snapshot). The proxy's own cwd is never used: a plugin
 proxy runs in its cache folder, where every relative path would look missing.
 Without a base, relative paths are not checked here (`checked: false`); with
 one, a path outside it is reported as such and not even lstat'ed.
+The direct Mail server has no session working folder and requires absolute paths.
 """
 from __future__ import annotations
 
@@ -27,6 +28,12 @@ DESCRIPTION = (
     "folder, relative or absolute. Nothing is sent or written, and the file is "
     "not read into your context."
 )
+DIRECT_DESCRIPTION = (
+    "Show files or images as preview chips in the ORRERY cockpit's History. "
+    "Pass 1 to 8 absolute paths inside your working folder. A direct Mail "
+    "connection has no working folder for resolving relative paths. "
+    "This checks file metadata without reading or sending the contents."
+)
 INPUT_SCHEMA = {
     'type': 'object',
     'properties': {'paths': {'type': 'array', 'minItems': 1, 'maxItems': 8,
@@ -35,8 +42,9 @@ INPUT_SCHEMA = {
     'additionalProperties': False,
 }
 IMAGE_SUFFIXES = frozenset({'.png', '.jpg', '.jpeg', '.gif', '.webp'})
-NOTE = ("Each path is shown as a chip in the cockpit's History; the cockpit checks it against your "
-        "working folder, kind and size when it is opened. checked:false means this connection does "
+PREVIEW_NOTE = ("Each path is shown as a chip in the cockpit's History; the cockpit checks it against your "
+                "working folder, kind and size when it is opened.")
+NOTE = (PREVIEW_NOTE + " checked:false means this connection does "
         "not know your working folder, so a relative path was not checked here; an absolute path is.")
 
 
@@ -44,7 +52,7 @@ def _inside(path, root):
     return path == root or path.startswith(root.rstrip('/') + '/')
 
 
-def result(values, base=None):
+def result(values, base=None, *, absolute_only=False):
     """Raise ValueError for an argument that is not 1 to 8 plain paths."""
     if not isinstance(values, list) or not 1 <= len(values) <= 8:
         raise ValueError('paths must be a list of 1 to 8 paths')
@@ -52,6 +60,8 @@ def result(values, base=None):
         if (not isinstance(value, str) or not value or len(value) > 4096
                 or re.search(r'[\x00-\x1f\x7f]', value) or '://' in value or value.startswith('~')):
             raise ValueError('paths must be plain file paths (no URL, ~ or control character)')
+        if absolute_only and not os.path.isabs(value):
+            raise ValueError('show_files requires absolute paths on a direct Mail connection')
     root = os.path.normpath(base) if isinstance(base, str) and os.path.isabs(base) else None
     roots = {root, os.path.realpath(root)} if root else set()
     files = []
@@ -75,4 +85,4 @@ def result(values, base=None):
         kind = ('image' if os.path.splitext(target)[1].lower() in IMAGE_SUFFIXES else 'file') if regular else 'other'
         files.append({'path': value, 'exists': True, 'kind': kind, 'bytes': info.st_size if regular else None})
     return {'present': [item['path'] for item in files if item.get('kind') in {'file', 'image'}],
-            'files': files, 'note': NOTE}
+            'files': files, 'note': PREVIEW_NOTE if absolute_only else NOTE}

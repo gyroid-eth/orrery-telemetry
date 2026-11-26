@@ -1,10 +1,10 @@
 """Transport-independent authorization catalog and shadow observations.
 
 The catalog describes the published compatibility surface without
-adding credentials to tool schemas. The retire and unretire rules record the
-current loopback local-process boundary; other rules remain prospective and
-non-binding. Shadow observations are diagnostic only: they never authorize or
-deny the wrapped operation.
+adding credentials to tool schemas. The retire, unretire and show_files
+rules record the current loopback local-process boundary. Other rules remain
+prospective and non-binding. Shadow observations never authorize or deny the
+wrapped operation.
 """
 
 from __future__ import annotations
@@ -18,14 +18,14 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
-from .contract import COMPATIBILITY_TOOLS
+from .contract import PUBLISHED_TOOLS
 
 logger = logging.getLogger(__name__)
 
 LOCAL_SINGLE_PRINCIPAL = "local-single-principal"
 AUTHORIZATION_FIXTURE = "authorization-tools-v1.json"
 AUTHORIZATION_FIXTURE_SHA256 = (
-    "6609e7b2c6816c039ab55432de3bda15ad7c491bad5fb5764b9ae77a2aeda607"
+    "9723a4e8c3a4244bdfb505085dd0934c4da50036ee788ec6547b8f74a0675358"
 )
 
 
@@ -223,6 +223,13 @@ AUTHORIZATION_CATALOG: dict[str, dict[str, object]] = {
         required_arguments=("project_key", "agent_name", "policy"),
         authorization_rule="agent owner or project administrator",
     ),
+    "show_files": _entry(
+        subject=LOCAL_SINGLE_PRINCIPAL,
+        action="check_local_file_metadata",
+        resource="local:files:{paths}",
+        required_arguments=("paths",),
+        authorization_rule="loopback local caller may check metadata for absolute paths",
+    ),
     "summarize_thread": _entry(
         subject=LOCAL_SINGLE_PRINCIPAL,
         action="summarize_project_thread",
@@ -320,7 +327,7 @@ def redact_tool_arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def authorization_catalog_is_complete() -> bool:
-    return frozenset(AUTHORIZATION_CATALOG) == COMPATIBILITY_TOOLS
+    return frozenset(AUTHORIZATION_CATALOG) == PUBLISHED_TOOLS
 
 
 def catalog_record_shape() -> frozenset[str]:
@@ -351,7 +358,7 @@ def assert_authorization_catalog_boundary(
     published_tool_names: Iterable[str],
 ) -> None:
     """Fail closed if source, fixture, or published tool names diverge."""
-    expected_names = set(COMPATIBILITY_TOOLS)
+    expected_names = set(PUBLISHED_TOOLS)
     catalog_names = set(AUTHORIZATION_CATALOG)
     published_names = set(published_tool_names)
     if catalog_names != expected_names or published_names != expected_names:
@@ -388,7 +395,7 @@ def assert_authorization_catalog_boundary(
         },
         "default_principal_candidate": LOCAL_SINGLE_PRINCIPAL,
         "rule_status": (
-            "current_loopback_retire_unretire_boundary_other_rules_prospective_non_binding"
+            "current_loopback_retire_unretire_show_files_boundary_other_rules_prospective_non_binding"
         ),
         "tools": catalog_as_plain_data(),
     }:

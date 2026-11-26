@@ -189,6 +189,12 @@ API 17 は global dashboard の返信表示と次の認可済み読取 route を
 
 API 12の配布物では、同梱 ORRERY Mail の MCP `health_check` が `server_instance_id` を返します。これは管理 socket の inspect と同じ永続 UUID で、秘密や認証の代わりにはなりません。常駐 daemon は両方の transport の UUID と確認済みの connection pin を照合し、field の無い旧 build や不一致では停止します。既存の `status` / `environment` / `http_host` / `http_port` は維持します。これは dashboard の新しい HTTP route ではありません。[専用 binding と通知](daemon-agents.md)を参照してください。
 
+### Mail に直接つないでファイルを表示する
+
+loopback の ORRERY Mail に直接つないだセッションは、MCP の `tools/list` で `show_files` を確認できます。`paths` に作業フォルダー内の絶対パスを1〜8個渡します。直接接続には作業フォルダーの情報がないため、相対パスは理由付きで拒否します。応答の `files` はファイルの有無・種類・サイズを示し、`present` には確認できた通常ファイルと画像のパスが入ります。
+
+cockpit とスマホは記録上の呼び出しをファイルの chip にします。開くときは表示側が作業フォルダー・種類・サイズを検査します。束縛済み proxy での相対パスの扱いは [Codex App のツール契約](codex-app.md#agent-の利用手順)を参照してください。
+
 ## GET `/api/quotas` — 任意のDeepSeek残高（API 21）
 
 dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える。
