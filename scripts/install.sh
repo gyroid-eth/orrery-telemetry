@@ -2702,6 +2702,7 @@ RUNTIME_CLIENT_CONTRACT_SOURCES=(
   "$REPO_ROOT/bin/lib/legacy-tmux-consumer.sh"
   "$REPO_ROOT/bin/lib/runtime_tmux_target_contract.json"
   "$REPO_ROOT/dashboard/terminal_state.py"
+  "$REPO_ROOT/dashboard/question_screen.py"
   "$REPO_ROOT/bin/lib/runtime_tmux_contract.json"
   "$REPO_ROOT/packages/agentstack_mail/fixtures/global-runtime-observation.json"
   "$REPO_ROOT/packages/agentstack_mail/fixtures/global-client-4c.json"

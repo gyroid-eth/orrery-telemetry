@@ -1035,3 +1035,9 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
   .conversation-steps *,.conversation-steps *::before{animation:none!important;transition:none!important;filter:none!important}
   .conversation-step-check{stroke-dashoffset:0!important}
 }
+.reader-question{max-height:min(320px,48dvh);overflow:auto;padding:.65rem .8rem;border:1px solid var(--hair);border-radius:.65rem}
+.reader-question[hidden]{display:none}
+.reader-question p{margin:.35rem 0 .6rem;overflow-wrap:anywhere}
+.reader-question-choices{display:grid;gap:.35rem}
+.reader-question-choice{text-align:start;white-space:normal}
+.reader-question-choice[aria-pressed=true]{color:var(--amber);border-color:var(--amber)}
