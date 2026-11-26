@@ -4,7 +4,7 @@
 
 ## 専用identityをoperatorが一度作る
 
-connectionは既存 `orrery-mail-connection-v1` のowner-private copy。UUIDは[enrollment inspect/pin](persistent-agents.md)でoperatorが確認した値。literal loopback HTTPのみ、http_bearer_modeはdisabledのみ。HTTP health_check.server_instance_id対応の新Mail buildが必要で、古いbuildは拒否する。環境のcredentialや別URLへfallbackしない。
+connectionは既存 `orrery-mail-connection-v1` のowner-private copy。UUIDは[enrollment inspect/pin](https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md)でoperatorが確認した値。literal loopback HTTPのみ、http_bearer_modeはdisabledのみ。HTTP health_check.server_instance_id対応の新Mail buildが必要で、古いbuildは拒否する。環境のcredentialや別URLへfallbackしない。
 
 ```bash
 <dev-python> <helper-release>/bin/agentstack-daemon create \

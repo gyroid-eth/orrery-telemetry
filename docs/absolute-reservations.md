@@ -6,7 +6,7 @@
 
 共通 normalizer と明示した proxy/hook/CLI adapter を提供します。候補予約の唯一の server は [S2c の SQLite runtime](global-reservations.md)です。PR2 の in-memory ReservationServer・PersistentReservations の copy/flush・reservation_activity の probe/collector は削除しました。既定の Mail・proxy・hook は旧 mode のままで、activation=false。明示した fixture transport でだけ候補 adapter を接続します。
 
-既定の bound proxy も、managed `workspace-v1` guard と一致する物理絶対 path で取得・更新・解放できます。これは下記の候補 normalizer の有効化とは別です。既定 proxy は相対 path / glob を絶対化せずそのまま渡します。[共通 proxy の契約](codex-app.md#agent-の利用手順)を参照してください。
+既定の bound proxy も、managed `workspace-v1` guard と一致する物理絶対 path で取得・更新・解放できます。これは下記の候補 normalizer の有効化とは別です。既定 proxy は相対 path / glob を絶対化せずそのまま渡します。[共通 proxy の契約](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md#agent-の利用手順)を参照してください。
 
 ## 同じ正規化
 

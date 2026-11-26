@@ -6,7 +6,7 @@ ones that cause real damage when skipped, and you should not have to follow a
 link to learn them.
 
 **Approvals belong to the human.** Follow the single
-[consent contract](docs/instruction-migration.en.md#consent). Use
+[consent contract](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#consent). Use
 `--assume-yes` only when the user explicitly chose it. Without explicit approval, non-interactive installs
 skip approval steps and can report success while skills remain unavailable;
 hand the terminal back to the user for those steps.

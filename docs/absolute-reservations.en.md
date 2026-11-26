@@ -6,7 +6,7 @@
 
 Shared normalization and explicit proxy/hook/CLI adapters remain. The only candidate reservation server is the [S2c SQLite runtime](global-reservations.en.md). PR2's in-memory ReservationServer, PersistentReservations copy/flush and reservation_activity probe/collector are removed. Default Mail/proxy/hooks remain legacy with activation=false. Candidate adapters require explicit fixture transport injection.
 
-The default bound proxy also supports acquiring, renewing, and releasing physical absolute paths matching the managed `workspace-v1` guard. This is separate from activating the candidate normalizer below. The default proxy forwards relative paths and globs unchanged without making them absolute. See [the shared proxy contract](codex-app.en.md#agent-usage).
+The default bound proxy also supports acquiring, renewing, and releasing physical absolute paths matching the managed `workspace-v1` guard. This is separate from activating the candidate normalizer below. The default proxy forwards relative paths and globs unchanged without making them absolute. See [the shared proxy contract](https://github.com/gyroid-eth/orrery/blob/master/docs/en/codex-app.md#agent-usage).
 
 ## Shared normalization
 

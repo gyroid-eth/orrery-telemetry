@@ -506,7 +506,7 @@ if [ "$MAIL_SERVER_ANSWERING" = 1 ]; then
             echo "ERROR: ${SHELL_REGISTRATION_ERROR}。identity split を避けるため停止しました。別名を生成・採用せず、この不一致を operator に報告してください。"
         elif [ "$SHELL_REGISTRATION_REASON" = "credential-unavailable" ]; then
             echo "あなたは「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。local credential がありません。"
-            echo "このsessionからenrollを実行せず停止し、operatorに docs/persistent-agents.md#credential-unavailable のinspect→claim/recover確認を依頼してください。"
+            echo "このsessionからenrollを実行せず停止し、operatorに https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#credential-unavailable のinspect→claim/recover確認を依頼してください。"
         elif child_has_mcp_proxy_config "$RESOLVED_AGENT"; then
             echo "あなたは「${RESOLVED_AGENT}」です（既存 identity・source: ${RESOLVED_AGENT_SRC}）。child proxy 設定があります。"
             echo "提供 tool が bound proxy schema なら、その接続だけを使ってください。unbound/transport/auth failure は報告し、helper・raw registration・token 読取へ fallback しないでください。"

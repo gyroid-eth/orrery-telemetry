@@ -26,7 +26,7 @@ emit_diagnostic() {
   [[ "$http_status" =~ ^[0-9]+$ ]] && printf ' http_status=%s' "$http_status" >&2
   [[ "$rpc_code" =~ ^-?[0-9]+$ ]] && printf ' rpc_code=%s' "$rpc_code" >&2
   if [[ "$reason" == "credential-unavailable" ]]; then
-    printf ' docs=docs/persistent-agents.md#credential-unavailable operator_action=required' >&2
+    printf ' docs=https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#credential-unavailable operator_action=required' >&2
   fi
   printf '\n' >&2
 }

@@ -2,7 +2,7 @@
 
 > 日本語: [README.md](README.md)
 
-**Adding DeepSeek or Local for the first time?** Follow the [setup guide](https://github.com/gyroid-eth/orrery-telemetry/blob/master/docs/native-setup.en.md) for harness installation and key creation/storage. This document explains how to copy and connect the example settings.
+**Adding DeepSeek or Local for the first time?** Follow the [setup guide](https://github.com/gyroid-eth/orrery/blob/master/docs/en/native-setup.md) for harness installation and key creation/storage. This document explains how to copy and connect the example settings.
 
 Example version: 1. Installation creates examples, not active backend settings or credentials.
 Do not register an example manifest directly with the service.
@@ -43,7 +43,7 @@ B saves runtime transcription; destination selection, secret input, activation a
 ### Prepare a DeepSeek snapshot without an agent
 
 You can start with the installer's B snapshot without Claude Code or Codex.
-First complete [steps 2–4 of the setup guide](../../docs/native-setup.en.md#2-install-the-harnesses):
+First complete [steps 2–4 of the setup guide](https://github.com/gyroid-eth/orrery/blob/master/docs/en/native-setup.md#2-install-the-harnesses):
 install a harness and store your key in the OS. The copy below does not retrieve a key.
 
 Run this from the Telemetry source folder. Replace `SNAPSHOT` with the absolute path after
@@ -129,7 +129,7 @@ The capture's `copy.py` file contains the copy code shown above. Extra lines suc
 
 After validation, run this once yourself from the same source folder. Review any proposed
 changes and answer the yes/no prompts yourself. After `Install complete`, reload the browser
-and [try one agent](../../docs/native-setup.en.md#6-try-one-agent-from-new-agent).
+and [try one agent](https://github.com/gyroid-eth/orrery/blob/master/docs/en/native-setup.md#6-try-one-agent-from-new-agent).
 
 ```bash
 ./scripts/install.sh --keep-mail --managed-spawn-config "$CONFIG_DIR/manifest.example.json"
@@ -188,7 +188,7 @@ Discovery accepts HTTP/HTTPS. dsh still uses its existing DeepSeek Messages adap
 
 #### Existing fixed-model connections (compatibility)
 
-To keep an existing Local server and add another, follow [multiple connections](../../docs/configuration.en.md#native-connections). Add the same new connection ID to the manifest, dsh backend map, and Hermes profile map instead of replacing the existing connection.
+To keep an existing Local server and add another, follow [multiple connections](https://github.com/gyroid-eth/orrery/blob/master/docs/en/telemetry-configuration.md#native-connections). Add the same new connection ID to the manifest, dsh backend map, and Hermes profile map instead of replacing the existing connection.
 
 B's standard examples target DeepSeek. For Local, use backend ID `strata` and align these
 fields in the private copy with the same destination. Keep runtime references and copied-file

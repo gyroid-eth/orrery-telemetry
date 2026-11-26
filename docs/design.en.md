@@ -2,7 +2,7 @@
 
 > 日本語版: [design.md](design.md)
 
-[Previous: Dashboard](dashboard.en.md) · [Back to README](../README.en.md)
+[Previous: Dashboard](https://github.com/gyroid-eth/orrery/blob/master/docs/en/dashboard.md) · [Back to README](../README.en.md)
 
 This document puts into words the decisions behind how the ORRERY Telemetry dashboard looks and moves. It is the canonical record of the design language the maintainer has built up through the existing implementation, not a proposal for deciding one.
 
@@ -200,7 +200,7 @@ python3 scripts/dashboard_theme_manifest.py --write
 python3 scripts/dashboard_theme_manifest.py --check
 ```
 
-The mechanism is described under [Theme axis bridge in Dashboard](dashboard.en.md#theme-axis-bridge).
+The mechanism is described under [Theme axis bridge in Dashboard](https://github.com/gyroid-eth/orrery/blob/master/docs/en/dashboard.md#theme-axis-bridge).
 
 ## 10. How to add UI
 
@@ -228,6 +228,6 @@ Before a visual change goes into a PR, look with your own eyes:
 ## Related documents
 
 - Cockpit [DESIGN.md](https://github.com/gyroid-eth/orrery/blob/master/docs/DESIGN.md) (parent: concept and cockpit-side layout)
-- [Dashboard](dashboard.en.md) (features and operation)
-- [Configuration](configuration.en.md) (`AGENTSTACK_*` environment variables)
+- [Dashboard](https://github.com/gyroid-eth/orrery/blob/master/docs/en/dashboard.md) (features and operation)
+- [Configuration](https://github.com/gyroid-eth/orrery/blob/master/docs/en/telemetry-configuration.md) (`AGENTSTACK_*` environment variables)
 - [CONTRIBUTING.md](../CONTRIBUTING.md) (how to send a PR)

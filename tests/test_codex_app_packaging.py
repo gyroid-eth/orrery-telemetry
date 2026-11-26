@@ -7,6 +7,7 @@ import pytest
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -657,30 +658,31 @@ exit 0
         assert "Service mode: supervised background" in result.stdout
 
         socket_path = runtime_dir / "bridge.sock"
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not socket_path.exists():
-            time.sleep(0.05)
-        assert socket_path.is_socket()
-
         child_pidfile = runtime_dir / "bridge-child.pid"
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not child_pidfile.exists():
-            time.sleep(0.05)
-        first_child_pid = int(child_pidfile.read_text(encoding="utf-8").strip())
+
+        def wait_for_child(previous_pid=None):
+            # A new PID can be written while the old socket path still exists.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    pid = int(child_pidfile.read_text(encoding="utf-8").strip())
+                except (FileNotFoundError, ValueError):
+                    pid = None
+                if pid is not None and pid != previous_pid:
+                    try:
+                        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                            probe.settimeout(0.5)
+                            probe.connect(str(socket_path))
+                    except (FileNotFoundError, ConnectionRefusedError, TimeoutError):
+                        pass
+                    else:
+                        return pid
+                time.sleep(0.05)
+            pytest.fail(f"Bridge child did not accept connections (previous PID: {previous_pid})")
+
+        first_child_pid = wait_for_child()
         os.kill(first_child_pid, signal.SIGTERM)
-        deadline = time.monotonic() + 10
-        restarted_child_pid = first_child_pid
-        while time.monotonic() < deadline:
-            try:
-                restarted_child_pid = int(
-                    child_pidfile.read_text(encoding="utf-8").strip()
-                )
-            except (FileNotFoundError, ValueError):
-                pass
-            if restarted_child_pid != first_child_pid and socket_path.is_socket():
-                break
-            time.sleep(0.05)
-        assert restarted_child_pid != first_child_pid
+        wait_for_child(first_child_pid)
         os.kill(supervisor_pid, 0)
 
         doctor = subprocess.run(

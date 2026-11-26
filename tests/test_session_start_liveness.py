@@ -423,7 +423,7 @@ def test_exact_missing_credential_routes_to_operator_docs_without_model_enroll(
     )
     assert "shell registration did not complete" in output
     assert "local credential がありません" in output
-    assert "operatorに docs/persistent-agents.md#credential-unavailable" in output
+    assert "operatorに https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#credential-unavailable" in output
     assert "このsessionからenrollを実行せず停止" in output
     assert "agentstack-enroll" not in output
     assert "ensure_project ->" not in output

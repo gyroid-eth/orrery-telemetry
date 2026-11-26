@@ -2,7 +2,7 @@
 
 版は日付で付けます（`YYYY.MM.DD`）。同日の追加リリースには `.1` から始まる枝番を付けます（`YYYY.MM.DD.N`）。互換性の約束ではなく、**いつの配布物か**を言えるようにするためのものです。
 
-インストール済みの版は `GET /api/version`、または install root の `VERSION` で確認できます。同じ応答の `api` は日付とは別の、利用者（ORRERY cockpit など）との互換の世代で、利用者が頼る API を足す・意味を変えるときだけ上げ、その版の節に書きます（[docs/api.md](docs/api.md#get-apiversion)）。更新手順は [docs/install.md](docs/install.md) の Upgrade を参照してください。
+インストール済みの版は `GET /api/version`、または install root の `VERSION` で確認できます。同じ応答の `api` は日付とは別の、利用者（ORRERY cockpit など）との互換の世代で、利用者が頼る API を足す・意味を変えるときだけ上げ、その版の節に書きます（[docs/api.md](docs/api.md#get-apiversion)）。更新手順は [docs/install.md](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md) の Upgrade を参照してください。
 
 **この記録は 2026.09.16 から始めます。** それ以前は `VERSION` が `0.9.0` のまま更新されておらず、版から中身を知ることができませんでした。過去 6 週間分を遡って記載することはせず、ここを新しい基点とします。以前の版を使っていた場合も、上書き更新の手順は変わりません。
 
@@ -60,7 +60,7 @@ doctor は Codex の plugin の状態を、まず既定の手元の marketplace�
 
 ### 保管期限切れの Claude を operator の資格復旧後に DECK から再開
 
-保管期限切れのあとに operator が同じ Mail identity の資格を復旧済みなら、対応する Claude の会話を DECK から Mail 付きで再開できる。DECK は期限切れの記録より新しい復旧 receipt と現在の資格を照合する。[復旧手順](docs/persistent-agents.md#期限切れの-claude-を-deck-で再開する)
+保管期限切れのあとに operator が同じ Mail identity の資格を復旧済みなら、対応する Claude の会話を DECK から Mail 付きで再開できる。DECK は期限切れの記録より新しい復旧 receipt と現在の資格を照合する。[復旧手順](https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#期限切れの-claude-を-deck-で再開する)
 
 ### スマホ Reader の作業ステップを発言や Mail で区切る
 
@@ -94,7 +94,7 @@ DECK は所要時間や context が取れない作業状態にも `WORKING` を�
 ### 子 agent に computer use の権限を設定
 
 - `orrery-screen` を明示した子に、版を照合した Cua Driver の12道具を公開します。起動世代ごとの権限と応答上限を適用し、呼び出しの開始と終了を記録します。
-- API 42 で operator が Off / View / Control を実行中に変更できます。子の資格で読めるのは自分の起動の権限です。 [準備と確認手順](docs/computer-use.md)
+- API 42 で operator が Off / View / Control を実行中に変更できます。子の資格で読めるのは自分の起動の権限です。 [準備と確認手順](https://github.com/gyroid-eth/orrery/blob/master/docs/computer-use.md)
 
 ### NEW AGENT の作業フォルダ検索
 
@@ -131,7 +131,7 @@ legacy dashboard の `GET /api/agents` から、作業ディレクトリ、正�
 
 ### NEW AGENT と dsh・Hermes に installer の既定の道具を適用
 
-API 41 から、標準の `/api/spawn`（NEW AGENT）で `base` と `tools` を省略すると、Claude・Codex・dsh・Hermes の子に `AGENTSTACK_CHILD_DEFAULT_TOOLS` を適用します。CLI の dsh・Hermes も同じ設定を使います。明示指定を優先し、使えない既定の項目は通知して外します。resume は起動時に記録した選択を使います。[既定の道具](docs/delegation.md#installer-の既定の道具)
+API 41 から、標準の `/api/spawn`（NEW AGENT）で `base` と `tools` を省略すると、Claude・Codex・dsh・Hermes の子に `AGENTSTACK_CHILD_DEFAULT_TOOLS` を適用します。CLI の dsh・Hermes も同じ設定を使います。明示指定を優先し、使えない既定の項目は通知して外します。resume は起動時に記録した選択を使います。[既定の道具](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md#installer-の既定の道具)
 
 installer の共通の一覧に `;dsh=` などを付けると、provider ごとの一覧を設定できます。`--child-default-tools 'mcp:cua-driver;dsh='` は dsh 以外に `cua-driver` を渡します。
 
@@ -151,7 +151,7 @@ Claude Code が macOS の computer use 権限を求めている間は、ダッ�
 
 ### ORRERY で起動する Codex の Full Access 設定
 
-`AGENTSTACK_CODEX_SANDBOX=danger-full-access` を設定すると、legacy mode の Codex CLI の新規起動と dashboard からの再開で Full Access を使えます。既定は `workspace-write` です。設定は通常の再インストールで引き継ぎます。[設定ガイド](docs/configuration.md#launcher)
+`AGENTSTACK_CODEX_SANDBOX=danger-full-access` を設定すると、legacy mode の Codex CLI の新規起動と dashboard からの再開で Full Access を使えます。既定は `workspace-write` です。設定は通常の再インストールで引き継ぎます。[設定ガイド](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md#launcher)
 
 ### Legacy watcher が interactive persistent agent に Mail 通知を配送
 
@@ -171,7 +171,7 @@ Claude Code が macOS の computer use 権限を求めている間は、ダッ�
 
 ### NEW AGENT から親なしで立てた Codex は、普段の承認設定で起動・再開
 
-NEW AGENT で親を指定しない起動と、その記録があるセッションを dashboard から再開するときは `--ask-for-approval` を省略します。Codex は有効な設定の `approval_policy` か自身の既定値を使います。親付きの起動（delegate の子など）と、親なし起動の記録がないセッションの再開では、既定の `never` または明示した `AGENTSTACK_CODEX_CHILD_APPROVAL` を使います。詳しくは [delegation](docs/delegation.md) を参照してください。
+NEW AGENT で親を指定しない起動と、その記録があるセッションを dashboard から再開するときは `--ask-for-approval` を省略します。Codex は有効な設定の `approval_policy` か自身の既定値を使います。親付きの起動（delegate の子など）と、親なし起動の記録がないセッションの再開では、既定の `never` または明示した `AGENTSTACK_CODEX_CHILD_APPROVAL` を使います。詳しくは [delegation](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md) を参照してください。
 
 ### Mail 復旧後の Claude 再登録で現在の会話を記録
 
@@ -263,7 +263,7 @@ Context・状態・Roleだけの更新では該当ノードを描き直し、位
 
 デスクトップで有効にしたDemo modeと追加の伏せる語へスマホも追従します。画面を再読み込みせず表示だけを切り替え、入力中の文・添付画像とコピー・送信の元の値を保持します。状態を確認できないときは画面を隠して再確認を案内します。通常の閲覧だけを使う構成も維持します。
 
-デスクトップ側とreaderの両方の更新が必要です。内部の表示同期経路だけを追加し、外部向けTelemetry APIの世代は変更しません。手順は[スマホのDemo表示](docs/mobile.md#demo-modeのとき)を参照してください。
+デスクトップ側とreaderの両方の更新が必要です。内部の表示同期経路だけを追加し、外部向けTelemetry APIの世代は変更しません。手順は[スマホのDemo表示](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md#demo-modeのとき)を参照してください。
 
 ### スマホから複数の画像をまとめて確認して送れるようにした
 
@@ -375,7 +375,7 @@ Codexのstatuslineと登録値にある接尾語を、未知の名前も含め�
 
 assistantのMarkdownに太字・見出し・リスト・表・コードとCOPYを追加し、SHELLのコマンドと出力をまとめます。自動通知は短い活動の要約で出し、送信の仮の行はSHELLとも対応づけ、Dismissか期限で消せます。描画器は既存ソースを無改変で同梱し、同期を確かめる試験を付けました。360px・390pxで本文の面積80%以上を回帰試験にしています。API世代を38→39に上げ、mobileのsnapshotに作業中だけの任意の`work_disp`を追加しました。経過が無いときはWorkingだけを出し、画面を開いてからの時間は数えません。
 
-[スマホの使い方](docs/mobile.md)
+[スマホの使い方](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md)
 
 ReviewはConversationの上の小さな入力panelで送り先と端末末尾を確かめる形にし、送った後は会話と送信の吹き出しへ戻ります。受領と結果不明時の照会は残します。上の帯の操作は44px四方以上にし、mobileのtouchでiの開閉を試験しています。
 
@@ -399,7 +399,7 @@ Local の GLM を名簿・ネットワーク図で識別できるようにし、
 
 ### MCPの読み取り専用の範囲と一覧APIの説明を明確化
 
-MCPアダプターの[日本語ガイド](integrations/chatgpt_mcp/README.md)と[英語ガイド](integrations/chatgpt_mcp/README.en.md)に、freshの一覧取得は既存のMailの書き込み用transactionを通り、「読み取り専用」はMCPに書き込み操作を公開しない意味であることを補足しました。DB層で書き込みや書き込み用ロックが一切ないという保証ではありません。
+MCPアダプターの[日本語ガイド](https://github.com/gyroid-eth/orrery/blob/master/docs/chatgpt-mcp.md)と[英語ガイド](https://github.com/gyroid-eth/orrery/blob/master/docs/en/chatgpt-mcp.md)に、freshの一覧取得は既存のMailの書き込み用transactionを通り、「読み取り専用」はMCPに書き込み操作を公開しない意味であることを補足しました。DB層で書き込みや書き込み用ロックが一切ないという保証ではありません。
 
 一覧APIのdocstringも、API 37で追加したproject情報を含む現在の応答に合わせました。機能・API世代・認可・transactionの実装は変更していません。
 
@@ -409,7 +409,7 @@ MCPアダプターの[日本語ガイド](integrations/chatgpt_mcp/README.md)と
 
 ### agent が作った file や画像を、cockpit の History の chip にする `show_files`
 
-ORRERY Mail の proxy に local の tool `show_files` を足しました（`paths` に 1〜8個）。proxy の中だけで完結し、Mail server へは送らず、何も書かず、file の中身も読みません。`lstat` で在るか・種類・大きさだけを返します。cockpit は記録に残ったこの呼び出しから History に chip を出し、作業 folder の中・種類・大きさの確認は preview の側で従来どおり行います（cockpit 側の対応が要ります）。Claude・Codex・dsh・Hermes の managed な指示に「Showing Files」の節を足し、同梱の `/log` は書いたログを、`/delegate` は報告の前に成果の file を `show_files` で見せます。`/log` は、ログが作業 folder の中にあるとき、その機械で初回に一度だけ chip のことを一行添えます。Claude の設定の雛形はこの tool を確認なしで許可します。詳しくは [Codex App 統合](docs/codex-app.md) と [Launchers の `/log`](docs/launchers.md#log) を参照してください。
+ORRERY Mail の proxy に local の tool `show_files` を足しました（`paths` に 1〜8個）。proxy の中だけで完結し、Mail server へは送らず、何も書かず、file の中身も読みません。`lstat` で在るか・種類・大きさだけを返します。cockpit は記録に残ったこの呼び出しから History に chip を出し、作業 folder の中・種類・大きさの確認は preview の側で従来どおり行います（cockpit 側の対応が要ります）。Claude・Codex・dsh・Hermes の managed な指示に「Showing Files」の節を足し、同梱の `/log` は書いたログを、`/delegate` は報告の前に成果の file を `show_files` で見せます。`/log` は、ログが作業 folder の中にあるとき、その機械で初回に一度だけ chip のことを一行添えます。Claude の設定の雛形はこの tool を確認なしで許可します。詳しくは [Codex App 統合](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md) と [Launchers の `/log`](https://github.com/gyroid-eth/orrery/blob/master/docs/launchers.md#log) を参照してください。
 
 ### スマホの会話の記録で、file の tool の行にも file と画像の chip を出す
 
@@ -417,11 +417,11 @@ cockpit は file や画像の参照を、file の tool の呼び出し（Read・
 
 ### スマホのfile・画像のpreviewから、表示している中身を端末に保存できるようにする
 
-previewを表示できたときだけ**Save**が出て、表示しているもの（textは表示した範囲、画像はcockpitが描き直したPNG）をbrowserのdownloadとして端末に保存します。新しい経路や読み直しはなく、保存するのはpreviewと同じ物だけです。保存したfileは端末に残ります。詳しくは[スマホで状況を見る](docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
+previewを表示できたときだけ**Save**が出て、表示しているもの（textは表示した範囲、画像はcockpitが描き直したPNG）をbrowserのdownloadとして端末に保存します。新しい経路や読み直しはなく、保存するのはpreviewと同じ物だけです。保存したfileは端末に残ります。詳しくは[スマホで状況を見る](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
 
 ### スマホの会話の記録で、fileと画像のpreviewを開けるようにする（Phone access の History の中）
 
-Historyがオンのreader（policyの確認があれば既定でオン。SettingsではPhone access）では、Conversationのtoolの呼び出しに出てきたfileと画像のchipを押すと、今の中身をpreviewで開けます。`--disable-history`で会話の記録と一緒に切れます。readerはcockpitの固定のroute `GET /telemetry/conversation/preview`をloopbackで呼び、記録・binding・作業folderの範囲・canonical path・種類・大きさ・画素数の確認は、cockpitがそのたびに行います。名前で隠したり中身を伏せたりはしません。スマホが送るのはagentの名前とreaderが発行した参照のIDだけで、pathもcockpitの参照も送りも受け取りもしません。textは先頭32 KiBを文字として表示し、HTMLやSVGも実行しません。画像は画素だけのPNG（1辺8192 px・8 Mpx・4 MiBまで）に限ります。text・画像に写った鍵や私的な文章はそのまま届くので、それでよい端末に限ってください。Close・背景移行でpreviewを消します。詳しくは[スマホで状況を見る](docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
+Historyがオンのreader（policyの確認があれば既定でオン。SettingsではPhone access）では、Conversationのtoolの呼び出しに出てきたfileと画像のchipを押すと、今の中身をpreviewで開けます。`--disable-history`で会話の記録と一緒に切れます。readerはcockpitの固定のroute `GET /telemetry/conversation/preview`をloopbackで呼び、記録・binding・作業folderの範囲・canonical path・種類・大きさ・画素数の確認は、cockpitがそのたびに行います。名前で隠したり中身を伏せたりはしません。スマホが送るのはagentの名前とreaderが発行した参照のIDだけで、pathもcockpitの参照も送りも受け取りもしません。textは先頭32 KiBを文字として表示し、HTMLやSVGも実行しません。画像は画素だけのPNG（1辺8192 px・8 Mpx・4 MiBまで）に限ります。text・画像に写った鍵や私的な文章はそのまま届くので、それでよい端末に限ってください。Close・背景移行でpreviewを消します。詳しくは[スマホで状況を見る](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
 
 ### 任意の読み取り専用MCPアダプターと所属確認
 
@@ -431,7 +431,7 @@ legacyは明示した1つのprojectに限定し、agent・finished・gone・reti
 
 所属を確認できない旧応答を推測で通さないため、Dashboard APIを36から37へ上げました。legacyの `/api/agents` に応答全体と各行の `project_key` を追加し、曖昧なtmux行の所属はnullにします。既存の行の表示・生存判定・書込み認可は変更しません。アダプターのlegacyはAPI 37、freshは検証済みの34・35・36・37だけを受け付けます。
 
-秘密pathを保持するTunnel転送、Host/Origin検査、接続先の実証、pair時のローカル書込みと公開fieldを日英で説明しました。[日本語ガイド](integrations/chatgpt_mcp/README.md)・[English](integrations/chatgpt_mcp/README.en.md)を参照してください。
+秘密pathを保持するTunnel転送、Host/Origin検査、接続先の実証、pair時のローカル書込みと公開fieldを日英で説明しました。[日本語ガイド](https://github.com/gyroid-eth/orrery/blob/master/docs/chatgpt-mcp.md)・[English](https://github.com/gyroid-eth/orrery/blob/master/docs/en/chatgpt-mcp.md)を参照してください。
 
 ## 2026.11.05.2
 
@@ -447,7 +447,7 @@ legacyは明示した1つのprojectに限定し、agent・finished・gone・reti
 
 ### スマホの閲覧画面をcockpitのSettingsからオンにし、会話の記録を既定で読めるようにする
 
-新しい`agentstack-mobile`（`status`・`apply`・`off`）が、スマホのreaderの設定`~/.agentstack/mobile.json`（mode 0600）とlaunchdのjob `org.agentstack.mobile-relay`を管理します。cockpitの**Settings → Phone**はこのcommandを呼びます。Tailscaleのsign in・Serve・Funnelは読むだけで、Serve・Funnel・policyは変えません。policyは本人が**I reviewed the policy**を押した日時を残すだけで、確かめはしません。手で起動したreaderがportを使っていれば、止めずに断ります。installはcommandを置くだけでjobを作らず、uninstallはjobを止めます。readerは`--config`でこのfileを読みます。会話の記録（History）は、policyの確認（`--phone-policy-reviewed`）があれば既定でオンになり、`--disable-history`で切れます。確認がなければオフのまま起動し、`/view/history`が`policy_not_reviewed`を返します。以前の`--enable-history`もそのまま使えます。boundの記録だけを出すこと、pathを出さないことなどの約束は変えていません。詳しくは[スマホで状況を見る](docs/mobile.md#cockpitのsettingsからオンにする)を参照してください。
+新しい`agentstack-mobile`（`status`・`apply`・`off`）が、スマホのreaderの設定`~/.agentstack/mobile.json`（mode 0600）とlaunchdのjob `org.agentstack.mobile-relay`を管理します。cockpitの**Settings → Phone**はこのcommandを呼びます。Tailscaleのsign in・Serve・Funnelは読むだけで、Serve・Funnel・policyは変えません。policyは本人が**I reviewed the policy**を押した日時を残すだけで、確かめはしません。手で起動したreaderがportを使っていれば、止めずに断ります。installはcommandを置くだけでjobを作らず、uninstallはjobを止めます。readerは`--config`でこのfileを読みます。会話の記録（History）は、policyの確認（`--phone-policy-reviewed`）があれば既定でオンになり、`--disable-history`で切れます。確認がなければオフのまま起動し、`/view/history`が`policy_not_reviewed`を返します。以前の`--enable-history`もそのまま使えます。boundの記録だけを出すこと、pathを出さないことなどの約束は変えていません。詳しくは[スマホで状況を見る](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md#cockpitのsettingsからオンにする)を参照してください。
 
 **手で起動しているreaderを更新する人へ:** `--phone-policy-reviewed`を付け、`--enable-history`を付けずに起動していたreaderは、更新後の再起動から会話の記録とfile・画像のpreviewもスマホに出します。出したくなければ、再起動の前に`--disable-history`を足してください。起動時にもこの変更を1行で知らせます。
 
@@ -461,7 +461,7 @@ legacy の dashboard に `GET /api/agents/<name>/history-binding` を足しま�
 
 ### スマホの閲覧画面で、agentの会話の記録を読めるようにする（別のopt-in・既定オフ）
 
-readerに`--enable-history`（`--phone-policy-reviewed`も必要）を付けたときだけ、agentのsheetに**Conversation**のtabが出て、cockpitがそのagent自身のものと確認した会話の記録を読み取り専用で表示します。スマホが送るのはagentの名前とreaderが発行したpageの印だけで、fileのpathや記録のcursorは送りも受け取りもしません。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼び、boundでない記録は理由のcodeだけを示します。1 pageは40件・512 KiBまで、本文は文字としてだけ表示し、Mailはcard、fileと画像は名前だけです。送信は既存のTerminalの**Review input → Send once**のままで、Reviewの画面には必ず端末の末尾（40行・6 KiB）を出します。cockpitのredactは既知の形の鍵だけを隠すので、会話に書かれた他の秘密はそのまま届きます。負荷が高くcockpitの応答が遅いときは15秒まで待ち、それでも返らなければ**Taking longer than usual**と**Retry**を出します。Close・背景移行で表示を消します。詳しくは[スマホで状況を見る](docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
+readerに`--enable-history`（`--phone-policy-reviewed`も必要）を付けたときだけ、agentのsheetに**Conversation**のtabが出て、cockpitがそのagent自身のものと確認した会話の記録を読み取り専用で表示します。スマホが送るのはagentの名前とreaderが発行したpageの印だけで、fileのpathや記録のcursorは送りも受け取りもしません。readerは固定のloopbackのcockpitのroute `GET /telemetry/conversation`だけを呼び、boundでない記録は理由のcodeだけを示します。1 pageは40件・512 KiBまで、本文は文字としてだけ表示し、Mailはcard、fileと画像は名前だけです。送信は既存のTerminalの**Review input → Send once**のままで、Reviewの画面には必ず端末の末尾（40行・6 KiB）を出します。cockpitのredactは既知の形の鍵だけを隠すので、会話に書かれた他の秘密はそのまま届きます。負荷が高くcockpitの応答が遅いときは15秒まで待ち、それでも返らなければ**Taking longer than usual**と**Retry**を出します。Close・背景移行で表示を消します。詳しくは[スマホで状況を見る](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md#スマホでagentの会話の記録を読む)を参照してください。
 
 ### Claude・dsh・Hermes の会話記録を本人の証拠から対応付け
 
@@ -479,11 +479,11 @@ legacy dsh の TUI が起動時の履歴保存を遅らせる場合も、session
 
 ### 共通 bound proxy の予約を managed guard と一致させる
 
-共通 proxy の予約取得・更新・解放が物理絶対 path を受け付け、managed `workspace-v1` の編集 guard と同じ予約を参照できるようになりました。相対 path / glob の既存互換と `..` 拒否は維持します。managed の拒否文と agent 向け案内に必要な path を示し、[更新後の取り直し手順](docs/codex-app.md#agent-の利用手順)を日英で追記しました。guard を相対照合へ戻す変更や、既存予約の自動変換はありません。
+共通 proxy の予約取得・更新・解放が物理絶対 path を受け付け、managed `workspace-v1` の編集 guard と同じ予約を参照できるようになりました。相対 path / glob の既存互換と `..` 拒否は維持します。managed の拒否文と agent 向け案内に必要な path を示し、[更新後の取り直し手順](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md#agent-の利用手順)を日英で追記しました。guard を相対照合へ戻す変更や、既存予約の自動変換はありません。
 
 ### dsh・Hermes の子へ Codex と同じ Chrome MCP 定義を渡す
 
-dsh・Hermes の子は既定で Codex の有効な Chrome MCP 定義だけを継承し、`--autoConnect` を含む同じ command・args・env・cwd で普段の Chrome に接続します。`mail-only` は自動追加せず、未設定・無効なら Mail のみです。native で表現できない tool filter/approval は拒否し、明示 browser の承認条件も維持します。[子の道具選択](docs/delegation.md)を参照してください。
+dsh・Hermes の子は既定で Codex の有効な Chrome MCP 定義だけを継承し、`--autoConnect` を含む同じ command・args・env・cwd で普段の Chrome に接続します。`mail-only` は自動追加せず、未設定・無効なら Mail のみです。native で表現できない tool filter/approval は拒否し、明示 browser の承認条件も維持します。[子の道具選択](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md)を参照してください。
 
 ### fresh Codex の Mail 接続へ必要な環境を渡す
 
@@ -553,7 +553,7 @@ Mail watcherは、宛先のsessionが無いことを確認した通知を取り�
 
 Local接続へ任意の表示名と1本以上のAPI URLを設定すると、両NEW AGENTが接続別にmodelを列挙します。model追加ごとのORRERY設定・再installは不要です。status欠損・未知の有効IDも選択でき、明示unloadedは選択不可。選択URL・IDを起動直前に1回照合し、不一致時に別modelへ移りません。contextの報告値／既定／任意fallbackを区別し、元URL・modelでのexact resume、従来の固定接続互換を保持します。
 
-API世代は33。動的Localのcatalogに `url_index` / `url_key` / `display_name` / context由来を追加し、spawnへ選択URLの識別値を渡します。[一度のagent支援移行手順](docs/native-setup.md)を追加しました。新しいtransport adapter、serverのmodel起動・停止、実機接続の自動移行は含みません。
+API世代は33。動的Localのcatalogに `url_index` / `url_key` / `display_name` / context由来を追加し、spawnへ選択URLの識別値を渡します。[一度のagent支援移行手順](https://github.com/gyroid-eth/orrery/blob/master/docs/native-setup.md)を追加しました。新しいtransport adapter、serverのmodel起動・停止、実機接続の自動移行は含みません。
 
 ### ローカル HTTP の要求元検査を強化
 
@@ -563,7 +563,7 @@ API世代は33。動的Localのcatalogに `url_index` / `url_key` / `display_nam
 
 ### スマホTerminalの通常起動設定とagent向け手順を整理
 
-ORRERY側の共有設定`enable_mobile_terminal`で通常の起動時にTerminalを有効にする手順を、[日本語](docs/mobile.md)・[英語](docs/mobile.en.md)のガイドへ追加しました。既定はオフで、稼働中のbackendには明示的な再起動が必要です。agentが行う設定・送信なしの確認と、本人が行うpolicy・実端末確認を分けています。
+ORRERY側の共有設定`enable_mobile_terminal`で通常の起動時にTerminalを有効にする手順を、[日本語](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md)・[英語](https://github.com/gyroid-eth/orrery/blob/master/docs/en/mobile.md)のガイドへ追加しました。既定はオフで、稼働中のbackendには明示的な再起動が必要です。agentが行う設定・送信なしの確認と、本人が行うpolicy・実端末確認を分けています。
 
 操作に使う自分の端末だけへのアクセス制限を推奨し、スマホ・タブレットを複数許可する例と、既存の広いgrant/ACLも整理する必要を説明しました。端末限定は必須条件ではなく、既存の`--phone-policy-reviewed`は運用者の申告のままです。readerの新しい常駐機構・policy自動変更は追加していません。API世代31・既存の本人/Host/Origin照合・入力guardは維持します。
 
@@ -573,7 +573,7 @@ cockpitで廃止するVision profileのiframeメッセージ受け口・応答�
 
 ### スマホでpaneを確認してから1回送信
 
-別途有効にしたTerminal sheetで、選択paneの短い画面を見ながら1行を書き、宛先・全文・Enterを毎回確認して送れます。前面の1paneだけを更新し、閉じる・背景移行で表示と未送信の確認を消します。通常の閲覧は維持し、画面取得も送信も指定スマホの実効policy確認と両側の明示opt-inが必要です。tmux受理とagentの実行完了は区別し、結果不明でも自動再送しません。API世代は31です。[手順と限界](docs/mobile.md#スマホからpaneを確認して送る)を参照してください。
+別途有効にしたTerminal sheetで、選択paneの短い画面を見ながら1行を書き、宛先・全文・Enterを毎回確認して送れます。前面の1paneだけを更新し、閉じる・背景移行で表示と未送信の確認を消します。通常の閲覧は維持し、画面取得も送信も指定スマホの実効policy確認と両側の明示opt-inが必要です。tmux受理とagentの実行完了は区別し、結果不明でも自動再送しません。API世代は31です。[手順と限界](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md#スマホからpaneを確認して送る)を参照してください。
 
 GraphのExpandで画面を広く使えます。ブラウザの全画面APIが使えない場合もページ内で全面表示し、縦横切替・Mail一覧・Terminal sheetに対応します。閉じる／戻るで通常表示へ戻り、既存の選択・手動zoomを保ちます。
 
@@ -585,7 +585,7 @@ Claude Code の新しい版（2.1.307 で確認）は、入力欄の上の枠に
 
 新規の top-level agent と対応する delegated child の予約保護範囲を、Git リポジトリ全体ではなく実際に起動した作業フォルダから計算するようにしました。共有フォルダの追加指定は `AGENTSTACK_EXTRA_PROTECTED_ROOTS` で行い、installed `env.sh` の旧保護範囲を更新時に一度だけ引き継ぎます。旧設定が曖昧な場合は更新を停止し、移行の確認と予約解放・関係セッションの再起動を案内します。managed 起動では予約名も作業フォルダ相対から物理絶対パスに変更し、入れ子の作業フォルダが同じファイルを別名で予約する衝突漏れを防ぎます。起動先と追加保護フォルダの物理パスに Mail が glob と解釈する `*`・`?`・`[` や、Mail が `/` に置き換えて比べる `\` を含む managed 起動は、予約の照合が崩れるため起動前に拒否します。Mail の名前空間は変更しません。resume / persistent と warm pool の追加保証は後続の対象です。API 世代は変更しません。
 
-詳細は [保護設定の移行](docs/configuration.md#reservation-の保護範囲と移行) を参照してください。
+詳細は [保護設定の移行](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md#reservation-の保護範囲と移行) を参照してください。
 
 ### 空の Mail へ向けた project 非依存の接続
 
@@ -601,7 +601,7 @@ API世代を33から34へ上げ、明示fresh dashboardのNew Agentと有限rost
 
 ### スマホ閲覧の設定をエージェントに頼めるようにする
 
-[スマホ閲覧の手順](docs/mobile.md)に、agent に渡して設定させるための表を加えました。agent が実行できる段と、Tailscale の管理画面やスマホでの操作が要る本人の段を分けています。Serve 名・本人の login・スマホの IP の調べ方、HTTPS 証明書の前提、Serve を `--bg` で残す方法、macOS での CLI の場所も書きました。
+[スマホ閲覧の手順](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md)に、agent に渡して設定させるための表を加えました。agent が実行できる段と、Tailscale の管理画面やスマホでの操作が要る本人の段を分けています。Serve 名・本人の login・スマホの IP の調べ方、HTTPS 証明書の前提、Serve を `--bg` で残す方法、macOS での CLI の場所も書きました。
 
 ### 指定したスマホからTelemetryの状況を見る閲覧用画面
 
@@ -609,11 +609,11 @@ API世代を33から34へ上げ、明示fresh dashboardのNew Agentと有限rost
 
 Graphは直近24時間に活動が確認されたagentを既定にし、15分〜30日の細かい期間sliderと明示した全履歴を選べます。Allは選択期間内の全体です。最近活動した退役済みを含め、不明な活動時刻を現在で補いません。専用アイコンは認証後にPCの既存設定から解決し、科学者の肖像・イニシャルへfallbackします。
 
-本人を照合するloopback relayと、指定スマホを絞る実効tailnet policyを分け、Tailscale Serveでの手動有効化/停止手順を[日英guide](docs/mobile.md)へ記載しました。通常installでは待受/Serveを開始しません。legacy loopback専用のMail metadata/肖像取得と期間契約を追加します。実Serve・本人スマホの受入は別途必要です。
+本人を照合するloopback relayと、指定スマホを絞る実効tailnet policyを分け、Tailscale Serveでの手動有効化/停止手順を[日英guide](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md)へ記載しました。通常installでは待受/Serveを開始しません。legacy loopback専用のMail metadata/肖像取得と期間契約を追加します。実Serve・本人スマホの受入は別途必要です。
 
 ### スマホのMailを1件ずつ開き、Graphの2体間の履歴を確認
 
-ActivityのMail、またはGraphのMail線から2体間の一覧を開き、選んだ1件の件名と本文を文字として読めます。一覧はmetadataのみで、本文をまとめてスマホへ送りません。方向別の絞込、200宛先行ごとのOlder/Newer、Mac内だけの直近24h・最大2000通/32MiBのメモリcacheを追加しました。上限や失効・取得不能を明示し、read/ACK・返信・添付・操作は追加しません。既定オフと本人認証を維持し、指定スマホの実効policyは別途必要です。単件内容とmetadata pageの契約追加によりAPI世代を30へ更新します（前回のリリース 2026.10.25 は27。間の世代は単独では配布していません）。[手順と制限](docs/mobile.md)を参照してください。
+ActivityのMail、またはGraphのMail線から2体間の一覧を開き、選んだ1件の件名と本文を文字として読めます。一覧はmetadataのみで、本文をまとめてスマホへ送りません。方向別の絞込、200宛先行ごとのOlder/Newer、Mac内だけの直近24h・最大2000通/32MiBのメモリcacheを追加しました。上限や失効・取得不能を明示し、read/ACK・返信・添付・操作は追加しません。既定オフと本人認証を維持し、指定スマホの実効policyは別途必要です。単件内容とmetadata pageの契約追加によりAPI世代を30へ更新します（前回のリリース 2026.10.25 は27。間の世代は単独では配布していません）。[手順と制限](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md)を参照してください。
 
 ## 2026.10.25
 
@@ -623,11 +623,11 @@ ORRERY Telemetry の名前の左に Orbit ロゴを配置し、favicon にも同
 
 ### dsh / Hermes の起動指示を短く整理
 
-dsh / Hermes の指示を専用の短い文書へ整理し、ORRERY の子作成や raw 認証回復などの手順を省きました。共通の Mail 規則、共有編集の予約と自己専用 scratch の区別、失敗時の停止条件は保持します。初回と同じ ID の再開で同じ生成経路を使い、Claude / Codex の指示本文、native helper 設定、skills の配布は変えません。API 世代の変更はありません。[起動方法](docs/launchers.md) / [English](docs/launchers.en.md)。
+dsh / Hermes の指示を専用の短い文書へ整理し、ORRERY の子作成や raw 認証回復などの手順を省きました。共通の Mail 規則、共有編集の予約と自己専用 scratch の区別、失敗時の停止条件は保持します。初回と同じ ID の再開で同じ生成経路を使い、Claude / Codex の指示本文、native helper 設定、skills の配布は変えません。API 世代の変更はありません。[起動方法](https://github.com/gyroid-eth/orrery/blob/master/docs/launchers.md) / [English](https://github.com/gyroid-eth/orrery/blob/master/docs/en/launchers.md)。
 
 ### legacy dashboard で不信な Host を操作前に拒否
 
-全 HTTP メソッド・全パスの Host を固定の許可先と照合し、不信・欠落・重複・不正な Host を dispatch 前に拒否します。POST の Origin は、その Host に対応する固定 origin とだけ照合します。既定の loopback 利用は維持し、LAN / VPN 利用者は更新前に追加の固定 origin を [設定](docs/configuration.md#lan--vpn-から使う場合の-host-設定) してください。installer が保存し、dashboard の各 service 起動経路へ引き継ぎます。
+全 HTTP メソッド・全パスの Host を固定の許可先と照合し、不信・欠落・重複・不正な Host を dispatch 前に拒否します。POST の Origin は、その Host に対応する固定 origin とだけ照合します。既定の loopback 利用は維持し、LAN / VPN 利用者は更新前に追加の固定 origin を [設定](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md#lan--vpn-から使う場合の-host-設定) してください。installer が保存し、dashboard の各 service 起動経路へ引き継ぎます。
 
 認証は追加しません。既存の global capability 認証と公開 static resource の扱いは維持します。API の endpoint・field・応答の意味は変わらないため、API generation は据え置きます。
 
@@ -639,7 +639,7 @@ dsh / Hermes の指示を専用の短い文書へ整理し、ORRERY の子作成
 
 ### Hermesの更新で既存の管理sourceを再利用
 
-Hermesの新世代を作るとき、明示したcacheを優先し、指定がなければ所有記録を確認できる既存管理世代のGit repositoryを独立コピーして再利用します。履歴とtagを保ち、未commitの変更はコピーせず、元の世代にも依存しません。利用できる管理sourceがない場合の公式GitHubからのcloneと、固定commit照合・CA修正・PM依存関係の検証は従来どおりです。新規導入の取得量削減、PMの通信不要、実環境での導入時間を保証する変更ではありません（[導入手順](docs/install.md)）。
+Hermesの新世代を作るとき、明示したcacheを優先し、指定がなければ所有記録を確認できる既存管理世代のGit repositoryを独立コピーして再利用します。履歴とtagを保ち、未commitの変更はコピーせず、元の世代にも依存しません。利用できる管理sourceがない場合の公式GitHubからのcloneと、固定commit照合・CA修正・PM依存関係の検証は従来どおりです。新規導入の取得量削減、PMの通信不要、実環境での導入時間を保証する変更ではありません（[導入手順](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md)）。
 
 ### Keep multiple native connections (API 27)
 
@@ -657,13 +657,13 @@ Hermesの実行コードは固定したまま、公式更新からcertifi 2026.1
 
 新しく構築するORRERY Mail環境の依存に`certifi>=2026.10.19`を追加しました。再導入時もこの下限を適用します。2026.10.18でも影響するemSign rootは除去済みですが、影響しないrootとの互換性のため2026.10.19以上を採用します（[Pythonの公式案内](https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576)）。
 
-稼働中のMailをそのまま使う通常のkeepでは、既存venvを変更しません。既存Mailへの適用は[通常のbuild切替手順](docs/agentstack-mail-update.md#--update-mail-による差し替え)で行います。この変更はmanaged Hermesの固定依存や、pip/uv自身が内蔵するCA bundleの更新を含みません。
+稼働中のMailをそのまま使う通常のkeepでは、既存venvを変更しません。既存Mailへの適用は[通常のbuild切替手順](https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md#--update-mail-による差し替え)で行います。この変更はmanaged Hermesの固定依存や、pip/uv自身が内蔵するCA bundleの更新を含みません。
 
 ### 更新時に保存済みの設定を保持
 
 `env.sh` に保存された非既定値を、`AGENTSTACK_CHOSEN_SETTINGS` の有無や列挙内容にかかわらず引き継ぐようにしました。子のターミナルを自動で開かない設定（`AGENTSTACK_AUTO_OPEN_CHILD=0`）や独自の肖像フォルダーが、更新時に既定値へ戻るのを防ぎます。今回明示した値・空値による個別reset・`--reset-settings` は引き続き優先し、設定の値自体を削除した場合は既定値に戻ります。ORRERY Mail の識別情報と配置を保持する規則も変わりません。
 
-子のターミナル自動表示と肖像フォルダーに実際の変更がある場合は、installer の計画に旧値 → 新値を表示します。[設定の引き継ぎ](docs/install.md#前回の設定の引き継ぎ)を日英で更新しました（[#354](https://github.com/gyroid-eth/orrery-telemetry/issues/354)）。
+子のターミナル自動表示と肖像フォルダーに実際の変更がある場合は、installer の計画に旧値 → 新値を表示します。[設定の引き継ぎ](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md#前回の設定の引き継ぎ)を日英で更新しました（[#354](https://github.com/gyroid-eth/orrery-telemetry/issues/354)）。
 
 ### Codex の長い作業中に、背景のターミナルが動いていても作業中と表示する
 
@@ -715,7 +715,7 @@ Localのキー参照、dshの対応API、HermesのHTTPSとAPI形式の条件を�
 
 DeepSeek と Strata（Local/Qwen）を dsh / Hermes から選ぶ標準 NEW AGENT、子ごとの安定した HOME と会話の再開、macOS Keychain / Linux Secret Service の資格参照、設定例と画面付き手順をまとめたリリースです。公開 API は世代26です。
 
-以下は PR 番号の降順に並べた変更の履歴です。途中段階の「managed」専用起動・backend 共有 HOME・当時の API 世代・後続予定は、その後の標準化と子別 HOME に置き換わっています。現在の導入方法と制限は [導入手順](docs/install.md)、[標準 catalog](docs/managed-catalog.md)、[native 機能の対応範囲](docs/native-capabilities.md) を参照してください。Windows の検証対象は Ubuntu WSL2 であり、Windows native 版とは区別します。
+以下は PR 番号の降順に並べた変更の履歴です。途中段階の「managed」専用起動・backend 共有 HOME・当時の API 世代・後続予定は、その後の標準化と子別 HOME に置き換わっています。現在の導入方法と制限は [導入手順](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md)、[標準 catalog](docs/managed-catalog.md)、[native 機能の対応範囲](docs/native-capabilities.md) を参照してください。Windows の検証対象は Ubuntu WSL2 であり、Windows native 版とは区別します。
 
 ### paneの再利用後にログ保存がidentity不一致で止まる問題を修正
 
@@ -984,7 +984,7 @@ macOSのbash 3.2で、日本語localeのときにDeepSeekのopt-in処理や登�
 
 `install.sh --enable-dsh --dsh-node /absolute/node` と `--enable-hermes` で、固定版の各runtimeとmanaged adapterを個別に導入できます。既定は取得なし、更新時は保存した選択を継承します。鍵や既存ログインは導入しません。
 
-runtimeは `harnesses/<harness>/<世代>` に配置し、通常uninstallはinstaller所有の世代だけを削除します。利用者のprofiles・記憶・skillsと手動のHermes環境は保持します。[導入手順](docs/install.md)を参照してください。
+runtimeは `harnesses/<harness>/<世代>` に配置し、通常uninstallはinstaller所有の世代だけを削除します。利用者のprofiles・記憶・skillsと手動のHermes環境は保持します。[導入手順](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md)を参照してください。
 
 ### 管理された子の起動を legacy の opt-in に追加
 
@@ -1028,7 +1028,7 @@ global mode の起動・再開で、起動ごとの照合値が `-` で始まる
 
 作業再開を表示する前に、提出済みの新しい入力に続いて同じ容量エラーで止まった Codex CLI を再び親へ通知します。前の停止からの追記と、同じ入力・エラーの境界を別の capture で2回確認し、同じ行の再描画や未提出の入力では再通知しません。
 
-履歴の重なりが消えた場合や境界が曖昧な場合は、推測せず元の停止を維持するため、再試行を見逃すことがあります。対象は legacy の tmux 型 Codex CLI で、global mode は未対応です。詳細は [dashboard の自動通知](docs/dashboard.md) を参照してください。
+履歴の重なりが消えた場合や境界が曖昧な場合は、推測せず元の停止を維持するため、再試行を見逃すことがあります。対象は legacy の tmux 型 Codex CLI で、global mode は未対応です。詳細は [dashboard の自動通知](https://github.com/gyroid-eth/orrery/blob/master/docs/dashboard.md) を参照してください。
 
 ### 終了した agent を UI の RESUME で再開でき、PC の再起動で止まった子も再開できる状態に戻ります
 
@@ -1084,7 +1084,7 @@ Codex の容量エラーと入力欄の間に background terminal の件数表�
 
 legacy dashboard が Codex CLI の capacity エラーによる入力待ちを継続観測し、停止した子の既存 identity から親へ ORRERY Mail を1回だけ送ります。DECK に `MODEL CAPACITY`、NETWORK に `CAPACITY` を表示します。ブラウザを閉じていても観測し、自動再開はしません。作業再開を観測するまで再通知せず、同じ停止の通知状態は dashboard 再起動後も保持します。
 
-API 世代を18から19へ上げ、legacy agents / graph に nullable な `provider_stall` を追加しました。送達不明時は重複を避けて再送せず `delivery_unknown` を表示します。global mode は未対応・後続です。[詳細](docs/dashboard.md#provider-停止の自動通知legacy)。
+API 世代を18から19へ上げ、legacy agents / graph に nullable な `provider_stall` を追加しました。送達不明時は重複を避けて再送せず `delivery_unknown` を表示します。global mode は未対応・後続です。[詳細](https://github.com/gyroid-eth/orrery/blob/master/docs/dashboard.md#provider-停止の自動通知legacy)。
 
 無変化の巡回では状態ファイルを書き直さず、容量停止の候補が無ければファイルや lock を作りません。Mail の明確な拒否は `failed` として区別します。古い capture で新しい停止を解除・確認することを防ぎ、未観測の終了世代を期限付きで削除します。
 
@@ -1115,7 +1115,7 @@ template の全 placeholder と両 plist writer の置換集合を照合し、�
 
 ### 子が MCP tool の承認拒否を親に報告して停止
 
-Codex・Claude に配布する managed 指示に、MCP tool から承認拒否のメッセージが返った場合の報告手順を追加しました。子は利用者の設定を書き換えず、正確な tool 名と拒否メッセージ原文を ORRERY Mail で親へ1行報告して停止します。親が無い場合や Mail を使えない場合は利用者に伝えて停止します。修復手段は報告で断定せず、[子に渡す道具](docs/delegation.md)から既存の承認・overlay・再開の制限・人の許可の手順を参照します。
+Codex・Claude に配布する managed 指示に、MCP tool から承認拒否のメッセージが返った場合の報告手順を追加しました。子は利用者の設定を書き換えず、正確な tool 名と拒否メッセージ原文を ORRERY Mail で親へ1行報告して停止します。親が無い場合や Mail を使えない場合は利用者に伝えて停止します。修復手段は報告で断定せず、[子に渡す道具](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md)から既存の承認・overlay・再開の制限・人の許可の手順を参照します。
 
 ### mode の選択を client・dashboard・service で共通化
 
@@ -1290,7 +1290,7 @@ watcher は `session_not_found` の signal を再試行用に残していまし�
 
 モデルを省略した Codex の子と NEW AGENT の既定は `gpt-6.1-sol` でした。無料の ChatGPT の plan など、このモデルを使えないアカウントでは、起動の直後に 400 で止まっていました。選択された `CODEX_HOME` の CLI ローカル cache にその ID が無ければ、`gpt-6.1-sol` → `gpt-6-sol` → `gpt-6-luna` → `gpt-5.6-terra` → `gpt-5.6-luna` の順で、掲載されている次の候補へ下げます。既定を下げる判断には期限切れの cache も使い、変更があれば provider の `model_note` に変更前後と理由を返します（API 10）。
 
-正式 ID の明示要求は置き換えません。cache の `identity` は現在のログインと照合しておらず、fallback は利用権限の証明ではありません。2026-10-06、無料の ChatGPT の Codex（`gpt-6-luna` medium）で、Full tour のしりとりが最後まで通ることを確かめました。詳しくは [設定](docs/configuration.md#codex-model-catalog) を参照してください。
+正式 ID の明示要求は置き換えません。cache の `identity` は現在のログインと照合しておらず、fallback は利用権限の証明ではありません。2026-10-06、無料の ChatGPT の Codex（`gpt-6-luna` medium）で、Full tour のしりとりが最後まで通ることを確かめました。詳しくは [設定](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md#codex-model-catalog) を参照してください。
 
 ### Codex でも `$delegate` と `$log` を使えます
 
@@ -1314,7 +1314,7 @@ Claude in Chrome 自身の操作確認は別です。タブを開く等の操作
 
 Codex の `--tools browser` は、利用者の設定にある chrome-devtools MCP server を選び、既知の全30 tool を公開して個別に承認します。Codex と既知固定版の Claude の `screen:operate:<server>` でも、chrome-devtools の同じ30 tool を承認します。任意 JavaScript 実行、ホストへのファイル保存、ローカルファイルの upload を含む許可です。未知の新しい tool は公開・承認しません。
 
-読み取りに絞る `screen:read:<server>` は8 tool を公開し、保存引数を持つ tool や任意 JavaScript・upload は含めません。Claude の chrome-devtools 選択は既知固定版が必要です。browser と別の computer use server は、それぞれの承認範囲で併用できます。詳しくは [delegation](docs/delegation.md#子に渡す道具を選ぶ--base----tools) を参照してください。
+読み取りに絞る `screen:read:<server>` は8 tool を公開し、保存引数を持つ tool や任意 JavaScript・upload は含めません。Claude の chrome-devtools 選択は既知固定版が必要です。browser と別の computer use server は、それぞれの承認範囲で併用できます。詳しくは [delegation](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md#子に渡す道具を選ぶ--base----tools) を参照してください。
 
 ### 子に渡す道具の既定を installer で選べるようにしました
 
@@ -1332,7 +1332,7 @@ Claude Code 2.1.289 では、同じ会話の native resume で新しい chrome-d
 
 ### ブラウザと computer use の届き方、人が行う許可をまとめました
 
-日英 [delegation](docs/delegation.md#ブラウザと-computer-use-何が届くか人がやること) に Claude / Codex × Mac / Windows（WSL2）の8通りと、子・NEW AGENT・resume ごとの届き方をまとめ、README から案内します。「画面全体」「画面操作」の表記は computer use に揃え、WSL 側の道具は Windows-MCP と明記しました。指定名の `screen` は変わりません。
+日英 [delegation](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md#ブラウザと-computer-use-何が届くか人がやること) に Claude / Codex × Mac / Windows（WSL2）の8通りと、子・NEW AGENT・resume ごとの届き方をまとめ、README から案内します。「画面全体」「画面操作」の表記は computer use に揃え、WSL 側の道具は Windows-MCP と明記しました。指定名の `screen` は変わりません。
 
 Chrome の接続許可は接続のたびに人が答え、Mac の computer use のアプリ単位の許可も人が出します。Claude の組み込み computer use は Mac 全体で同時に1セッションだけです。ロックは computer use を一度使ったセッションが終わるまで外れず、その間に起動した子は `Computer use is in use by another Claude session` で止まります。Windows-MCP は RDP などの対話セッションで動かす必要があります。英語 README 冒頭の agent の数を限定する表現も直しました。
 
@@ -1348,7 +1348,7 @@ Chrome の接続許可は接続のたびに人が答え、Mac の computer use �
 
 installer は、ORRERY が置いた skill の場所だけを `permissions.additionalDirectories` に足します。対象は `~/.agentstack/skills` と、そこを指す `~/.claude/skills/<name>` の symlink だけで、利用者が置いた同名の skill は入れません。同じ場所への `Edit` は deny にして、読み取りだけに絞っています。uninstall では、manifest にある分だけを外します。
 
-- この deny が止めるのは file の道具（Edit・Write など）と、それと分かる Bash の書き込みです。sandbox なしの Python や Node を通した間接的な書き込みまでは覆いません（[docs/install.md](docs/install.md)）。
+- この deny が止めるのは file の道具（Edit・Write など）と、それと分かる Bash の書き込みです。sandbox なしの Python や Node を通した間接的な書き込みまでは覆いません（[docs/install.md](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md)）。
 - 既知の制限: 再 install の後に uninstall すると、installer が足した設定が残ります（allow・deny・hooks と同じ既存の構造。gyroid-eth/orrery-telemetry#205 で直します）。
 
 ### NEW AGENT の既定の作業フォルダを、project folder にしました
@@ -1436,7 +1436,7 @@ EXIT が届いた時の知らせを 1 つの関数にまとめ、3 つの経路�
 
 ### 「子を作って話して」と頼むと、Claude Code の組み込み Agent と SendMessage で済ませていました
 
-managed block が context に無いセッションでは（block は `--project-key` の dir の CLAUDE.md に入るため、それ以外の dir で起動した場合）、「Start one child agent and play shiritori with it over 3 turns」に対して 3 回とも組み込みの Agent が子を作り、SendMessage でしりとりを最後まで進めていました。ORRERY Mail には何も残らず、dashboard にも出ません。Claude Code 2.1.224 以降の組み込み `SendMessage` / `ListAgents` は、tmux の ORRERY child にも直接届きます。そのため、`/delegate` で作った子と話すときにも、同じ回避の経路がありました。`/delegate` skill の description の先頭に、子を作るのも子と話すのも組み込みの道具ではなく `/delegate` と `send_message` で、と書きました。block の禁止文にも `SendMessage`・`ListAgents`・agent teams を足しました。skill の description は block の外でも context に入ることが多く、その場合は道具を選ぶ手掛かりになります。ただし skill の一覧が予算を超えると description は削られるので、どのセッションでも入るとは限りません。入っているかは `/context` や `/doctor` で確かめられます。確実に通すには、明示の `/delegate` を使います。修正後は同じ条件で、3 回とも `/delegate` から始めました（stub の Mail を使った少数回の比較で、全セッションでの保証ではありません）。tmux の子への送信も 3 回とも `send_message` でした。組み込みの経路を設定で断る deny rule は、組み込み subagent への送信も消すので既定では入れず、[docs/launchers.md](docs/launchers.md) に opt-in として書きました。
+managed block が context に無いセッションでは（block は `--project-key` の dir の CLAUDE.md に入るため、それ以外の dir で起動した場合）、「Start one child agent and play shiritori with it over 3 turns」に対して 3 回とも組み込みの Agent が子を作り、SendMessage でしりとりを最後まで進めていました。ORRERY Mail には何も残らず、dashboard にも出ません。Claude Code 2.1.224 以降の組み込み `SendMessage` / `ListAgents` は、tmux の ORRERY child にも直接届きます。そのため、`/delegate` で作った子と話すときにも、同じ回避の経路がありました。`/delegate` skill の description の先頭に、子を作るのも子と話すのも組み込みの道具ではなく `/delegate` と `send_message` で、と書きました。block の禁止文にも `SendMessage`・`ListAgents`・agent teams を足しました。skill の description は block の外でも context に入ることが多く、その場合は道具を選ぶ手掛かりになります。ただし skill の一覧が予算を超えると description は削られるので、どのセッションでも入るとは限りません。入っているかは `/context` や `/doctor` で確かめられます。確実に通すには、明示の `/delegate` を使います。修正後は同じ条件で、3 回とも `/delegate` から始めました（stub の Mail を使った少数回の比較で、全セッションでの保証ではありません）。tmux の子への送信も 3 回とも `send_message` でした。組み込みの経路を設定で断る deny rule は、組み込み subagent への送信も消すので既定では入れず、[docs/launchers.md](https://github.com/gyroid-eth/orrery/blob/master/docs/launchers.md) に opt-in として書きました。
 
 ### Telemetry にも help map を付け、README と docs の索引を画面のガイド中心に作り直しました
 
@@ -1467,7 +1467,7 @@ ORRERY の Codex App plugin の hook（`run-hook.sh`、子の Codex にも入る
 
 ### PC の再起動・強制終了の後に、子の Resume が拒否されていました
 
-`/delegate` の子の state は、正常に終わったときに retire されます。PC が落ちると retire されないまま残り、dashboard の RESUME も端末の `claude --resume` も `retired_at is missing` で拒否していました（162nd のセミナー: 再起動のたびに手で retire してから戻していた）。dashboard は起動時（と 1 時間ごと）に、この machine が起動する前に書かれたまま、session も生きた lease も無い「動作中」の state と、終わらなかった再開を、再開できる state に戻します。拒否の文も「正常に終わらなかった（PC の強制終了など）」と言い、どうすれば戻るかを示します。起動の前に書かれた live-session の lease は、PID が再利用されうるので生きている印に数えません（[troubleshooting](docs/troubleshooting.md)）。
+`/delegate` の子の state は、正常に終わったときに retire されます。PC が落ちると retire されないまま残り、dashboard の RESUME も端末の `claude --resume` も `retired_at is missing` で拒否していました（162nd のセミナー: 再起動のたびに手で retire してから戻していた）。dashboard は起動時（と 1 時間ごと）に、この machine が起動する前に書かれたまま、session も生きた lease も無い「動作中」の state と、終わらなかった再開を、再開できる state に戻します。拒否の文も「正常に終わらなかった（PC の強制終了など）」と言い、どうすれば戻るかを示します。起動の前に書かれた live-session の lease は、PID が再利用されうるので生きている印に数えません（[troubleshooting](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-troubleshooting.md)）。
 
 ### agentstack-doctor: 動いている ORRERY Mail に足りない機能を知らせます
 
@@ -1502,7 +1502,7 @@ install.sh も、この run で差し替えなかった Mail がこの checkout 
 
 古い（`existing_agent_id` を受け付けない）ORRERY Mail のもとでは、旧形式の state を持つ Claude は、親の有無にかかわらず会話だけで再開されます（MCP なし・hook 無効・Mail なし）。この判定は変えていません。変えたのは見え方です。これまでは理由（`mail_schema_unsupported`）が出ても、直し方は書かれていませんでした。また再開後は、Mail 側の行が retired で `program` が空になるため、走っている行に MAIL UNAVAILABLE が出ていませんでした。いまは、
 
-- `mail_message` と新しい `mail_remedy` に、`./scripts/install.sh --update-mail --dry-run`、続けて `--update-mail` を実行し、会話だけのセッションを終えてから再開し直す手順が入ります。これはこの installer が入れた Mail に当てはまる手順で、dry-run が拒否したら止まって [Mail の更新手順](docs/agentstack-mail-update.md) に従うこと、更新しなければ会話だけの再開のままであることも書きます。再開前の要約、再開の結果、端末に出る notice のどれにも出ます。会話の中の agent には、その更新を自分で実行しないよう伝えます
+- `mail_message` と新しい `mail_remedy` に、`./scripts/install.sh --update-mail --dry-run`、続けて `--update-mail` を実行し、会話だけのセッションを終えてから再開し直す手順が入ります。これはこの installer が入れた Mail に当てはまる手順で、dry-run が拒否したら止まって [Mail の更新手順](https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md) に従うこと、更新しなければ会話だけの再開のままであることも書きます。再開前の要約、再開の結果、端末に出る notice のどれにも出ます。会話の中の agent には、その更新を自分で実行しないよう伝えます
 - 再開の button は、会話だけになる場合 `RESUME WITHOUT MAIL`（確認が要る場合は `VERIFY & RESUME WITHOUT MAIL`）と表示し、title に理由と直し方を出します
 - 走っている行は、`program` が空でも、tmux の目印から MAIL UNAVAILABLE を出します。codex など、ほかの program の行は従来どおりです
 
@@ -1550,7 +1550,7 @@ Codex の起動時の更新案内は、既定の選択が `npm install -g @opena
 - WSL で画面の server を選ぶと、Windows のセッション0（ssh から起動した WSL。画面を取れない）を検出して警告します
 - 選択は Claude では会話に結び付いた起動の記録（version 3）に、Codex では `child-agents/<name>.tools.json` に残し、resume は同じ設定を作り直すか、できなければ止めます。Claude child の MCP 設定は、launcher と dashboard の resume が同じ `hooks/child_tools.py` で作るようになりました
 
-これは child への方針であって、技術的な隔離ではありません。動いている child への追加、resume での変更、roster・DECK の表示、NEW AGENT の欄はまだありません（[子に渡す道具を選ぶ](docs/delegation.md#子に渡す道具を選ぶ--base----tools)）。
+これは child への方針であって、技術的な隔離ではありません。動いている child への追加、resume での変更、roster・DECK の表示、NEW AGENT の欄はまだありません（[子に渡す道具を選ぶ](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md#子に渡す道具を選ぶ--base----tools)）。
 
 ### 並行の hook と bridge の起動で、時間しだいで重複・拒否が起きていました（#55・#122）
 
@@ -1592,7 +1592,7 @@ ORRERY cockpit は `/api/graph?all=1&spawn_only=1` を 6 秒ごとに呼びま�
 
 これまで `install.sh` の再実行は稼働中の Mail を採用し、build には触れませんでした。そのため Mail 側の変更（2026.09.30.4 の `register_agent(existing_agent_id=…)` など）は普通の update では届かず、以前の版の Claude の子は会話だけの resume になっていました。
 
-`./scripts/install.sh --update-mail` は次の順で差し替えます。まず稼働中の Mail を止めずに、新しい build の用意、scratch port で database の snapshot に対する検証、database の backup を済ませます。そのうえで切り替え、新しい build が共有 database で応答しなければ前の build を起動し直します。`env.sh`・autostart・`install-state.json` は、実際に動いている方の build で書きます。差し替えなかったときと戻したときは、終了 status 1 で知らせます。途中で Ctrl-C などで止めた場合も、検証用の snapshot と server を残さず、Mail は前の build か新しい build のどちらかで `env.sh` と一致した状態で終わります。稼働中の接続・token・enrollment の pin・database は失いません。systemd の timer（WSL2 など）でも同じです。`--update-mail` を付けない再実行は、これまでどおり稼働中の build を使い続けます。build が違うときは `notice:` でそれを示します。手順と影響は [docs/agentstack-mail-update.md](docs/agentstack-mail-update.md#--update-mail-による差し替え) を参照してください。
+`./scripts/install.sh --update-mail` は次の順で差し替えます。まず稼働中の Mail を止めずに、新しい build の用意、scratch port で database の snapshot に対する検証、database の backup を済ませます。そのうえで切り替え、新しい build が共有 database で応答しなければ前の build を起動し直します。`env.sh`・autostart・`install-state.json` は、実際に動いている方の build で書きます。差し替えなかったときと戻したときは、終了 status 1 で知らせます。途中で Ctrl-C などで止めた場合も、検証用の snapshot と server を残さず、Mail は前の build か新しい build のどちらかで `env.sh` と一致した状態で終わります。稼働中の接続・token・enrollment の pin・database は失いません。systemd の timer（WSL2 など）でも同じです。`--update-mail` を付けない再実行は、これまでどおり稼働中の build を使い続けます。build が違うときは `notice:` でそれを示します。手順と影響は [docs/agentstack-mail-update.md](https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md#--update-mail-による差し替え) を参照してください。
 
 ### resume すると whois の model が claude-code に変わっていました（#144）
 
@@ -1685,7 +1685,7 @@ telemetry の deck から Codex の子を resume すると、tmux の session �
 
 Codex の子は、task が始まったことを Codex の記録（receipt）で確かめてから起動を確定します。WSL では Codex の連携（lifecycle hooks）が入っていないことが多く、receipt が無いので、launcher が上限の90秒まで見張ってから「確認できない」と確定していました。子は動いていましたが、spawn の完了と次の操作がその間待たされました。
 
-- **連携を入れれば約7秒になります（根本の対処）。** `scripts/install-codex-app-integration.sh` が WSL でも動くようにしました。これまでは PATH の先頭にある Windows 側の `codex`（`/mnt/c/...`）を拾っていたので、core の installer と同じ規則（WSL では `/mnt` 配下を除き、`--version` に答えるものだけ）で選びます。macOS 以外では launchd の service を作らない `--no-service` が既定です。入れた後に Codex で一度 `/hooks` を開き、AgentStack の hooks を承認してください。手順と画面は [docs/codex-app.md](docs/codex-app.md) にあります。承認の後、長い task でも起動の確定は約7秒でした（実機で 7.1〜7.3 秒）
+- **連携を入れれば約7秒になります（根本の対処）。** `scripts/install-codex-app-integration.sh` が WSL でも動くようにしました。これまでは PATH の先頭にある Windows 側の `codex`（`/mnt/c/...`）を拾っていたので、core の installer と同じ規則（WSL では `/mnt` 配下を除き、`--version` に答えるものだけ）で選びます。macOS 以外では launchd の service を作らない `--no-service` が既定です。入れた後に Codex で一度 `/hooks` を開き、AgentStack の hooks を承認してください。手順と画面は [docs/codex-app.md](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md) にあります。承認の後、長い task でも起動の確定は約7秒でした（実機で 7.1〜7.3 秒）
 - **連携が無い環境でも、短い task は早く確定します。** receipt が無いとき、子の画面に Codex の実行中の表示か応答の表示が出たら、そこで確定します（93秒 → 約10秒）。長い応答の途中で task の文面が画面の外に出ると、これまでどおり90秒待つことがあります（#118 で追跡中）
 
 ### WSL で窓を閉じたときの説明を、実測に合わせました（#116）
@@ -1740,7 +1740,7 @@ WSL で、bound proxy の Codex の親が「proxy に register_agent などが�
 
 ### Claude の子に Claude in Chrome（ブラウザ操作）を明示して渡せるようにしました
 
-`spawn_child.sh --claude-chrome` / `--claude-chrome-device <deviceId>`、`/delegate` の同名フラグ、NEW AGENT の「Explicitly enable Claude in Chrome」で、Claude の子を `--chrome` 付きで起動します。指定しない子の起動コマンドは従来と同じ（inherit）で、Chrome を使えるかは利用者の Claude 設定で決まります。deviceId は子への選択ポリシーで、技術的な隔離ではありません。子は `list_connected_browsers` で接続を確かめて `select_browser` が成功してから自分のタブで操作し、見つからないときは止まって報告します。指定した子は warm pool を使わず cold start します。保証する範囲は新規の cold 起動です。dashboard からの resume は補助機能で、その会話（session ID）の記録があれば `--chrome` とブラウザの選び方を復元し、記録が壊れていれば止めます。記録が無ければ従来どおり再開します（指定したブラウザの復元は保証しません）。公式 docs では WSL は非対応です。Claude Code 2.1.283 のアカウント接続で WSL から Windows のブラウザを操作できたことを 1 台で確認しています。詳細は [docs/delegation.md](docs/delegation.md#claude-child-とブラウザ操作claude-in-chrome)。
+`spawn_child.sh --claude-chrome` / `--claude-chrome-device <deviceId>`、`/delegate` の同名フラグ、NEW AGENT の「Explicitly enable Claude in Chrome」で、Claude の子を `--chrome` 付きで起動します。指定しない子の起動コマンドは従来と同じ（inherit）で、Chrome を使えるかは利用者の Claude 設定で決まります。deviceId は子への選択ポリシーで、技術的な隔離ではありません。子は `list_connected_browsers` で接続を確かめて `select_browser` が成功してから自分のタブで操作し、見つからないときは止まって報告します。指定した子は warm pool を使わず cold start します。保証する範囲は新規の cold 起動です。dashboard からの resume は補助機能で、その会話（session ID）の記録があれば `--chrome` とブラウザの選び方を復元し、記録が壊れていれば止めます。記録が無ければ従来どおり再開します（指定したブラウザの復元は保証しません）。公式 docs では WSL は非対応です。Claude Code 2.1.283 のアカウント接続で WSL から Windows のブラウザを操作できたことを 1 台で確認しています。詳細は [docs/delegation.md](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md#claude-child-とブラウザ操作claude-in-chrome)。
 
 ### NEW AGENT の Codex でも、旧世代のモデルを「more models」に畳みます
 
@@ -1797,7 +1797,7 @@ hook の自動承認はしません。調査と実装は kame447 さんによる
 
 ### Mail 更新手順の検証と確認が、環境によって失敗していました（#79・#84）
 
-[docs/agentstack-mail-update.md](docs/agentstack-mail-update.md) の手順3で、隔離した検証用の Mail が稼働中の Mail と同じ管理 socket を開こうとして起動直後に落ちていました。管理 socket も検証用の場所に書き換え、稼働中の場所を指したままの設定が残っていれば起動前に止まるようにしました。手順7の稼働確認も、Homebrew の Python から作った venv では process が `Python.app` として見えて失敗していたので、判定を `candidates/<sha>/venv/bin/` に変えました。
+[docs/agentstack-mail-update.md](https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md) の手順3で、隔離した検証用の Mail が稼働中の Mail と同じ管理 socket を開こうとして起動直後に落ちていました。管理 socket も検証用の場所に書き換え、稼働中の場所を指したままの設定が残っていれば起動前に止まるようにしました。手順7の稼働確認も、Homebrew の Python から作った venv では process が `Python.app` として見えて失敗していたので、判定を `candidates/<sha>/venv/bin/` に変えました。
 
 ## 2026.09.25
 
@@ -1863,7 +1863,7 @@ isolated worktree は `/tmp/cc-worktrees` に固定されていたため、再�
 
 ### launcher を通らずに起動した常駐 bot が、local credential を持てませんでした（#56）
 
-tmux に常駐する親なしの bot（Claude Channels bot など）は、launcher の外で素の `claude --channels ...` として起動されてきました。そのため local credential が一度も保存されず、SessionStart の案内が誘導する `agentstack-reregister` は `stage=local-token reason=credential-unavailable` で必ず失敗していました。credential が消えたのではなく、保存される経路が無かったためです。こうした bot を製品の経路に乗せる部品を 3 つ加えました。手順は [docs/persistent-agents.md](docs/persistent-agents.md) にあります。
+tmux に常駐する親なしの bot（Claude Channels bot など）は、launcher の外で素の `claude --channels ...` として起動されてきました。そのため local credential が一度も保存されず、SessionStart の案内が誘導する `agentstack-reregister` は `stage=local-token reason=credential-unavailable` で必ず失敗していました。credential が消えたのではなく、保存される経路が無かったためです。こうした bot を製品の経路に乗せる部品を 3 つ加えました。手順は [docs/persistent-agents.md](https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md) にあります。
 
 - **credential の enroll**（`agentstack-enroll inspect | claim | recover`）。ORRERY Mail がローカルの Unix 管理 socket（0600、peer UID 検査、稼働中の server instance に pin）を公開します。CLI は数値 agent id・project・期待する `credential_generation` を固定し、既存 row を compare-and-swap で更新して、server が受理した後にだけ 0600 の local credential を有効にします。alias も新しい row も作らず、結果・audit・log に secret は出ません。MCP / proxy の catalog には存在せず、operator が local terminal で実行するものです
 - **常駐 profile と起動 wrapper**（`agentstack-persistent inspect | run --profile`）。wrapper は instance lock を取り、保存済み credential を同じ row と照合し、観測された standalone の Mail alias を同名の bound proxy に置き換える MCP overlay を書いてから、設定された command を `exec` します。該当する alias が無ければ `orrery-mail` を 1 本生成します。interactive の Claude は通常の `--channels plugin:...` をそのまま使います（`--strict-mcp-config` は Channels を無効化するため使いません）。exec 前の検査は Claude の実効設定源を有限に列挙し、固定の reason と path で fail-closed します
@@ -1873,7 +1873,7 @@ tmux に常駐する親なしの bot（Claude Channels bot など）は、launch
 
 macOS 1 台で、既存の Channels bot 1 体を `recover` で enroll して確認しました。launchd から起動した wrapper、本番の headless provider 配送、2 台目の機体は未検証です。
 
-enroll の socket は新しい Mail build が公開します。稼働中の Mail は再 install で adopt されるだけで入れ替わらないので、enroll を使うには [docs/agentstack-mail-update.md](docs/agentstack-mail-update.md) の手順で Mail を切り替えてください。
+enroll の socket は新しい Mail build が公開します。稼働中の Mail は再 install で adopt されるだけで入れ替わらないので、enroll を使うには [docs/agentstack-mail-update.md](https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md) の手順で Mail を切り替えてください。
 
 ### docs: ORRERY Mail の更新手順を installer の配置に合わせました
 
@@ -2021,7 +2021,7 @@ DECK から RESUME した Codex の子が、起動時に選ばれた専用の設
 
 手元の macOS での実測（Codex CLI 0.154.0、待機のみの子、プロセス木全体の `phys_footprint` 合計）では、10 プロセス 658 MB が 5 プロセス 318 MB になりました。**環境と構成に依存する値**で、物理メモリがその分解放されることを保証するものではありません。
 
-絞った子には、初回のプロンプトで「持っていないツール」と「必要なら親に相談すること」を伝えます。**測った範囲では、後から設定を有効に戻しても、その会話では呼び出せませんでした**（設定変更後、`/mcp` の実行後、同じ会話を新しいプロセスで再開した後、いずれも呼び出しを確認できていません）。詳細と限界は [docs/delegation.md](docs/delegation.md) にあります。
+絞った子には、初回のプロンプトで「持っていないツール」と「必要なら親に相談すること」を伝えます。**測った範囲では、後から設定を有効に戻しても、その会話では呼び出せませんでした**（設定変更後、`/mcp` の実行後、同じ会話を新しいプロセスで再開した後、いずれも呼び出しを確認できていません）。詳細と限界は [docs/delegation.md](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md) にあります。
 
 ### エージェントの使用量表示
 
