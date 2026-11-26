@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 import dashboard.server as server
-from test_network_node import HARNESS
+from test_network_node import HARNESS, LOCAL_MAKERS_JS
 
 ROOT = Path(__file__).resolve().parents[1]
 HTML = (ROOT / 'dashboard/index.html').read_text()
@@ -41,7 +41,7 @@ def test_server_display_flag_follows_same_opt_in(tmp_path, monkeypatch):
 
 
 def test_network_cloud_off_on_and_explicit_local():
-    script = HARNESS + (ROOT / 'dashboard/network_node.js').read_text() + '''
+    script = HARNESS + LOCAL_MAKERS_JS + (ROOT / 'dashboard/network_node.js').read_text() + '''
 const n=window.OrreryNetworkNode;
 function draw(g){return snapshot(n.render('Alpha',g,{avatar:()=>null}));}
 const result=[];
@@ -53,6 +53,8 @@ for(const enabled of [false,true]){
    localGLM46:draw({provider:'local',model_raw:'zai-org/GLM-4.6'}),
    localXGLM:draw({provider:'local',model_raw:'facebook/xglm-7.5B'}),
    localChatGLM:draw({provider:'local',model_raw:'chatglm3-6b'}),
+   inklingDsh:draw({provider:'strata',locality:'local',model:'Inkling 2 Mini',model_raw:'inkling-2-mini',program:'dsh'}),
+   inklingHermes:draw({provider:'local',model_raw:'thinkingmachines/Inkling-2-Mini',program:'hermes'}),
    localDeepSeek:draw({provider:'local',model_raw:'deepseek-ai/DeepSeek-V3',program:'codex'}),
    unknown:draw({provider:'local',model_raw:'unknown',program:'codex'}),
    noLocal:draw({model:'Qwen3-Coder',program:'codex'})});
@@ -72,6 +74,9 @@ process.stdout.write(JSON.stringify(result));
         assert len(nodes(glm, 'polygon')) == 1
         assert nodes(glm, 'image')[0]['attrs']['data-provider'] == 'glm'
         assert nodes(state['localGLM46'], 'image')[0]['attrs']['data-provider'] == 'glm'
+        for harness in ('inklingDsh', 'inklingHermes'):
+            assert len(nodes(state[harness], 'polygon')) == 1
+            assert nodes(state[harness], 'image')[0]['attrs']['data-provider'] == 'thinking-machines'
         for name in ('localXGLM', 'localChatGLM'):
             assert len(nodes(state[name], 'polygon')) == 1
             assert not nodes(state[name], 'image')
@@ -135,7 +140,7 @@ process.stdout.write(JSON.stringify(w.AGENTSTACK_DEMO.payloads.spawnNames()));''
 
 
 def test_strata_badges_share_local_metadata_in_network_deck_and_global():
-    script = HARNESS + (ROOT / 'dashboard/network_node.js').read_text() + (ROOT / 'dashboard/runtime_node.js').read_text() + """
+    script = HARNESS + LOCAL_MAKERS_JS + (ROOT / 'dashboard/network_node.js').read_text() + (ROOT / 'dashboard/runtime_node.js').read_text() + """
 Object.defineProperty(El.prototype,'outerHTML',{get(){return '<'+this.tag+' '+Object.entries(this.attrs).map(([k,v])=>k+'="'+v+'"').join(' ')+'>'+this.children.map(c=>c.outerHTML).join('')+'</'+this.tag+'>';}});
 const {providerKeyFor,providerBadge}=window.OrreryNetworkNode;
 """ + _function('deckProviderLogo') + """
@@ -186,7 +191,7 @@ def test_network_projection_keeps_locality_and_raw_model():
 def test_network_badge_rebuilds_when_only_resolved_local_maker_changes():
     tick = HTML[HTML.index('async function netTick(){'):]
     tick = tick[:tick.index('\n}\n') + 2]
-    script = HARNESS + (ROOT / 'dashboard/network_node.js').read_text() + """
+    script = HARNESS + LOCAL_MAKERS_JS + (ROOT / 'dashboard/network_node.js').read_text() + """
 const {providerKeyFor}=window.OrreryNetworkNode;
 const info={innerHTML:'',textContent:''};
 document.getElementById=()=>info;

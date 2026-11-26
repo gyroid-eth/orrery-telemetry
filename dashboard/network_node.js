@@ -48,9 +48,8 @@ const _PROVIDER_ASPECT = {
   anthropic: 1,         // 24x24 正方形（Claude logo）
   openai:    256/260,   // ~0.98 (ほぼ正方形)
   google:    1,         // 24x24 正方形（Gemini logo）
-  deepseek:  71.69/52.76,
-  qwen:      1,
-  glm:       1,
+  ...Object.fromEntries(Object.entries(window.OrreryLocalModelMakers).map(
+    ([maker,{aspect}])=>[maker,aspect])),
 };
 // asset の更新が SVG <image> 要素のキャッシュに引っかかるため、ページごとに
 // 一意な version 文字列を付けて確実に最新を取得する（page load ごとに 1 回）。
@@ -67,14 +66,11 @@ function providerKeyFor(g){
   const raw=String((g&&g.provider)||'').toLowerCase();
   // Localは公開backend/localityだけから判定し、engine名やURLから推測しない。
   if(raw==='local'||raw==='strata'||String((g&&g.locality)||'').toLowerCase()==='local'){
-    const model=String(g.model_raw||g.model||'').toLowerCase();
-    if(/(?:^|[\/\s_-])qwen/.test(model))return 'local:qwen';
-    if(/(?:^|[\/\s_-])deepseek/.test(model)&&window.AGENTSTACK_DSH_ENABLED===true)
-      return 'local:deepseek';
-    if(/(?:^|[^a-z0-9])glm/.test(model))return 'local:glm';
-    return 'local';
+    const maker=window.orreryLocalModelMaker(String(g.model_raw||g.model||''),
+      key=>key!=='deepseek'||window.AGENTSTACK_DSH_ENABLED===true);
+    return maker?'local:'+maker:'local';
   }
-  if(_PROVIDER_ASPECT[raw]&&raw!=='qwen'&&raw!=='glm'&&
+  if(Object.hasOwn(_PROVIDER_ASPECT,raw)&&(!Object.hasOwn(window.OrreryLocalModelMakers,raw)||raw==='deepseek')&&
      (raw!=='deepseek'||window.AGENTSTACK_DSH_ENABLED===true))return raw;
   const model=String((g&&g.model)||'').toLowerCase();
   if(/claude|opus|sonnet|haiku|fable|mythos/.test(model))return 'anthropic';
