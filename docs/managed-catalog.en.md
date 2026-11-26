@@ -10,6 +10,7 @@ Read the [provider, model and harness definitions](getting-started.en.md#provide
 | --- | --- | --- |
 | `claude` / existing Claude Code route | Claude Code (`claude-code`) | Uses the CLI's login and existing model catalog. This does not configure a new, general-purpose Anthropic API connection |
 | `codex` / existing Codex CLI route | Codex CLI (`codex-cli`) | Uses the CLI's login, account access and model catalog for the installed version |
+| `gemini` / Google Antigravity | Antigravity CLI (`agy`) | Uses the signed-in account and the models from the catalog. [Gemini setup guide](antigravity.en.md) |
 | `deepseek` / configured DeepSeek backend | `dsh` | Requires the pinned DeepSeek adapter, a credential reference and exact model IDs configured for the backend |
 | `deepseek` / configured DeepSeek backend | `hermes` | Requires an explicitly configured profile and credential reference. Supported official DeepSeek `/anthropic` routes are mapped to `/v1` Chat Completions while preserving thinking |
 | `strata` / displayed as Local | `dsh` | Requires an API compatible with the existing adapter, a credential reference and exact model IDs configured for the backend. Compatibility with arbitrary Local servers is not guaranteed |
@@ -17,7 +18,7 @@ Read the [provider, model and harness definitions](getting-started.en.md#provide
 
 Real-machine checks of the four API combinations have so far been carried out on macOS in `legacy` mode. This does not mean every combination has been verified end to end; see [current limitations](#current-limitations). The additional static checks for Ubuntu WSL are described below. Main and helper models use the exact IDs in the same backend's `models` list, or its single `model` when no list is supplied. Availability is checked for each selected model × harness pair. Credentials from another provider and unconfigured models are never inferred.
 
-[Codex App Bridge](codex-app.en.md) and [Antigravity / Gemini](antigravity.en.md) are separate, optional integrations. Their presence does not establish additional combinations with dsh / Hermes or allow an unsupported API to be used as `claude` / `codex`.
+[Codex App Bridge](codex-app.en.md) is an optional Desktop integration. The table above lists the supported provider and harness combinations.
 
 Choose optional runtime installation with `install.sh --enable-dsh --dsh-node /absolute/node` / `--enable-hermes`. See [installation and removal](install.en.md).
 

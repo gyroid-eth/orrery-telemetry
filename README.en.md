@@ -2,7 +2,7 @@
 
 [日本語](README.md)
 
-Claude Code, Codex, DeepSeek and Local LLM agents can talk directly, divide the work and check each other's results. ORRERY Telemetry shows their work and Mail round trips on one screen. Claude Code and Codex use their own CLIs; DeepSeek and Local LLMs use dsh or Hermes. Choose which to prepare: you do not need to install Claude Code or Codex before using DeepSeek or Local models. Pair Telemetry with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to use their terminals in the same workspace.
+Claude Code, Codex, Gemini, DeepSeek, and Local LLM agents can talk directly, divide the work, and check each other's results. ORRERY Telemetry shows their work and Mail on one screen. Claude Code and Codex use their own CLIs, Gemini uses Google Antigravity CLI (`agy`), and DeepSeek and Local LLMs use dsh or Hermes. Set up the providers you want to use. Pair Telemetry with [ORRERY cockpit](https://github.com/gyroid-eth/orrery) to operate their terminals in the same workspace.
 
 ## To install both (the orrery one-liner)
 
@@ -22,10 +22,11 @@ Review and approve the plan yourself. Check for `ORRERY's base is ready` and **Y
 | --- | --- |
 | Observe agents on your machine | Start a configured agent and open DECK / NETWORK |
 | Start with Claude Code or Codex | Install the shared components, sign in to your chosen CLI, then [start the first agent](docs/getting-started.en.md#3-start-the-first-agent-and-watch-it-on-the-dashboard) |
+| Start with Gemini | Install the shared components, then sign in to Antigravity CLI and launch from NEW AGENT. [Gemini setup guide](docs/antigravity.en.md) |
 | Start with DeepSeek or Local LLMs | Install the shared components, then follow the [API setup guide](docs/native-setup.en.md) for dsh/Hermes, key storage, connection settings and launch. Claude/Codex login is not required |
 | Have agents divide work | Follow the [delegate and Mail end-to-end check](docs/getting-started.en.md#5-play-shiritori-as-an-end-to-end-check) |
 
-A provider supplies the connection, a model identifies what runs there, and a harness is the CLI that runs tools and the conversation. Standard API combinations currently cover DeepSeek / Local × dsh / Hermes, with availability checked per configured model. This does not promise arbitrary API and harness combinations.
+A provider supplies the connection, a model identifies what runs there, and a harness is the CLI that runs tools and the conversation. Gemini uses the account signed in to Antigravity CLI. The standard API combinations for DeepSeek and Local use dsh or Hermes, with availability checked per configured model.
 
 Once configured, DeepSeek / Local models appear under Model and Harness (dsh / Hermes) in NEW AGENT. When adding one for the first time, install the application, store your API key and connect the settings using the [setup guide](docs/native-setup.en.md). Keys belong in Mac Keychain or Ubuntu Secret Service, not in NEW AGENT. API launching currently requires legacy mode. Hermes keeps each agent's conversations and memory separate by project and registered name. There is no universal provider login or shared Hermes Telegram entry point yet, and manual Local effort still needs real-server verification. See the [supported scope and limitations](docs/managed-catalog.en.md#current-limitations) and the [selection screen examples](docs/dashboard.en.md#native-models-and-harnesses).
 
@@ -48,9 +49,10 @@ Top-level and delegated-child launches protect the selected working folder (not 
 `--project-key` is the absolute path of the folder where agents work, not this repository. Review and confirm the changes, then check the shared components with `~/.agentstack/bin/agentstack-doctor` and `~/.agentstack/bin/agentstack-selftest`. Continue with your chosen provider:
 
 - **Claude Code / Codex**: Install and sign in to the chosen CLI in the same OS environment. Start it with `~/.agentstack/bin/agent-start <project folder>` or `~/.agentstack/bin/agent-start-codex <project folder>`.
+- **Gemini (Antigravity)**. Install Antigravity CLI (`agy`) and sign in. Run `scripts/install-gemini-provider.sh` from the Telemetry checkout, then restart Dashboard. Choose **Antigravity** and a model in NEW AGENT. Supported macOS setups can launch standalone agents. On Linux or WSL, select a parent for a delegated launch. [Gemini setup guide](docs/antigravity.en.md)
 - **DeepSeek / Local LLMs**: Follow the [API setup guide](docs/native-setup.en.md) to prepare dsh or Hermes, key storage and connection settings. Then select and launch it from NEW AGENT at `http://127.0.0.1:8770/`. The install command above does not complete this API setup.
 
-For either route, check that the agent appears in DECK. The [standalone procedure](docs/getting-started.en.md#standalone-installation-and-verification) covers preparation, launch and Mail verification.
+After launch, check that the agent appears in DECK. The [standalone procedure](docs/getting-started.en.md#standalone-installation-and-verification) covers preparation, launch and Mail verification.
 
 Installer `--child-default-tools` selects default child tools (empty by default). Explicit choices win; unavailable default items are omitted with a notice. See [tool selection](docs/delegation.en.md#installer-defaults).
 
@@ -119,7 +121,7 @@ Japanese documents are the source of truth. The English entry point is the [Engl
 | Launch isolated global clients and deliver notifications | [Launch, delivery and operator recovery](docs/global-delivery-client.en.md) (legacy remains default) |
 | Move instructions to the user scope | [Block migration and recovery](docs/instruction-migration.en.md) |
 
-[Using it with Obsidian](docs/obsidian.en.md) and the public [demo vault](https://github.com/gyroid-eth/orrery-demo-vault) turn logs, paper notes, and tasks into notes; Obsidian is optional. [Codex App](docs/codex-app.en.md) and [Antigravity / Gemini](docs/antigravity.en.md) are optional providers beyond the CLIs.
+[Using it with Obsidian](docs/obsidian.en.md) and the public [demo vault](https://github.com/gyroid-eth/orrery-demo-vault) turn logs, paper notes, and tasks into notes. Obsidian is optional. [Codex App](docs/codex-app.en.md) is an optional provider beyond the CLIs.
 
 Look before installing with the [public demo](https://agentstack-demo.pages.dev/); the [introduction video](https://youtu.be/Jpc1ad7c90k) illustrates the idea ([Japanese version](https://youtu.be/JXoa93TQolU)). See [CONTRIBUTING.md](CONTRIBUTING.md) before contributing code.
 

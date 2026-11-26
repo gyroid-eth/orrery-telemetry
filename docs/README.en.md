@@ -41,7 +41,7 @@ Overview: the cockpit is the screen for operating terminals; Telemetry is the da
 - [Configuration](configuration.en.md) — Look up AGENTSTACK_*, storage/exposure, model, and child settings.
 - [Reusable Codex plugin lifecycle (Japanese)](codex-plugin-lifecycle.md) — Shared operations, scoped hook trust, and isolated verification.
 - [Codex App integration](codex-app.en.md) — Add Desktop tasks/subagents as an optional provider.
-- [Antigravity / Gemini](antigravity.en.md) — Add an optional provider and understand authentication and feature boundaries.
+- [Gemini (Antigravity)](antigravity.en.md) — Install and sign in to the CLI, launch from NEW AGENT, and check supported features.
 - [DeepSeek display and balance (Japanese)](dsh-stage-a.md) — Historical stage-A record. For current dsh / Hermes installation, see [Installation](install.en.md); child spawning needs provider and harness selection ([API](api.en.md)).
 - [Persistent agents](persistent-agents.en.md) — Enrollment, interactive/headless startup, and credential recovery.
 - [Deterministic daemons](daemon-agents.en.md) — Dedicated identity, canonical binding, notification waits, and shutdown.

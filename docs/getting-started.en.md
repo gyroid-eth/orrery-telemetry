@@ -6,10 +6,11 @@ For the usual entry point, use the [ORRERY cockpit quick start](https://github.c
 
 ## Who this is for
 
-- **People who want to use coding agents**: prepare Claude Code, Codex, DeepSeek or Local LLM agents that write code, change files and run commands. You can start here even if this is your first agent. DeepSeek/Local run through dsh or Hermes and do not require Claude Code or Codex login.
+- **People who want to use coding agents** can set up Claude Code, Codex, Gemini, DeepSeek, or Local LLM agents that write code, change files, and run commands. You can start here even if this is your first agent.
 - **A good fit**: you run several agents and find yourself acting as the go-between: pasting Codex output into Claude Code, or hopping between apps and tabs to check on each one. You want that manual relay gone and the whole picture on one screen.
 - **Not a fit**: one agent is enough for you. The value here is in coordinating several agents and watching them.
-- **Supported agents**: Claude Code, Codex, DeepSeek and Local models. DeepSeek and Local models run through dsh or Hermes. Codex Desktop tasks and subagents, and Google Antigravity / Gemini, are optional providers you can add after the core install. Their connection methods and supported features differ.
+- **Supported agents** include Claude Code and Codex through their own CLIs, Gemini through Google Antigravity CLI (`agy`), and DeepSeek and Local LLMs through dsh or Hermes.
+- **Codex Desktop tasks and subagents** can appear on the same dashboard through an optional provider.
 
 ## Choose by goal
 
@@ -18,6 +19,7 @@ First [install and verify the shared components](#standalone-installation-and-ve
 | Provider | After the shared install |
 | --- | --- |
 | Claude Code / Codex | Install and sign in to the chosen CLI, then [start the first agent](#3-start-the-first-agent-and-watch-it-on-the-dashboard) |
+| Gemini (Antigravity) | Install and sign in to Antigravity CLI, then launch from NEW AGENT. [Gemini setup guide](antigravity.en.md) |
 | DeepSeek / Local LLMs | Follow [API setup](native-setup.en.md) for dsh/Hermes, key storage and connection settings, then launch from NEW AGENT. Claude/Codex login is not required |
 
 Open DECK / NETWORK to observe configured agents. To connect them, continue with the [Mail check](#5-play-shiritori-as-an-end-to-end-check). Check the [supported API combinations and limitations (Japanese)](managed-catalog.md) too.
@@ -27,9 +29,9 @@ Open DECK / NETWORK to observe configured agents. To connect them, continue with
 
 | Choice | Meaning and current examples |
 | --- | --- |
-| provider / backend | Connection and credential settings. API spawn provider IDs are `deepseek` and `strata` (displayed as Local). Existing `claude` / `codex` routes use each CLI's login |
+| provider / backend | Connection and credential settings. `claude`, `codex`, and `gemini` use their CLI's sign-in. `deepseek` and `strata` (displayed as Local) use a configured API connection |
 | model | A formal model ID selected from the models configured for the same backend |
-| harness | The CLI that runs the conversation and tools. API spawning requires `dsh` or `hermes`; Claude Code / Codex CLI each use their own harness |
+| harness | The CLI that runs the conversation and tools. DeepSeek and Local API connections use `dsh` or `hermes`. Claude Code, Codex CLI, and Antigravity CLI each use their own harness |
 
 The model's maker need not be the API host: a DeepSeek model hosted locally still uses Local as its connection. Agent identity, parent, work project and Mail recipient are separate from these choices. Selecting a model or harness does not select a parent or recipient.
 
@@ -54,7 +56,7 @@ These six terms help you read this standalone procedure and the reference guides
 
 Use Python 3.11 or later, `git`, `tmux`, and `uv`. Check the [OS prerequisites](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md#requirements) for `curl`, `lsof`, and `xz`. On macOS you can add uv with `brew install uv`. If you use uv's official installer, run `export PATH="$HOME/.local/bin:$PATH"` in the same shell and verify with `uv --version`.
 
-**On Windows**: install inside WSL2 Ubuntu and run the commands below there. Open the dashboard in your Windows browser. Complete the [WSL2 preparation](install.en.md#installing-on-windows-wsl2), then sign in to the chosen CLI for Claude/Codex or follow [API setup](native-setup.en.md) for DeepSeek/Local.
+**On Windows**, run the commands below in WSL2 Ubuntu and open the dashboard in your Windows browser. After [preparing WSL2](install.en.md#installing-on-windows-wsl2), follow the setup for your provider. Sign in to the CLI for Claude or Codex, follow the [Gemini setup guide](antigravity.en.md), or complete [API setup](native-setup.en.md) for DeepSeek or Local.
 
 ### 1. Install
 
@@ -81,6 +83,8 @@ agentstack-selftest
 **Success**: the required `agentstack-doctor` checks show `ok:` with no `missing:` entries; inspect any `warn:` entries and their suggested fixes (informational `note:` and `mail-features:` lines are also normal), and `agentstack-selftest` ends with `self-test passed: two agents registered, exchanged messages, ...`. If either stops, go to the matching section of [Troubleshooting](troubleshooting.en.md).
 
 ### 3. Start the first agent and watch it on the dashboard
+
+**For Gemini**, follow the [Gemini setup guide](antigravity.en.md) to sign in to Antigravity CLI and set up Telemetry. Choose **Antigravity** and a model in NEW AGENT, then launch and check for its card in DECK.
 
 **For DeepSeek / Local LLMs**: Complete [API setup](native-setup.en.md), then choose the configured Model and Harness in NEW AGENT at `http://127.0.0.1:8770/` and launch. When a card with the scientist's name appears in DECK, try the guide's short conversation check and the [Mail check below](#5-play-shiritori-as-an-end-to-end-check).
 

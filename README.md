@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-Claude Code・Codex・DeepSeek・Local LLMのagentが直接話し、仕事を分担し、結果を確かめ合う。その働きとMailの往復を一枚の画面で見渡せるのがORRERY Telemetryです。Claude CodeとCodexは各CLI、DeepSeekとLocal LLMはdshまたはHermesを使います。使いたい系統を選んで準備でき、DeepSeek・LocalのためにClaude CodeやCodexを先に入れる必要はありません。ターミナルも同じ画面で使う[ORRERY cockpit](https://github.com/gyroid-eth/orrery)と組み合わせて使えます。
+Claude Code・Codex・Gemini・DeepSeek・Local LLM の agent が直接話し、仕事を分担し、結果を確かめ合う。その働きと Mail の往復を一枚の画面で見渡せるのが ORRERY Telemetry です。Claude Code と Codex は各 CLI、Gemini は Google Antigravity CLI（`agy`）、DeepSeek と Local LLM は dsh または Hermes で動きます。使いたい系統を選んで準備できます。ターミナルも同じ画面で操作するには [ORRERY cockpit](https://github.com/gyroid-eth/orrery) と組み合わせて使います。
 
 ## 両方入れるなら（orrery の 1 行）
 
@@ -22,10 +22,11 @@ curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/ge
 | --- | --- |
 | 手元のagentの働きを見る | 準備済みのagentを起動し、DECK / NETWORKを開く |
 | Claude CodeやCodexで始める | 共通部分を導入し、使うCLIにログインして[最初のagentを起動する](docs/getting-started.md#3-最初の-agent-を起動しdashboard-で見る) |
+| Gemini で始める | 共通部分を導入し、Antigravity CLI のサインインから NEW AGENT での起動まで進む。[Gemini の導入ガイド](docs/antigravity.md) |
 | DeepSeekやLocal LLMで始める | 共通部分を導入し、[APIの初期設定ガイド](docs/native-setup.md)でdsh/Hermesの追加・キーの保存・接続設定・画面からの起動へ進む。Claude/Codexのログインは不要 |
 | agent 同士で仕事を分担する | [delegate と Mail の通し確認](docs/getting-started.md#5-しりとりで通しの確認をする)へ進む |
 
-provider は接続先、model はそこで使うモデル、harness は道具や会話を動かす CLI です。現在、API を使う標準の組合せは DeepSeek / Local × dsh / Hermes に限り、設定済みの model ごとに利用可否を検査します。任意の API と任意の harness の組合せを保証するものではありません。
+provider は接続先、model はそこで使うモデル、harness は道具や会話を動かす CLI です。Gemini は Antigravity CLI にサインインしたアカウントを使います。API で接続する DeepSeek / Local の標準の組合せは dsh / Hermes で、設定済みの model ごとに利用可否を検査します。
 
 準備済みのDeepSeek / Localは、NEW AGENTのModelとHarness（dsh / Hermes）から選べます。初めて追加するときは、アプリの導入、APIキーの保存、接続先の設定が必要です。[初期設定ガイド](docs/native-setup.md)で順番に進めてください。キーはMacのキーチェーン、またはUbuntuのSecret Serviceへ保存し、NEW AGENTには貼りません。API起動はlegacy modeが対象です。Hermesの会話・記憶はprojectとagentの正式名ごとに分かれます。すべての接続先に使えるログイン機能やHermes共通のTelegram入口はまだなく、Localのeffort設定にも未確認範囲があります。[対応範囲と制限](docs/managed-catalog.md#現在の制限)・[画面の選択例](docs/dashboard.md#native-models-and-harnesses)を参照してください。
 
@@ -48,9 +49,10 @@ top-level / delegated child の起動は、選択した作業フォルダ（Git 
 `--project-key`は、agentに作業させるfolderの絶対パスです（このrepositoryではありません）。変更内容を確認・承認して導入し、`~/.agentstack/bin/agentstack-doctor`と`~/.agentstack/bin/agentstack-selftest`で共通部分を確かめます。その後、使う系統に合わせて準備します。
 
 - **Claude Code / Codex**: 同じOS環境に使うCLIを入れてログインし、`~/.agentstack/bin/agent-start <project folder>`または`~/.agentstack/bin/agent-start-codex <project folder>`で起動します。
+- **Gemini（Antigravity）**。Antigravity CLI（`agy`）を入れてサインインします。Telemetry の checkout で `scripts/install-gemini-provider.sh` を実行し、Dashboard を再起動します。NEW AGENT で **Antigravity** と model を選びます。対応する macOS 環境では親なしで起動でき、Linux／WSL では親を選んで委任起動します。[Gemini の導入ガイド](docs/antigravity.md)
 - **DeepSeek / Local LLM**: [APIの初期設定ガイド](docs/native-setup.md)でdshまたはHermes、キー、接続設定を準備し、`http://127.0.0.1:8770/`のNEW AGENTから選んで起動します。上のinstallだけでは、このAPI設定は済みません。
 
-どちらもDECKにagentが現れることを確認します。[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)に、準備・起動・Mail確認の流れがあります。
+起動した agent が DECK に現れることを確認します。準備・起動・Mail 確認の流れは[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)を参照してください。
 
 子に渡す道具の既定は installer の `--child-default-tools`（既定は空）で選べます。明示の指定を優先し、使えない既定の項目は通知して外します。[道具の選び方](docs/delegation.md#installer-の既定の道具)を参照してください。
 
@@ -119,7 +121,7 @@ global network の稼働状態・本人照合と unknown の境界は [観測の
 | 隔離 global client を起動・配送する | [起動・配送・operator 復旧](docs/global-delivery-client.md)（既定は旧 mode） |
 | 利用者単位の指示へ移す | [block の移行と復旧](docs/instruction-migration.md) |
 
-[Obsidian と一緒に使う](docs/obsidian.md)と公開の [demo vault](https://github.com/gyroid-eth/orrery-demo-vault)で、作業ログ・論文ノート・タスクをノートにできます。Obsidian は必須ではありません。CLI 以外の [Codex App](docs/codex-app.md)、[Antigravity / Gemini](docs/antigravity.md)は optional provider です。
+[Obsidian と一緒に使う](docs/obsidian.md)と公開の [demo vault](https://github.com/gyroid-eth/orrery-demo-vault)で、作業ログ・論文ノート・タスクをノートにできます。Obsidian は必須ではありません。CLI 以外の [Codex App](docs/codex-app.md) は optional provider です。
 
 install 前に雰囲気を見るなら[公開デモ](https://agentstack-demo.pages.dev/)、考え方の図解は[紹介動画](https://youtu.be/JXoa93TQolU)。開発への変更は [CONTRIBUTING.md](CONTRIBUTING.md)を参照してください。
 

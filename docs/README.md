@@ -41,7 +41,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [設定](configuration.md) — AGENTSTACK_*、保存・公開範囲、model・child の設定を調べる。
 - [Codex plugin 導入処理の再利用](codex-plugin-lifecycle.md) — 本体 install 接続前の共通処理、対象 hook の信頼と隔離確認。
 - [Codex App 統合](codex-app.md) — optional provider として Desktop の task/subagent を載せる。
-- [Antigravity / Gemini](antigravity.md) — optional provider の追加と認証・機能の境界。
+- [Gemini（Antigravity）](antigravity.md) — CLI の導入・サインイン、NEW AGENT での起動と対応範囲。
 - [DeepSeekの表示と残高](dsh-stage-a.md) — 段Aの歴史記録。現在の dsh / Hermes の導入は[インストール](install.md)、子の起動は provider と harness の指定が必要（[API](api.md)）。
 - [常駐 agent](persistent-agents.md) — enrollment、interactive/headless 起動、credential の復旧。
 - [決定論的 daemon](daemon-agents.md) — 専用 identity、正規 binding、通知待機と停止の契約。

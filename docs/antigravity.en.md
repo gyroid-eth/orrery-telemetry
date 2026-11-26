@@ -19,7 +19,7 @@ agy models
 
 The standard binary location is `~/.local/bin/agy`.
 
-## Install the optional provider payload
+## Set up Gemini in ORRERY
 
 Check the install location and planned copies from an ORRERY Telemetry checkout:
 
@@ -47,8 +47,8 @@ Restart the Dashboard after installation:
 ~/.agentstack/dashboard/agentctl.sh restart
 ```
 
-The optional installer copies provider files. If it reports an outdated core,
-update the core and run the installer again.
+The script copies the files needed for the Gemini integration. If it reports an
+outdated core, update the core and run it again.
 
 ## Show account quota in Usage left
 
@@ -129,7 +129,7 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 ## Dashboard NEW AGENT
 
-[Install the optional provider](#install-the-optional-provider-payload) and restart Dashboard
+[Set up Gemini](#set-up-gemini-in-orrery) and restart Dashboard
 to see Antigravity in **NEW AGENT**. On macOS, when the catalog advertises standalone
 support (API 50 or later), leave the parent blank to open an interactive agent in
 the selected folder, including a folder outside Git. The CLI receives the first
@@ -207,13 +207,11 @@ automatically report to the parent when they exit. Interactive agents on macOS
 can receive follow-up requests through Mail. `/api/spawn-status` and
 `dashboard/logs/spawn.log` record `provider=gemini`.
 
-The core Dashboard modal interprets the provider `capabilities` contract. The
-optional payload only adds the Antigravity catalog item and its `/api/spawn`
-branch; it does not rewrite the page while serving it. If the core page lacks
-the capability marker or resources control, the Antigravity tab is omitted and
-Antigravity spawn requests fail closed; the reason is written to the Dashboard
-log. Claude and Codex are unaffected, including when the extension itself
-cannot be loaded.
+The Dashboard launch form follows the provider's `capabilities` contract.
+The Gemini integration registers the Antigravity catalog entry and its
+`/api/spawn` handler and uses the shared launch form. If the shared form lacks
+the capability marker or the Resources field, Dashboard hides the Antigravity tab
+and logs the reason it rejected the launch.
 
 ## Dashboard controls
 
@@ -306,9 +304,9 @@ boundary against another process running as that user.
 
 ## Design boundary
 
-The provider adds `program=antigravity` / `agy` to the core's shared
-process-tree liveness. The provider extension ships with the optional installer.
-The core installer leaves an already-installed extension in place.
+The shared process-tree liveness check supports `program=antigravity` / `agy`.
+`scripts/install-gemini-provider.sh` installs the Gemini integration files,
+which are preserved when the core is updated.
 
 - Top-level `agy` exits to its interactive shell, which remains attachable as `finished`.
 - A delegated launcher reports the result, releases reservations, soft-retires the identity,
