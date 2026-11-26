@@ -34,6 +34,22 @@ def fixtures(provider):
             raw('end', 'system', 'system', step_turn=dict(id='c'*32, phase='end', duration=3000))]
 
 
+def test_step_image_reference_is_scoped_to_the_mobile_reader_and_agent(monkeypatch):
+    event = raw('seen', step=dict(id='a'*32, phase='complete', tool='view_image', status='observed',
+                                  detail='diagram.png', image=dict(id='r'*32, label='diagram.png',
+                                  kind='image', path='/local/private/diagram.png')))
+    client = history.HistoryClient(18765)
+    upstream = dict(ok=True, provider='codex', events=[event])
+    monkeypatch.setattr(client, '_get', lambda *args, **kwargs: (200, upstream))
+    result = client.page('SampleAgent')
+    image = result['events'][0]['step']['image']
+    assert image == dict(kind='image', label='diagram.png', ref=image['ref'])
+    assert image['ref']!='r'*32 and '/local/private' not in json.dumps(result)
+    assert client._resolve_ref('SampleAgent', image['ref'], 'preview') == 'r'*32
+    with pytest.raises(LookupError, match='preview_expired'):
+        client._resolve_ref('OtherAgent', image['ref'], 'preview')
+
+
 def collect(events, provider):
     node = shutil.which('node')
     if not node:

@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":55}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":56}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -405,6 +405,7 @@ Claude / Claude Code・dsh・Hermes は、検証した本人の会話だけを�
 | `history_binding_reason_code` | 機械向けの固定 code。provider 固有の事情もこの値で表す |
 | `history_session_id` | provider の native session ID。Hermes の DB 読取では必須。未確認なら null |
 | `history_receipt_ts` | receipt の元時刻（ISO 8601 string）。未確認なら null。offset がなければ元の表記を保つ |
+| `history_workspace` | API 56。Antigravity の bound 行では、起動 receipt と照合した作業フォルダの絶対 path。Reader の画像を読む段で相対 path の解決に使う |
 
 cwd・時刻・最新履歴だけから所有を推測しません。binding はプロセス生存の証明ではありません。既存 Codex の field・状態と、fresh の保護された `/api/history` 経路は変更しません。
 
@@ -492,10 +493,10 @@ response:
 ```json
 {"ok":true,"agent":{"name":"AgentName","program":"claude-code","category":"agent","running":true,"created":1793775600,
  "history_binding":"bound","transcript_path":"/abs/path.jsonl","history_binding_reason":"","history_binding_reason_code":"bound",
- "history_session_id":"…","history_receipt_ts":"…"}}
+ "history_session_id":"…","history_receipt_ts":"…","history_workspace":null}}
 ```
 
-- 返す field は上の 11 個だけです。意味は [会話の記録の binding](#会話の記録の-bindinglegacyapi-35) と同じです
+- 返す field は上の項目だけです。API 56 から `history_workspace` が加わり、確認済みの Antigravity の作業フォルダがなければ `null` になります。各 field の意味は [会話の記録の binding](#会話の記録の-bindinglegacyapi-35) と同じです
 - live roster の行でない名前（retired・gone・warm-up・未登録）と、形式の不正な名前は 404 `{"ok":false,"error":"agent_unavailable"}` です
 - 読むだけの GET で、Host・Origin の扱いは `/api/agents` と同じです（loopback）。fresh と global では 404 `agent_unavailable` を返し、legacy の判断はしません（global では、それより前の operator admission に失敗すると、どの route も 503 です）。fresh の保護された history 経路は変わりません
 - 利用者は `api` が 36 以上のときだけ使い、`agent_unavailable` 以外の失敗（他の 404・5xx・通信の失敗）や古い dashboard では、従来の `/api/agents?scope=live` で確かめてください

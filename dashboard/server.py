@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 55
+API_GENERATION = 56
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -2022,7 +2022,7 @@ _HISTORY_BINDING_PATH = re.compile(r"/api/agents/[^/]*/history-binding")
 HISTORY_BINDING_FIELDS = (
     "name", "program", "category", "running", "created",
     "history_binding", "transcript_path", "history_binding_reason",
-    "history_binding_reason_code", "history_session_id", "history_receipt_ts",
+    "history_binding_reason_code", "history_session_id", "history_receipt_ts", "history_workspace",
 )
 
 
