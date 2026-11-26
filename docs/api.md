@@ -840,7 +840,7 @@ request:
 | `task` | yes | task 本文。UI は最大4000文字 |
 | `name` | no | 指定時は hyphen を除去し、`available` 必須 |
 | `dir` | no | 存在する working directory。既定は source repo |
-| `provider` | no | `claude`（既定）、`codex`、`gemini`（追加 provider の Antigravity）、または catalog が返した native 接続 ID（旧 `deepseek` / `strata`、追加例 `strata-epyc`）。catalog の ID をそのまま送る |
+| `provider` | no | `claude`（既定）、`codex`、`gemini`（Antigravity）、または catalog が返した native 接続 ID（旧 `deepseek` / `strata`、追加例 `strata-epyc`）。catalog の ID をそのまま送る |
 | `harness` | DeepSeek / Local 必須 | `dsh` または `hermes`。Claude は `claude-code`（従来 alias `claudecode`）、Codex は `codex-cli`（従来 alias `codex`）を省略可 |
 | `helper_model` | no | 省略または `same` は主モデルを継承。DeepSeek / Local は選択した model × harness の `helper_models` にある同 backend の正式 ID も指定可。未提供・別 backend の ID は拒否 |
 | `web_search` | no | native の dsh / Hermes だけ。`exa` または `searxng` で今回の検索先を上書きする。URL・資格の参照は managed spawn manifest の共通 `web_search` を使う。省略時は共通設定、共通設定も無ければ従来どおり。既存 API 世代の任意 field |
@@ -866,7 +866,7 @@ API 44 から、Codex child の `/api/spawn` と道具を変更する `/api/jump
 
 `base` か `tools` で選択した child は、選択どおりにできなければ（Mail の proxy が無い、server を写せないなど）起動しません。形の誤りはここで 400、child の起動ディレクトリで決まる誤りは launcher の失敗として返ります。API 53 では macOS の Antigravity が管理 relay の `tools.screen` と、catalog が示す `tools.browser_mode` を受け付けます。[Antigravity の起動条件](antigravity.md#dashboard-new-agent)を参照してください。
 
-未知の request field はモデル解決や起動の前に HTTP 400 で拒否します。任意の Gemini provider を導入した環境では `resources` も受け付けます（[Gemini の委任](delegation.md)を参照）。他の provider では拒否します。
+未知の request field はモデル解決や起動の前に HTTP 400 で拒否します。`resources` を受け付けるのは Gemini の委任起動です。[Gemini の委任](delegation.md)を参照してください。
 
 起動失敗後は launcher と同じ共通 cleanup を呼びます。cleanup が確認に失敗した場合、応答は `ok: false`・`cleanup_state: "unknown"`・`cleanup_incomplete: true` となり、API は子の state・owner credential・handoff を消しません。cleanup が正常に完了した場合も、保持期間内の再開に必要な state と資格を API が追加で削除することはありません。
 

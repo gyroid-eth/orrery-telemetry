@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the optional Google Antigravity / Gemini provider payload into an
+# Install the Google Antigravity / Gemini provider files into an
 # existing ORRERY core install.  This installer is deliberately additive: it
 # never replaces core Dashboard files and it never requires `agy` to be
 # installed merely to stage/test the provider payload.
