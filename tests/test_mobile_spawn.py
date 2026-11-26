@@ -135,6 +135,26 @@ def test_read_only_relay_denies_spawn_before_upstream():
         assert request(port,'POST','/view/spawn',{})[0] == 405
 
 
+def test_standalone_antigravity_lists_and_launches_fixed_effort_models():
+    model = 'gemini-pro-orchestrator-argon'
+    provider = {'id':'gemini','efforts':['low','high'],'model_efforts':{model:[]},
+                'capabilities':{'standalone':True, 'effort_required':True},
+                'models':[{'id':model,'default':True}],
+                'harnesses':[{'id':'antigravity','available':True,'default':True}]}
+    submitted = []
+    def launch(body):
+        submitted.append(body)
+        return {'ok':True,'child_name':'FixtureCurie'}
+
+    store = MobileSpawn(lambda: {**CATALOG, 'providers':[provider]}, launch, lambda _: {})
+    catalog = store.catalog('a'*32, configurable=False)
+    route = catalog['models'][0]['harnesses'][0]
+    assert route['efforts'] == [] and route['effort_required'] is False
+    request = dict(payload(catalog, configurable=False), harness='antigravity', effort=None)
+    assert store.launch('a'*32, request) == {'state':'ready','name':'FixtureCurie'}
+    assert submitted[0]['model'] == model and 'effort' not in submitted[0]
+
+
 def test_standalone_antigravity_forwards_only_offered_managed_tools():
     provider = {'id':'gemini','label':'Antigravity','efforts':['low','high'],
                 'capabilities':{'standalone':True, 'resources_required':True, 'effort_required':True},

@@ -18,7 +18,7 @@ def run(body):
     functions = ['normalizeSpawnProviders', 'spawnSelectedModel', 'spawnSelectedHarness',
                  'spawnEffortInfo', 'resolveSpawnEffort', 'spawnEffectiveEffort',
                  'spawnSelectedProviderCapabilities', 'spawnProviderStandalone', 'spawnProviderRequirementsMissing',
-                 'spawnProviderAcceptsResources', 'buildSpawnPayload']
+                 'spawnProviderAcceptsResources', 'spawnProviderHasFixedEffort', 'buildSpawnPayload']
     script = picker + '\nconst SpawnPicker=module.exports;\n' + '\n'.join(function(n) for n in functions)
     script += """
 let spmSelectedProvider='deepseek',spmSelectedModel='fixture',spmSelectedHarness='hermes';
@@ -30,7 +30,8 @@ controls['spm-helper']={value:'same',disabled:true};
 let spmProviders=normalizeSpawnProviders({providers:[{id:'deepseek',models:[{id:'fixture',harnesses:[
 {id:'hermes',available:true,default:true,efforts:['none','high'],default_effort:'high',helper_models:[{id:'same'},{id:'small'}]}]}]}]});
 """
-    result = subprocess.run(['node', '-e', script + '\n' + body], capture_output=True, text=True, timeout=10, check=True)
+    result = subprocess.run(['node', '-e', script + '\n' + body], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
 

@@ -5159,6 +5159,26 @@ PY
   SERVICE_PATH="$unit"
 }
 
+restart_mobile_relay() {
+  [[ -e "$INSTALL_DIR/mobile.json" || -L "$INSTALL_DIR/mobile.json" ]] || return 0
+  local args=(--install-dir "$INSTALL_DIR")
+  [[ "$DRY_RUN" != true ]] || args+=(--dry-run)
+  if ! "$PYTHON_BIN" -B "$SCRIPT_DIR/lib/mobile_relay_restart.py" "${args[@]}"; then
+    warn "the updated mobile relay could not be restarted"
+  fi
+}
+
+restart_codex_app_bridge() {
+  local bridge="$INSTALL_DIR/integrations/codex_app"
+  [[ "$TIER" != tier0 && -f "$bridge/install-state.json" &&
+     -f "$REPO_ROOT/integrations/codex_app/plugin/scripts/run-mcp.sh" ]] || return 0
+  local args=(--install-dir "$bridge")
+  [[ "$DRY_RUN" != true ]] || args+=(--dry-run)
+  if ! "$PYTHON_BIN" -B "$SCRIPT_DIR/lib/codex_app_bridge_restart.py" "${args[@]}"; then
+    warn "the updated Codex App Bridge could not be restarted"
+  fi
+}
+
 start_service() {
   local kind="$1"
   local launchd_target=""
@@ -5820,6 +5840,8 @@ PY
   if [[ "$SERVICE_HEALTHY" != true ]] && ! verify_dashboard_service && [[ "$service_kind" == "systemd-user" ]]; then
     die "dashboard failed to become ready after systemd migration"
   fi
+  restart_mobile_relay
+  restart_codex_app_bridge
   if [[ "$DRY_RUN" == true ]]; then
     say "Dry-run complete: no files were written."
   else

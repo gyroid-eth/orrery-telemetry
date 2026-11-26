@@ -146,8 +146,8 @@ API 53 では macOS の **Computer use** で Off／View／Control を選べま�
   コミットに解決できる worktree base（既定は `HEAD`）が必要です。
 - `agy`、`tmux`、選択された Python、adapter hook、Gemini provider の helper が必要です。
 - `AGENTSTACK_GEMINI_MODELS` を明示した場合、モデルはその許可リストに限定されます。
-  未設定なら、同梱の `gemini-3.8-flash-{high,medium,low}` と `agy models` が返した有効な
-  Gemini ID を表示します。モデルの取得は起動前の検査と同じ方法で `agy` を探すため、
+  未設定なら、`agy models` が返した有効な Gemini ID を表示します。有効な取得結果がなければ、
+  同梱の `gemini-3.8-flash-{high,medium,low}` を使います。モデルの取得は起動前の検査と同じ方法で `agy` を探すため、
   Dashboard の PATH に `~/.local/bin` がなくても標準の場所を使えます。
   `gemini-3.8-flash` しか表示されない場合は、`agy models` の結果、Dashboard を再起動したか、
   許可リストの設定を確認します。
@@ -157,7 +157,7 @@ API 53 では macOS の **Computer use** で Off／View／Control を選べま�
   リストにない正式な Gemini ID も起動時に指定でき、利用可否は CLI が確認します。
 
 The model card displays each Gemini family once (for example, `gemini-3.8-flash`
-and `gemini-4-argon`). The original `gemini-3.8-flash-high` remains the default;
+and `gemini-4-argon`). `gemini-3.8-flash-high` remains the default when available;
 only efforts present in the current model list are offered for each family.
 Before registration, Dashboard resolves the selected effort to the corresponding CLI model:
 `low` → `gemini-3.8-flash-low`, `medium` → `gemini-3.8-flash-medium`, and
@@ -166,12 +166,13 @@ use that same resolved id alongside the explicit `--effort`. A custom model
 allow-list must include the matching variant; otherwise the request is rejected
 before registration. Without a custom allow-list, a formal `gemini-*` ID is
 validated by the CLI instead of being refused simply because discovery omitted it.
-Model IDs without an effort suffix are passed unchanged. Spawn and `dry_run`
+Model IDs without an effort suffix are passed unchanged. Orchestrator models
+use a fixed reasoning budget and launch with just their model ID. Spawn and `dry_run`
 do not run `agy models`; discovery is used only for the picker.
 
 Engine and isolation rules:
 
-- **Effort is explicit.** The Dashboard selects no effort for Antigravity, keeps
+- **Adjustable effort is explicit.** The Dashboard selects no effort for Antigravity, keeps
   `SPAWN` disabled until an available effort is chosen (`low`, `medium`, `high`,
   or `xhigh` where the catalog lists that variant), and the server
   rejects a request without one (`effort required for provider gemini`). The
