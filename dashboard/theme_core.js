@@ -15,8 +15,13 @@
     remote:{L:.70857,C:.12807,H:306.10},delegate:{L:.70758,C:.10845,H:135.04},
     alert:{L:.70795,C:.18434,H:27.69},question:{L:.85564,C:.13791,H:208.39},
   });
-  const WARM=Object.freeze({canvas:{L:.95301,C:.01964,H:87.51},depthScale:1.48,
-    depthChroma:.145,depthHue:-34,terminalLift:.017});
+  // Mirrors the canonical paper palette in ORRERY bridge/theme_core.js.
+  const WARM_PAPER_PALETTE=Object.freeze({
+    canvas:'#f8f6f1',panel:'#fdfcf8',strong:'#f1eee7',
+    primary:'#25231f',secondary:'#615e55',control:'#838179',
+    local:'#005c50',remote:'#673f8d',delegate:'#335b16',
+    alert:'#a6060e',question:'#005a65',blue:'#25576f',
+  });
 
   function linear(color){
     const radians=color.H*Math.PI/180;
@@ -66,24 +71,20 @@
     }
     return best;
   }
-  function surface(role){
-    const depth=(DARK[role].L-DARK.canvas.L)*WARM.depthScale;
-    return fit({L:Math.min(.985,WARM.canvas.L-depth+(role==='terminal'?WARM.terminalLift:0)),
-      C:Math.max(0,WARM.canvas.C+WARM.depthChroma*depth),
-      H:(WARM.canvas.H+WARM.depthHue*depth+360)%360});
-  }
   const hex=rgb=>'#'+rgb.map(channel=>channel.toString(16).padStart(2,'0')).join('');
   const rgba=(rgb,alpha)=>`rgb(${rgb.join(' ')} / ${alpha})`;
 
   function deriveWarmPaperLightTheme(){
-    const roles={canvas:surface('canvas'),panel:surface('panel'),strong:surface('strong'),
-      elevated:surface('elevated'),terminal:surface('terminal')};
+    const roles=Object.fromEntries(Object.entries(WARM_PAPER_PALETTE).map(([name,color])=>[
+      name,Object.freeze({rgb:Object.freeze(color.slice(1).match(/../g).map(part=>parseInt(part,16)))}),
+    ]));
+    roles.elevated=roles.strong;
+    roles.terminal=roles.panel;
+    roles.muted=roles.secondary;
     const darkest=roles.elevated.rgb;
-    for(const [role,target] of Object.entries({primary:12,secondary:7,muted:4.5,
-      accent:4.5,local:4.5,remote:4.5,delegate:4.5,alert:4.5,question:4.5})){
-      roles[role]=solve(DARK[role],darkest,target);
-    }
-    roles.control=solve(DARK.muted,darkest,3);
+    roles.accent=solve(DARK.accent,darkest,5);
+    roles.accentEdge=solve(DARK.accent,darkest,3.4);
+    roles.accentFill=fit(DARK.accent);
     const cssVariables={
       '--bg':hex(roles.canvas.rgb),'--panel':hex(roles.panel.rgb),
       '--panel-2':hex(roles.strong.rgb),'--elev':hex(roles.elevated.rgb),
@@ -95,11 +96,16 @@
       '--cyan':hex(roles.question.rgb),'--accent-control':hex(roles.question.rgb),
       '--void':hex(roles.canvas.rgb),
       '--bone':hex(roles.primary.rgb),'--bone-dim':hex(roles.secondary.rgb),
-      '--line':rgba(roles.primary.rgb,.16),'--line-soft':rgba(roles.primary.rgb,.08),
-      '--hair':rgba(roles.primary.rgb,.16),'--hair-2':rgba(roles.primary.rgb,.08),
+      '--line':rgba(roles.primary.rgb,.26),'--line-soft':rgba(roles.primary.rgb,.16),
+      '--hair':rgba(roles.primary.rgb,.26),'--hair-2':rgba(roles.primary.rgb,.16),
       '--glow-a':'none','--glow-c':'none',
       '--theme-border-control':hex(roles.control.rgb),
       '--theme-surface-terminal':hex(roles.terminal.rgb),
+      '--theme-focus-ring':hex(roles.accent.rgb),
+      '--theme-accent-edge':hex(roles.accentEdge.rgb),
+      '--theme-accent-fill':hex(roles.accentFill.rgb),
+      '--theme-status-alert':hex(roles.alert.rgb),
+      '--theme-status-question':hex(roles.question.rgb),
       '--theme-shadow-low':rgba(roles.primary.rgb,.12),
       '--theme-shadow-high':rgba(roles.primary.rgb,.08),
       '--theme-ink-rgb':roles.primary.rgb.join(' '),
@@ -110,9 +116,9 @@
   }
   function contrastReport(theme=deriveWarmPaperLightTheme()){
     const background=theme.roles.elevated.rgb;
-    return Object.freeze(Object.fromEntries(Object.entries({primary:12,secondary:7,muted:4.5,
-      accent:4.5,local:4.5,remote:4.5,delegate:4.5,alert:4.5,question:4.5,control:3})
+    return Object.freeze(Object.fromEntries(Object.entries({primary:12,secondary:4.5,muted:4.5,
+      accent:5,accentEdge:3.4,local:4.5,remote:4.5,delegate:4.5,alert:4.5,question:4.5,control:3})
       .map(([role,target])=>[role,Object.freeze({ratio:contrast(theme.roles[role].rgb,background),target})])));
   }
-  return Object.freeze({DARK,WARM,fit,contrast,deriveWarmPaperLightTheme,contrastReport});
+  return Object.freeze({DARK,fit,contrast,deriveWarmPaperLightTheme,contrastReport});
 });

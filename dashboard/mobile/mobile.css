@@ -33,7 +33,7 @@ html {
 }
 html[data-color-theme=light] {
   color-scheme:light;
-  --control-active:rgb(var(--theme-accent-rgb) / .12);
+  --control-active:color-mix(in srgb,var(--theme-accent-fill) 12%,var(--panel));
 }
 body.mobile {
   position:static;display:flex;flex-direction:column;
@@ -55,6 +55,10 @@ body.mobile {
 .mobile-brand strong{font:600 23px/1 var(--serif);letter-spacing:.035em}
 .mobile-header-actions{display:flex;align-items:center;gap:3px}
 .mobile #mobile-new-agent{color:var(--amber);background:var(--control-active)}
+html[data-color-theme=light] .mobile #mobile-new-agent{
+  box-shadow:inset 0 0 0 1px var(--theme-accent-edge);
+  background:color-mix(in srgb,var(--theme-accent-fill) 24%,var(--panel));
+}
 .mobile:has(#graph-panel[hidden]) #mobile-new-agent{display:none}
 #mobile-main {
   flex:1;min-height:0;width:100%;max-width:none;margin:0;
@@ -99,8 +103,12 @@ html[data-color-theme=light] .mobile #net {
 .mobile #net .node:is(.finished,.gone,.retired,.unknown) .pimg{opacity:.48}
 .mobile #net .node:is(.finished,.gone,.retired,.unknown) .portrait-shade{opacity:.18}
 .mobile #net .node:is(.finished,.gone,.retired,.unknown)>text:not([class]){fill:var(--ink-dim)}
-html[data-color-theme=light] .mobile .node .provider-logo{filter:brightness(0)}
-html[data-color-theme=light] .mobile .node .provider-seat{fill:var(--panel);stroke:var(--hair)}
+/* The miniature SVG images use the same bone artwork as the cockpit. A
+   dark seat supplies contrast without filtering the SVG image in WebKit. */
+html[data-color-theme=light] .mobile .node .provider-seat{fill:var(--panel);stroke:var(--theme-border-control)}
+html[data-color-theme=light] .mobile .node .provider-badge:has(.provider-logo) .provider-seat{fill:var(--ink)}
+html[data-color-theme=light] .mobile #net:not(.focus) .edge.spawn{stroke:var(--theme-border-control);opacity:1}
+html[data-color-theme=light] .mobile #net .edge.spawn.hl{stroke:var(--theme-accent-edge);opacity:1}
 .graph-toolbar{position:absolute;top:11px;right:11px;z-index:4}
 .graph-status{position:absolute;top:10px;left:10px;z-index:3}
 #summary{display:flex;align-items:center}
@@ -641,6 +649,9 @@ html.graph-fullscreen #settings{z-index:40}
 .conversation-tabs{flex:none;display:flex;border:1px solid var(--hair);border-radius:8px;overflow:hidden;margin-bottom:10px}
 .mobile .conversation-tabs button{flex:1;min-height:38px;background:none;border:0;color:var(--ink-dim);font:11px var(--mono)}
 .mobile .conversation-tabs button[aria-selected=true]{background:var(--bg);color:var(--ink);box-shadow:inset 0 -2px 0 var(--amber)}
+html[data-color-theme=light] .mobile .conversation-tabs button[aria-selected=true]{
+  box-shadow:inset 0 -1px var(--theme-accent-edge),inset 0 -4px var(--theme-accent-fill);
+}
 .terminal-scroll.conversation-mode{display:flex;flex-direction:column;overflow:hidden}
 .conversation-mode>*{flex:none}.conversation-mode>.conversation{flex:1;min-height:120px;display:flex;flex-direction:column}
 .mobile .conversation-status{flex:none;margin:0 0 6px;font:9px/1.6 var(--mono);color:var(--ink-dim)}
@@ -829,9 +840,9 @@ html[data-demo="on"] .reader-bar::after{
 .conversation-avatar,.conversation-avatar *{-webkit-user-select:none;user-select:none}
 .conversation-avatar .initials{font:500 10px var(--mono)}
 .conversation-avatar .badge{right:-3px;bottom:-2px;width:12px;height:12px}
-html[data-color-theme=light] .conversation-byline .provider-logo,html[data-color-theme=light] .conversation-mail-mark .provider-logo{filter:brightness(0)}
 html[data-color-theme=light] .conversation-avatar .provider-seat{fill:var(--panel)}
-html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-local-ring){stroke:var(--hair)}
+html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-local-ring){stroke:var(--theme-border-control)}
+html[data-color-theme=light] .conversation-avatar .provider-badge:has(.provider-logo) .provider-seat{fill:var(--ink)}
 .conversation-speaker-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12px/1.55 var(--reader-sans)}
 .mobile .conversation-speaker-time{flex:none;margin-left:auto;white-space:nowrap;font:9px var(--mono);color:var(--ink-dim)}
 
@@ -911,6 +922,17 @@ html[data-color-theme=light] .conversation-avatar .provider-seat:not(.provider-l
 .mobile .reader-input-bar .terminal-text{flex:1;min-width:0;height:44px;min-height:44px;padding:10px 9px;border:0;border-radius:15px;background:none;font:16px/1.4 var(--mono)}
 .mobile .reader-input-send{flex:none;display:grid;place-items:center;width:44px;height:44px;min-height:44px;padding:0;border-radius:50%;font-size:23px}
 .mobile .reader-input-bar .terminal-primary{flex:none;color:var(--amber);border-color:color-mix(in srgb,var(--amber) 50%,transparent);background:color-mix(in srgb,var(--amber) 18%,transparent)}
+html[data-color-theme=light] .mobile .terminal-primary{
+  color:var(--amber);border-color:var(--theme-accent-edge);background:var(--panel);
+}
+html[data-color-theme=light] .mobile .terminal-primary:disabled{
+  color:var(--ink-dim);border-color:var(--theme-border-control);opacity:1;
+}
+html[data-color-theme=light] .mobile .reader-input-bar,
+html[data-color-theme=light] .mobile .reader-input-bar.reader-review,
+html[data-color-theme=light] .mobile .conversation-preview,
+html[data-color-theme=light] .mobile .conversation-preview-close,
+html[data-color-theme=light] .mobile .conversation-preview-save{border-color:var(--theme-border-control)}
 .reader-input-count{display:block;font:9px/1.5 var(--mono);padding:1px 9px 3px;color:var(--ink-dim)}
 .mobile .reader-selection-reference{position:fixed;z-index:9;min-height:44px;padding:10px 14px;border:1px solid var(--hair);border-radius:12px;background:var(--elev);color:var(--ink);font:12px var(--mono);box-shadow:0 8px 24px color-mix(in srgb,var(--shade) 35%,transparent)}
 .mobile .reader-input-bar .reader-reference-card{position:relative;margin:4px 5px 8px;padding:10px 42px 10px 11px;border:1px solid var(--hair);border-left:2px solid var(--amber);border-radius:10px;background:var(--panel-2)}

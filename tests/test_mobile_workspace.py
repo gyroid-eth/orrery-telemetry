@@ -120,7 +120,7 @@ def test_dark_default_and_explicit_light_persist_across_reload(phone):
 
     js("document.querySelector('#mobile-theme').click()")
     assert js("getComputedStyle(document.documentElement).colorScheme") == 'light'
-    assert js("document.querySelector('meta[name=theme-color]').content") == '#f5efe1'
+    assert js("document.querySelector('meta[name=theme-color]').content") == '#f8f6f1'
     assert js("document.querySelector('.mobile-brand img').getAttribute('src')") == '/assets/orbit-light.svg'
     origin = js('performance.timeOrigin')
     client.call('Page.reload', ignoreCache=True)
@@ -131,6 +131,22 @@ def test_dark_default_and_explicit_light_persist_across_reload(phone):
     js("document.querySelector('#mobile-theme').click()")
     assert js("getComputedStyle(document.documentElement).colorScheme") == 'dark'
     assert js("document.querySelector('.mobile-brand img').getAttribute('src')") == '/assets/orbit.svg'
+
+
+def test_light_phone_composer_keeps_paper_fill_when_input_is_ready(phone):
+    _, js, wait, _ = phone
+    wait("document.querySelector('#terminal-review')?.disabled")
+    appearance = """(()=>{const style=getComputedStyle(document.querySelector('#terminal-review'));
+        return [style.backgroundColor,style.borderColor,style.color];})()"""
+    dark_idle = js(appearance)
+    js("document.querySelector('#mobile-theme').click()")
+    assert js(appearance) == ['rgb(253, 252, 248)', 'rgb(131, 129, 121)', 'rgb(97, 94, 85)']
+    js("""const field=document.querySelector('#terminal-text');
+        field.value='Review the release notes';field.dispatchEvent(new Event('input'));""")
+    wait("document.querySelector('#terminal-review')?.disabled===false")
+    assert js(appearance) == ['rgb(253, 252, 248)', 'rgb(172, 117, 0)', 'rgb(137, 92, 0)']
+    js("field.value='';field.dispatchEvent(new Event('input'));document.querySelector('#mobile-theme').click()")
+    assert js(appearance) == dark_idle
 
 
 def test_workspace_keeps_the_same_reader_and_private_draft_across_layouts(phone):

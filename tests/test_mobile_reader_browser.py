@@ -173,13 +173,16 @@ def test_open_mail_thread_tracks_sender_and_body_end(phone,theme):
     wait("threadCard.querySelector('.conversation-mail-thread').getClientRects().length===0")
 
 
-def test_light_reader_provider_seat_uses_paper_tokens(phone):
-    _,js,wait,_=phone
-    from pathlib import Path
-    js((Path(__file__).resolve().parents[1]/'dashboard/theme_core.js').read_text())
-    js("document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
-    wait("document.querySelector('.conversation-avatar .provider-seat')!==null")
-    assert js("""(()=>{const seat=getComputedStyle(document.querySelector('.conversation-avatar .provider-seat')),probe=document.createElement('span');probe.style.background='var(--panel)';probe.style.border='1px solid var(--hair)';document.body.append(probe);const expected=getComputedStyle(probe),matches=seat.fill===expected.backgroundColor&&seat.stroke===expected.borderTopColor;probe.remove();return matches})()""")
+def test_light_reader_provider_badge_uses_original_artwork_on_ink(phone):
+    _, js, wait, _ = phone
+    js("document.querySelector('#mobile-theme').click()")
+    wait("document.querySelector('.conversation-avatar .provider-logo')!==null")
+    assert js("""(()=>{
+        const badge=document.querySelector('.conversation-avatar .provider-badge:has(.provider-logo)');
+        const seat=getComputedStyle(badge.querySelector('.provider-seat'));
+        const logo=getComputedStyle(badge.querySelector('.provider-logo'));
+        return [seat.fill,seat.stroke,logo.filter];
+    })()""") == ['rgb(37, 35, 31)', 'rgb(131, 129, 121)', 'none']
 
 
 def test_open_long_mail_refresh_and_poll_keep_reader_position(phone):
