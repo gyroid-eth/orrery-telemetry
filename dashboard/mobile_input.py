@@ -19,9 +19,9 @@ CONTRACT='orrery-mobile-pane-v1'
 MAX_JSON_BYTES=16384
 MAX_IMAGE_BYTES=10*1024*1024
 MAX_IMAGE_JSON=4*((MAX_IMAGE_BYTES+2)//3)+MAX_JSON_BYTES
-MAX_FILE_BYTES=5*1024*1024
+MAX_FILE_BYTES=50*1024*1024
 MAX_FILE_JSON=4*((MAX_FILE_BYTES+2)//3)+MAX_JSON_BYTES
-FILE_FORMATS=frozenset({'pdf','txt','md','csv','json'})
+FILE_FORMAT=re.compile(r'(?:[a-z0-9]{1,32})?\Z')
 ATTACHMENT_JSON_LIMITS={'image':MAX_IMAGE_JSON,'file':MAX_FILE_JSON}
 MAX_PREVIEW_LINES=120
 MAX_PREVIEW_BYTES=12288
@@ -49,7 +49,7 @@ def request_fields(operation,payload,*,fresh=None):
     if operation=='file' and payload['file'] is not None:
         file=payload['file']
         return (isinstance(file,dict) and set(file)=={'format','data'}
-                and isinstance(file['format'],str) and file['format'] in FILE_FORMATS
+                and _matches(FILE_FORMAT,file['format'])
                 and isinstance(file['data'],str) and 0<len(file['data'])<=4*((MAX_FILE_BYTES+2)//3))
     return True
 
@@ -154,11 +154,12 @@ class InputClient:
                     or value['target']['revision']!=payload['revision']):raise InputUnavailable('input_response_invalid')
             if upload:
                 path=value['path']
-                suffix=r'(?:png|jpg)' if operation=='image' else re.escape(payload['file']['format'])
+                format=payload[operation]['format'] if operation=='file' else None
+                suffix=(r'\.(?:png|jpg)' if operation=='image' else r'\.'+re.escape(format) if format else '')
                 directory='images' if operation=='image' else 'files'
                 if (value['enabled'] is not True or not isinstance(path,str) or not path.startswith('/') or len(path.encode('utf-8'))>4096
                         or any(ord(c)<32 or ord(c)==127 for c in path)
-                        or not re.search(r'/\.orrery-input-'+directory+r'/[a-f0-9]{32}\.'+suffix+r'\Z',path)):
+                        or not re.search(r'/\.orrery-input-'+directory+r'/[a-f0-9]{32}'+suffix+r'\Z',path)):
                     raise InputUnavailable('input_response_invalid')
             return value
         expected={'contract','epoch','target','state','intent'}

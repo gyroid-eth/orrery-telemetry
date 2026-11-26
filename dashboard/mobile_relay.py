@@ -513,8 +513,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._admitted(write=True):
             self._send(403,{'error':'input_request_denied'});return
         try:
-            payload=self._request_json(mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES),
-                                       20 if operation in mobile_input.ATTACHMENT_JSON_LIMITS else 5)
+            timeout={'file':60,'image':20}.get(operation,5)
+            payload=self._request_json(mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES),timeout)
             if not mobile_input.request_fields(operation,payload):raise ValueError('input_json_invalid')
         except (ValueError,OSError):
             self._send(400,{'error':'input_request_invalid'});return
