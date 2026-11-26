@@ -38,6 +38,23 @@ def test_mobile_lists_update_an_antigravity_context_meter(phone):
     wait(picker + "===null && " + meter + "===null")
 
 
+def test_local_inkling_uses_thinking_machines_logo_in_reader(phone):
+    _, js, wait, state = phone
+    state['snapshot']['agents'][0].update(provider='local', locality='local', model='inkling-2-mini')
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("OrreryMobileProfile.forName('SampleAgent')?.model === 'inkling-2-mini'")
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('.conversation-avatar .provider-logo[data-provider=thinking-machines]') !== null")
+    assert js("""(async()=>{
+        const logo=document.querySelector('.conversation-avatar .provider-logo[data-provider=thinking-machines]');
+        const source=logo.getAttribute('href');
+        const image=new Image();
+        image.src=source;
+        await image.decode();
+        return source;
+    })()""") == '/assets/thinking-machines.svg'
+
+
 def test_reader_unknown_permissions_disclose_reasons_without_resizing_header(phone):
     _, js, wait, state = phone
     height = js("document.querySelector('.reader-bar').offsetHeight")

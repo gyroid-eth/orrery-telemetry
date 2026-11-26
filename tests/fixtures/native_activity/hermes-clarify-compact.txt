@@ -1,0 +1,17 @@
+╭─ Hermes Agent needs your input ────────────────╮
+│ 1 question                                     │
+│ ▸ Which generated report should we use?
+    │
+│   ❯ 1. Summary report
+ │
+│     2. Detailed report
+ │
+│     3. No report
+    │
+│     4. Other (type your answer)                │
+╰────────────────────────────────────────────────╯
+
+  ↑/↓ to select, Enter to lock, Tab next question  (3474
+ ☤ fixture-model · 0% · 15s
+────────────────────────────────────────────────────────
+?
