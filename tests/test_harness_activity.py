@@ -88,7 +88,7 @@ def test_one_capture_cache_generation_and_unknown_transition(monkeypatch, progra
 
     def capture(argv, **kwargs):
         calls.append(argv)
-        assert argv == ['capture-pane', '-p', '-J', '-t', '=ExampleAgent', '-S', '-45']
+        assert argv == ['capture-pane', '-p', '-J', '-t', '=ExampleAgent:', '-S', '-45']
         return SimpleNamespace(returncode=0, stdout=text[0])
 
     monkeypatch.setattr(server, '_tmux_run', capture)
