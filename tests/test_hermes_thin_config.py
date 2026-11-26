@@ -109,6 +109,27 @@ class ThinConfig(unittest.TestCase):
         overlay = config.read(Path(plan['config_dir']) / 'config.yaml')
         self.assertEqual(overlay['mcp_servers']['chrome-devtools'], {'enabled': True, **definition})
 
+    def test_browser_can_switch_after_off_without_replacing_an_unowned_definition(self):
+        name = 'chrome-devtools'
+        temporary = {'command': 'npx', 'args': ['chrome-devtools-mcp', '--isolated']}
+        personal = {'command': 'npx', 'args': ['chrome-devtools-mcp', '--autoConnect']}
+        mcp = config.read(self.document['mcp_config'])
+        def project(mode, definition=None):
+            self.save(Path(self.document['mcp_config']), {'mcpServers': {
+                **mcp['mcpServers'], **({name: definition} if definition else {}),
+            }})
+            plan = self.generate(mcp_selection={'inherit': True, 'browser_mode': mode,
+                                                               'managed_browser': name if definition else None})
+            return config.read(Path(plan['config_dir']) / 'config.yaml')['mcp_servers'][name]
+        assert project('temporary', temporary) == {'enabled': True, **temporary}
+        assert project('off') == {'enabled': False}
+        assert project('personal', personal) == {'enabled': True, **personal}
+        raw = config.read(self.profile / 'config.yaml')
+        raw['mcp_servers'][name]['args'].append('--custom')
+        self.save(self.profile / 'config.yaml', raw)
+        with self.assertRaisesRegex(ValueError, 'inherited_mcp_conflict'):
+            project('temporary', temporary)
+
     def test_mac_overlays_disable_bundled_computer_use_and_only_expose_managed_screen(self):
         from hooks import child_tools
 

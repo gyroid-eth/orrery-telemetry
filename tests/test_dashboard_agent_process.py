@@ -40,6 +40,17 @@ def test_matchers_use_exact_arguments_only():
     assert agent_process.chrome_flag(["claude", "--chrome"]) is True
 
 
+@pytest.mark.parametrize("args, channels", [
+    (["claude", "--channels", "plugin:fixture"], True),
+    (["node", "/fixture/@anthropic-ai/claude-code/cli.js", "--channels=plugin:fixture"], True),
+    (["claude", "--", "--channels"], False),
+    (["claude", "--append-system-prompt", "mention --channels"], False),
+    (["zsh", "-c", "claude --channels plugin:fixture"], False),
+])
+def test_claude_channels_flag(args, channels):
+    assert agent_process.claude_channels(args) is channels
+
+
 def test_claude_observes_the_relay_under_a_wrapper():
     tree, read = _tree({10: (1, ["claude", "--chrome"]), 11: (10, ["supervisor"]),
                         12: (11, _RELAY), 13: (10, _SHELL)})

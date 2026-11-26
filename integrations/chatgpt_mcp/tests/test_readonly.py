@@ -65,8 +65,12 @@ class FakeDashboard:
         raise AssertionError("unexpected call " + route)
 
 
-def test_fresh_identity_and_unknown_agents_survive_projection():
-    data = snapshot(FakeDashboard(), "fresh")
+@pytest.mark.parametrize("api", [39, 55])
+def test_fresh_identity_and_unknown_agents_survive_projection(api):
+    dashboard = FakeDashboard(version={**FRESH, "api": api})
+    data = snapshot(dashboard, "fresh")
+    assert data.api == api
+    assert dashboard.calls == ["/api/version", "/api/agents"]
     assert data.instance == INSTANCE
     assert data.capabilities["roster"] is True
     assert data.capabilities["worktree"] is None
@@ -352,7 +356,7 @@ def test_supported_fresh_generations_still_require_fresh_contract(api):
     assert data.scope["includes_unobserved"] is True
 
 
-@pytest.mark.parametrize("api", [999, 54, 51, 33, True, "39", None])
+@pytest.mark.parametrize("api", [999, 56, 54, 51, 33, True, "39", None])
 def test_unknown_fresh_generations_are_rejected_before_roster_read(api):
     backend = FakeDashboard({**FRESH, "api": api}, AGENTS_FRESH)
     with pytest.raises(DashboardError):

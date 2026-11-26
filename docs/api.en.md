@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":53}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":55}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -417,6 +417,10 @@ Reason codes are `binding_missing` (no receipt), `invalid_binding` (invalid self
 
 A receipt timestamp older than the current tmux `session_created` returns `stale` / `receipt_predates_session`, retaining native ID and receipt time with a null path. Offset-free timestamps are compared in dashboard host local time, assuming its timezone has not changed. Hook receipt replacements are reflected by the next roster computation, without restoring a cached old path. This comparison cannot distinguish CLI replacement inside the same tmux session, same-second restarts or a missing receipt time: until a new hook completes, the last self-registered conversation may remain visible. Retirement alone preserves exact archival binding. Binding identifies the last self-registered conversation; it does not prove process liveness. Existing Codex states and the protected fresh `/api/history` path are unchanged.
 
+#### Codex CLI
+
+A verified Codex rollout supplies `history_session_id` while `history_binding` is `bound`. During a resume awaiting its own hook, the ID comes from the exact prior receipt and rollout verified for that resume.
+
 #### dsh (DeepSeek Harness)
 
 `history_receipt_ts` is the callback's UTC ISO 8601 timestamp. A launch expectation prepared after this update and the child's own `agent/created` callback bind the current project's Mail ID to the native persistence backend's `locate(header)` address and its device/inode after flush. Current default storage is Zstd-framed JSONL at the child's private `DSH_HOME/sessions/<workspace>/<session>/session.v4.jsonl.zstd`; `DSH_TUI_DATA_DIR` holds TUI settings. Root IDs are recorded before locator, flush or receipt publication. Observing another root in the same launch permanently conflicts that launch even if later persistence fails; a repeated callback from the original root cannot restore binding before a new formal launch. A failed root-observation write retains the acquired lock; a failed contender marker also prevents the owner from publishing or releasing its lock. I/O recovery alone cannot restore binding: a new formal launch nonce is required. A receipt older than the current terminal returns `stale` / `receipt_predates_session`, keeping native ID and original timestamp with a null path. Terminal-free retired archives keep the same exact verification. Resume rotates the launch nonce and withholds the old receipt until a new callback arrives. Retirement preserves exact archival binding while the same registration and receipts remain. Changed registration, removed proof, multiple root sessions in one launch, file replacement or symlinks remain unbound. Old launches without these receipts and custom storage locations never fall back to cwd, timestamps or latest-session scans. This raw-path contract applies to legacy. Cockpit needs a separate dsh Zstd/native-event parser.
@@ -715,12 +719,26 @@ The request below selects Claude in Chrome with a device ID and starts `orrery-s
 {"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
 ```
 
-API 45 accepts `permission` on a legacy `/api/jump` for a stopped, retained Claude or Codex CLI child with a saved tool selection. API 46 also supports agents spawned without a parent when they meet the same conditions. Direct launches, persistent agents, Codex App, conversation-only resumes, and fresh and global modes are ineligible. Legacy roster rows report `permission_resume_supported` and a short English `permission_resume_reason`. A direct launch or other agent with no saved settings reports `No saved launch settings; use Resume`.
+In API 54, legacy roster rows with permission information include `permission_controls`. Each of `computer_use` and `browser_use` has a current `value` (null when unknown), its `source` and `observation_reason`, the action availability `can_change` and `change_reason`, and an `action` of `restart`, `resume`, or null. Display evidence and the reason a change is unavailable are distinct. The server rechecks the target and saved launch when a change is requested.
 
-Before stopping a running agent, add `check_only:true` to the request. Use the roster's bound `history_session_id` and exactly one of `computer_use` (`off`, `view`, `control`) or `browser_use` (boolean). A successful check returns `{"ok":true,"action":"validated"}` without changing the saved selection or Mail registration.
+`browser_use.mode` is `off`, `temporary` (Temporary Chrome), `personal` (My Chrome), or null when the mode is unknown. `browser_use.options` lists the modes the launcher can offer and is empty when the action is unavailable.
+
+API 45 accepts `permission` on a legacy `/api/jump` for a stopped, retained Claude or Codex CLI child with a saved tool selection. API 46 also supports agents spawned without a parent when they meet the same conditions. Persistent agents, Codex App, conversation-only resumes, and fresh and global modes are ineligible. Legacy roster rows report `permission_resume_supported` and a short English `permission_resume_reason`.
+
+In API 54, generated dsh and Hermes agents can use the same permission request with or without a parent. The server requires the provider's bound native conversation, retains the agent's private profile, and confirms the same conversation and an idle terminal prompt after restart.
+
+Managed Antigravity CLI sessions on macOS also use this request with or without a parent. The server checks the saved workspace and bound conversation, projects the selected MCP configuration and screen grants, and waits for the same conversation and the new terminal's idle status. For a delegated session, only the launcher's own workspace MCP configuration is eligible for replacement.
+
+API 55 uses the retained default MCP profile when a generated Codex CLI agent has no explicit tools record. A direct, parentless Claude Code, Codex CLI or Antigravity CLI launch with verified owner and conversation evidence can move to managed permissions. The roster sets `permission_managed_launch:true` for this transition. After the user confirms, include `adopt:true` inside `permission` for both preflight and the final jump. The original owner, working directory and conversation are kept. For a launcher that leaves an idle shell behind, the same request can replace that single verified terminal. A direct native dsh or Hermes session requires a bound launch and private profile to use permission resume.
+
+Claude Channels launches and registered persistent agents are ineligible for permission changes. Set `AGENTSTACK_PERMISSION_RESIDENT_AGENTS` in the dashboard environment to a comma-separated list of exact names for other operator-managed residents, including those whose process may be stopped. The permission controls and write requests give the reason.
+
+For a running generated Claude Code agent, the guarded exit records its default selection when the live terminal confirms that no explicit launch marker was allocated.
+
+Before stopping a running agent, add `check_only:true` to the request. Use the roster's bound `history_session_id` and exactly one change. `computer_use` accepts `off`, `view` or `control`. Starting in API 54, `browser_mode` accepts `off`, `temporary` or `personal`. Existing clients can still send the boolean `browser_use`. A successful check returns `{"ok":true,"action":"validated"}` without changing the saved selection or Mail registration.
 
 ```json
-{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_use":true}}
+{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_mode":"temporary"}}
 ```
 
 Send the same `session` and `history_session_id` to `POST /api/exit`. Both requests verify the conversation, Mail registration, and saved launch origin. Cockpit waits for the agent to stop and sends the same jump request with `check_only` omitted. The server rechecks the conversation and registration and requires the tmux session and live launch lease to be absent. Set `open:false` to resume detached.
