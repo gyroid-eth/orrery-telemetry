@@ -2257,6 +2257,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
         state_parent = agent_card.parent_name(state.get("parent_agent"), name)
         servers = {}
         chrome = isolated = False
+        codex_browser_off = False
         if kind == "claude":
             sid = row.get("history_session_id")
             model, effort, last_cwd = agent_card.claude_turn(transcript, sid)
@@ -2319,6 +2320,14 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                 settings = _card_private_mapping(children / f"{name}.codex-home" / "config.toml")
                 servers = settings.get("mcp_servers", {})
                 isolated = bool(spec and spec["base"] == "mail-only" and settings)
+                if (spec and settings and isinstance(servers, dict)
+                        and not spec["tools"].get("chrome_extension")):
+                    tools_module = _child_tools_module()
+                    codex_browser_off = not any(
+                        isinstance(definition, dict) and definition.get("enabled") is not False
+                        and tools_module._codex_chrome_server(key, definition)
+                        for key, definition in servers.items()
+                    )
         elif kind in harness_runtime.HARNESSES and state:
             try:
                 resume = _child_resume_module()
@@ -2345,6 +2354,8 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                 spec = None
         computer, browser = agent_card.tool_permissions(
             spec, servers if isinstance(servers, dict) else {}, chrome=chrome, isolated=isolated)
+        if browser is None and codex_browser_off:
+            browser = False
         if kind == "claude" and spec and spec.get("browser_disabled"):
             browser = False
         if managed_screen and row.get("running"):

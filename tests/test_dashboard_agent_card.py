@@ -308,6 +308,40 @@ def test_card_requires_current_codex_launch_for_retained_parent(tmp_path, monkey
         assert server._agent_card_fields(row, session, {}, registration, ())["parent_state"] is None
 
 
+@pytest.mark.parametrize(("configured", "expected"), [
+    ("", False),
+    ('[mcp_servers.chrome-devtools]\ncommand = "npx"\nenabled = false\n', False),
+    ('[mcp_servers.chrome-devtools]\ncommand = "npx"\n', True),
+    ('[mcp_servers.chrome-devtools]\ncommand = "npx"\nenabled_tools = ["list_pages"]\n', None),
+    (None, None),
+])
+def test_codex_view_preserves_browser_off_from_the_generated_config(tmp_path, monkeypatch, configured, expected):
+    children = tmp_path / "child-agents"
+    home = children / "Worker.codex-home"
+    home.mkdir(parents=True)
+    registration = {"agent_id": 1, "project_key": "test", "program": "codex"}
+    _write_private_json(children / "Worker.json", {
+        **registration, "agent_name": "Worker", "launch_origin": "child", "parent_agent": "Parent",
+    })
+    server._child_tools_module().write_codex_record(str(children / "Worker.tools.json"), {
+        "base": "default", "tools": {"screen": {"server": "orrery-screen", "access": "read"}},
+    })
+    if configured is not None:
+        config = home / "config.toml"
+        config.write_text('[mcp_servers.reader]\ncommand = "reader"\n' + configured)
+        config.chmod(0o600)
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_card_codex_provenance", lambda *_: {"launch_origin": "child"})
+    row = {"name": "Worker", "program": "codex", "category": "agent", "running": True,
+           "history_binding": "bound", "history_session_id": "known",
+           "transcript_path": str(tmp_path / "rollout.jsonl")}
+    row.update(server._agent_card_fields(row, {}, {}, registration, ()))
+    browser = agent_card.permission_controls(row, ("off", "temporary"))["browser_use"]
+    assert browser["value"] is expected
+    if expected is False:
+        assert (browser["mode"], browser["source"]) == ("off", "launch")
+
+
 def test_card_rejects_global_tmux_parent_and_reuses_the_local_check(monkeypatch):
     monkeypatch.setattr(server.time, "monotonic", lambda: 100.0)
     server._card_local_tmux_value.cache_clear()
