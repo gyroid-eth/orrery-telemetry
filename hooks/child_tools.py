@@ -77,7 +77,7 @@ from typing import Any
 BASES = ("default", "mail-only")
 ACCESS = ("read", "operate")
 BROWSER_MODES = ("off", "temporary", "personal")
-TOOL_KINDS = ("browser", "browser_mode", "browser_off", "chrome_extension", "screen", "mcp", "approve_all")
+TOOL_KINDS = ("browser", "browser_mode", "browser_off", "chrome_extension", "screen", "screen_off", "mcp", "approve_all")
 CODEX_CHROME_PLUGIN = "chrome@openai-bundled"
 CODEX_NATIVE_CUA_PLUGIN = "unified-computer-use@openai-bundled"
 SERVER_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -305,6 +305,13 @@ def normalize_selection(base: Any = None, tools: Any = None) -> dict:
             raise ToolsError("Browser Off cannot be combined with a browser selection")
         result["browser_off"] = True
 
+    if "screen_off" in tools:
+        if tools["screen_off"] is not True:
+            raise ToolsError("tools.screen_off must be true")
+        if "screen" in tools:
+            raise ToolsError("Computer use Off cannot be combined with a screen selection")
+        result["screen_off"] = True
+
     if "screen" in tools:
         screen = tools["screen"]
         if isinstance(screen, str):
@@ -330,6 +337,8 @@ def normalize_selection(base: Any = None, tools: Any = None) -> dict:
             raise ToolsError("tools.mcp lists a server twice")
         if (result.get("browser_off") or "browser_mode" in result) and "chrome-devtools" in checked:
             raise ToolsError("A Browser mode cannot be combined with an explicit chrome-devtools MCP")
+        if result.get("screen_off") and any(_cua_server(name) for name in checked):
+            raise ToolsError("Computer use Off cannot be combined with an explicit screen MCP")
         screen_server = (result.get("screen") or {}).get("server")
         if screen_server in checked:
             raise ToolsError(
@@ -383,7 +392,7 @@ def parse_cli(values: list[str]) -> dict:
     """Turn /delegate --tools values into a ``tools`` object.
 
     Accepted forms (comma separated or repeated): ``browser``,
-    ``browser:<deviceId>``, ``chrome-extension``, ``screen`` (= operate), ``screen:read``,
+    ``browser:<deviceId>``, ``chrome-extension``, ``no-screen``, ``screen`` (= operate), ``screen:read``,
     ``screen:operate``, ``screen:<read|operate>:<server>``, ``mcp:<server>``
     and ``mcp:<server>:all`` (also approve every tool of that server)."""
     tools: dict[str, Any] = {}
@@ -406,6 +415,8 @@ def parse_cli(values: list[str]) -> dict:
                 if "chrome_extension" in tools:
                     raise ToolsError("--tools chrome-extension given twice")
                 tools["chrome_extension"] = True
+            elif item == "no-screen":
+                tools["screen_off"] = True
             elif kind == "screen":
                 if "screen" in tools:
                     raise ToolsError("--tools screen given twice")
@@ -426,7 +437,7 @@ def parse_cli(values: list[str]) -> dict:
             else:
                 raise ToolsError(
                     f"unknown --tools entry {item!r} (browser[:deviceId], no-browser, chrome-extension, "
-                    "screen[:read|:operate[:server]], mcp:<server>[:all])")
+                    "no-screen, screen[:read|:operate[:server]], mcp:<server>[:all])")
     return tools
 
 
@@ -459,7 +470,7 @@ def check_provider(spec: dict, provider: str) -> None:
     elif provider in ("gemini", "antigravity", "agy") and sys.platform == "darwin":
         names = tools.get("mcp", [])
         screen = tools.get("screen")
-        if (spec["base"] != "default" or set(tools) - {"screen", "mcp", "browser_mode"}
+        if (spec["base"] != "default" or set(tools) - {"screen", "screen_off", "mcp", "browser_mode"}
                 or (screen and screen["server"] != SCREEN_SERVER)
                 or any(name != SCREEN_SERVER for name in names)):
             raise ToolsError("Antigravity supports only the managed Computer use selection")
@@ -1078,6 +1089,7 @@ def change_permission(tools: dict, permission: dict, definitions: dict | None) -
         mode = permission["computer_use"]
         removed = {name for name in mcp if _cua_server(name, definition(name))}
         changed.pop("screen", None)
+        changed.pop("screen_off", None)
         if sys.platform == "darwin":
             removed.add(SCREEN_SERVER)
             if mode == "off":
@@ -1086,6 +1098,9 @@ def change_permission(tools: dict, permission: dict, definitions: dict | None) -
                 removed.discard(SCREEN_SERVER)
             else:
                 changed["screen"] = {"server": SCREEN_SERVER, "access": "read" if mode == "view" else "operate"}
+        elif mode == "off":
+            # Persist the choice even when there is no relay in the new launch.
+            changed["screen_off"] = True
         elif mode == "view" or (mode == "control" and (screen == SCREEN_SERVER or SCREEN_SERVER in mcp)):
             changed["screen"] = {"server": SCREEN_SERVER, "access": "read" if mode == "view" else "operate"}
         elif mode == "control":

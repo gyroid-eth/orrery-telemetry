@@ -121,7 +121,7 @@ def tool_permissions(spec, servers, *, chrome=False, isolated=False):
     tools = (spec or {}).get("tools", {})
     screen = tools.get("screen", {})
     computer = {"read": "view", "operate": "control"}.get(screen.get("access"))
-    if computer is None and "orrery-screen" in tools.get("mcp", ()):
+    if computer is None and (tools.get("screen_off") is True or "orrery-screen" in tools.get("mcp", ())):
         computer = "off"
     cua = servers.get("cua-driver")
     if screen.get("server") != "cua-driver" and _cua_control(cua):

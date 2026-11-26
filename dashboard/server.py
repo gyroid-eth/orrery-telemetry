@@ -10136,6 +10136,8 @@ def _spawn_tools_args(payload: dict, provider: str, chrome: bool,
         args += ["--tools", "browser-mode:" + tools["browser_mode"]]
     if "chrome_extension" in tools:
         args += ["--tools", "chrome-extension"]
+    if tools.get("screen_off"):
+        args += ["--tools", "no-screen"]
     if "screen" in tools:
         screen = tools["screen"]
         value = "screen:" + screen["access"]
