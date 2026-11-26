@@ -20,6 +20,7 @@ METADATA = ('#{socket_path}\t#{pid}\t#{pane_id}\t#{pane_pid}\t#{cursor_y}\t#{pan
             '\t#{cursor_x}\t#{bracket_paste_flag}\t#{pane_current_command}')
 POLL = .06
 TIMEOUT = 5.0
+REDRAW_GRACE = 1.0
 SLASH_MENU_WAIT = .30
 SHELLS = frozenset({
     'ash', 'bash', 'busybox', 'cmd', 'csh', 'dash', 'elvish', 'fish', 'hush',
@@ -94,6 +95,7 @@ class Frame:
     editor: str | None = None
     running: bool = False
     slash_view: tuple[str, str] | None = None
+    redrawing: bool = False
 
     @property
     def identity(self):
@@ -284,6 +286,12 @@ def frame(metadata, lines, pane):
     slash_view = _slash_view(plain)
     if bracketed is False:
         return Frame(*base,None,False,slash_view=slash_view)
+    if (cursor==0 and column==2 and plain[0].startswith('❯ ')
+            and not any(row.strip() for row in plain[1:])
+            and _hermes_compact_hint(lines[0], plain[0][2:].strip())):
+        # During a Hermes resize the status and rules can disappear for a redraw.
+        # Treat this as a reason to read again, without admitting input.
+        return Frame(*base,None,False,redrawing=True)
     for start in range(cursor,-1,-1):
         line=plain[start].rstrip()
         if BORDER.fullmatch(line.strip()):
@@ -551,6 +559,20 @@ def capture(command,pane):
     return frame(metadata,screen.splitlines(),pane) if separator else None
 
 
+def same_hermes_notice(view,text):
+    """Compare all visible rows, allowing whitespace lost at a terminal wrap."""
+    if (not view.hermes or view.waiting or view.selected or not view.draft
+            or not text.startswith('ORRERY Mail notification: message from ')):
+        return False
+    remaining=text
+    for line in view.draft.splitlines():
+        line=line.strip()
+        if not remaining.startswith(line):
+            return False
+        remaining=remaining[len(line):].lstrip()
+    return not remaining
+
+
 def submit(command,admit,pane,text,*,deadline=None,on_wait=None):
     """Watcher path. Refused means a prompt was never pasted."""
     end=time.monotonic()+TIMEOUT if deadline is None else deadline
@@ -562,6 +584,20 @@ def submit(command,admit,pane,text,*,deadline=None,on_wait=None):
             on_wait(reason)
         return status
 
+    def capture_draft(identity):
+        view = capture(command,pane)
+        if view is None or view.identity != identity or not view.redrawing:
+            return view
+        redraw_deadline = min(end, time.monotonic() + REDRAW_GRACE)
+        while time.monotonic() < redraw_deadline:
+            time.sleep(POLL)
+            view = capture(command,pane)
+            if view is not None and view.identity != identity:
+                return view
+            if view is not None and not view.redrawing:
+                return capture(command,pane) if admit() else None
+        return view
+
     try:
         current=capture(command,pane)
         if current is None:
@@ -571,41 +607,46 @@ def submit(command,admit,pane,text,*,deadline=None,on_wait=None):
             return defer('refused', 'pane_locked')
         if not admit():
             return defer('refused', 'pane_changed')
-        before=capture(command,pane)
+        before=capture_draft(current.identity)
         if not before or before.identity!=current.identity:
             return defer('refused', 'pane_changed')
         if before.draft is None:
             return defer('refused', 'input_not_found')
         if before.waiting:
             return defer('refused', 'editor_waiting')
-        if not before.empty:
+        resuming=not before.empty
+        if resuming and not same_hermes_notice(before,text):
             return defer('refused', 'editor_not_empty')
         if not before.allows_paste(text):
             return defer('refused', 'paste_unavailable')
-        name='orrery-submit-'+uuid.uuid4().hex
+        name=None if resuming else 'orrery-submit-'+uuid.uuid4().hex
+        pasted=resuming
         try:
-            if command('load-buffer','-b',name,'-',input=text).returncode:
-                return defer('refused', 'load_buffer_failed')
-            if time.monotonic()>=end:
-                return defer('refused', 'submission_deadline')
-            if not admit():
-                return defer('refused', 'pane_changed')
-            current=capture(command,pane)
-            if not current or current.identity!=before.identity:
-                return defer('refused', 'pane_changed')
-            if not current.empty or not current.allows_paste(text):
-                return defer('refused', 'editor_changed')
-            pasted=True  # A timeout after the command starts cannot prove absence.
-            if command('paste-buffer','-r','-p','-d','-b',name,'-t',pane).returncode:
-                return defer('unknown', 'paste_failed')
+            if name is not None:
+                if command('load-buffer','-b',name,'-',input=text).returncode:
+                    return defer('refused', 'load_buffer_failed')
+                if time.monotonic()>=end:
+                    return defer('refused', 'submission_deadline')
+                if not admit():
+                    return defer('refused', 'pane_changed')
+                current=capture_draft(before.identity)
+                if not current or current.identity!=before.identity:
+                    return defer('refused', 'pane_changed')
+                if not current.empty or not current.allows_paste(text):
+                    return defer('refused', 'editor_changed')
+                pasted=True  # A timeout after the command starts cannot prove absence.
+                if command('paste-buffer','-r','-p','-d','-b',name,'-t',pane).returncode:
+                    return defer('unknown', 'paste_failed')
             previous=None
             problem=None
             menu_wait = SlashMenuWait(text)
+            def confirmed_draft(view):
+                return (not resuming or same_hermes_notice(view,text)) and menu_wait.ready(view)
             while time.monotonic()<end:
                 view=capture(command,pane)
                 if not view or view.identity!=before.identity:return defer('unknown', 'pane_changed')
                 problem=completion_problem(view,text)
-                choice=(view.draft,view.selected_command) if menu_wait.ready(view) or problem=='completion-mismatch' else None
+                choice=(view.draft,view.selected_command) if confirmed_draft(view) or problem=='completion-mismatch' else None
                 if choice is not None and choice==previous:
                     if not admit():
                         return defer('unknown', 'pane_changed')
@@ -614,7 +655,7 @@ def submit(command,admit,pane,text,*,deadline=None,on_wait=None):
                     view=capture(command,pane)
                     if not view or view.identity!=before.identity:
                         return defer('unknown', 'pane_changed')
-                    confirmed = menu_wait.ready(view)
+                    confirmed = confirmed_draft(view)
                     if (view.draft,view.selected_command)==choice:
                         if mismatched_command(view,text):
                             return defer('unknown', 'completion_mismatch')
@@ -635,8 +676,9 @@ def submit(command,admit,pane,text,*,deadline=None,on_wait=None):
                 time.sleep(POLL)
             return defer('unknown', 'enter_not_confirmed')
         finally:
-            try:command('delete-buffer','-b',name)
-            except (OSError,RuntimeError,subprocess.TimeoutExpired):pass
+            if name is not None:
+                try:command('delete-buffer','-b',name)
+                except (OSError,RuntimeError,subprocess.TimeoutExpired):pass
     except (OSError,RuntimeError,subprocess.TimeoutExpired):
         return defer('unknown' if pasted else 'refused', 'terminal_unavailable')
     finally:

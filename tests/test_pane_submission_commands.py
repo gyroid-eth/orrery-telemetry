@@ -4,12 +4,86 @@ import itertools
 import os
 import runpy
 import subprocess
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize('interleaving', [
+    'left-in-editor', 'manual-enter', 'cleared', 'changed-draft', 'changed-inner-space',
+])
+def test_watcher_restarts_after_pasting_a_wrapped_hermes_notice(monkeypatch, interleaving):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    submit = submission['submit']
+    monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
+    now = itertools.count()
+    monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(
+        monotonic=lambda: next(now) * .1, sleep=lambda seconds: None))
+    text = ('ORRERY Mail notification: message from FixtureSender [normal]: Ready. '
+            'Body preview: ' + 'Several words wrapped in the Hermes editor. ' * 6 +
+            'Fetch inbox to read the rest.')
+    draft = ''
+    effects = []
+
+    class WatcherStopped(BaseException):
+        pass
+
+    def command(*args, input=None):
+        nonlocal draft
+        operation = args[0]
+        output = ''
+        if operation == 'display-message':
+            body = textwrap.wrap(draft, 70) or ['']
+            border = '─' * 80
+            lines = [' ☤ fixture-model │ 2K/20K', border, '❯ '+body[0], *body[1:], border]
+            position = len(body)+1
+            column = len(body[-1]) + (2 if len(body)==1 else 0)
+            metadata = f'/tmp/fixture.sock\t100\t%1\t200\t{position}\t0\t{column}\t1\tzsh'
+            output = '\n'.join([metadata,*lines,''])
+        elif operation == 'load-buffer':
+            assert input == text
+            effects.append('load')
+        elif operation == 'paste-buffer':
+            effects.append('paste')
+            draft = text
+            if effects.count('paste') == 1:
+                raise WatcherStopped
+        elif operation == 'send-keys':
+            assert args[-1] == 'C-m' and draft == text
+            effects.append('enter')
+            draft = ''
+        else:
+            assert operation == 'delete-buffer'
+        return subprocess.CompletedProcess(args, 0, output, '')
+
+    with pytest.raises(WatcherStopped):
+        submit(command, lambda: True, '%1', text)
+    if interleaving in ('manual-enter', 'cleared'):
+        draft = ''
+        if interleaving == 'manual-enter':
+            effects.append('manual enter')
+    elif interleaving == 'changed-draft':
+        draft += ' Another draft line.'
+    elif interleaving == 'changed-inner-space':
+        draft = draft.replace('message from', 'messagefrom')
+    reasons = []
+    outcome = submit(command, lambda: True, '%1', text, on_wait=reasons.append)
+    expected = ['load', 'paste']
+    if interleaving == 'left-in-editor':
+        assert outcome == 'accepted'
+        expected.append('enter')
+    elif interleaving in ('manual-enter', 'cleared'):
+        assert outcome == 'accepted'
+        if interleaving == 'manual-enter':
+            expected.append('manual enter')
+        expected.extend(('load', 'paste', 'enter'))
+    else:
+        assert outcome == 'refused' and reasons == ['editor_not_empty']
+    assert effects == expected
 
 
 @pytest.mark.parametrize('editor,editor_text,selection,accepted', [
