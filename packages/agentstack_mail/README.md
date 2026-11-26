@@ -75,9 +75,9 @@ deployment: `AGENTSTACK_MAIL_HTTP_PATH_ALIASES` (default `/mcp,/api`) lists
 alias paths rewritten onto the canonical `--path` before routing, matching
 with and without a trailing slash; set it empty to serve the canonical path
 only. Two token-efficiency behaviors are enabled by default:
-`AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY=true` adds a 400-character
-`body_snippet` to notification signals so watchers can deliver short messages
-without a fetch round trip, and `AGENTSTACK_MAIL_COMPACT_SEND_RESULT=true`
+`AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY=true` adds up to 2000 characters
+as `body_snippet` so watchers can deliver short messages without a fetch round
+trip. Longer messages are marked as previews. `AGENTSTACK_MAIL_COMPACT_SEND_RESULT=true`
 drops the body echo from send/reply tool results. Set either to `false` for the
 legacy response shape. `AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS` (default
 10), keeps signals younger than that many seconds alive through a

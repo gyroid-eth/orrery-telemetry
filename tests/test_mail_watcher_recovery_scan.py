@@ -242,6 +242,20 @@ def _function(source: str, name: str) -> str:
     return match.group(0)
 
 
+@pytest.mark.parametrize("length,server_truncated", [(2000, False), (2000, True), (2001, False)])
+def test_notice_limit_counts_body_characters_before_marking_line_breaks(tmp_path, length, server_truncated):
+    body = ("文\n" * 1001)[:length]
+    signal_file = tmp_path / "notice.signal"
+    signal_file.write_text(json.dumps({"message": {"id": 777, "body_snippet": body,
+                                                 "body_truncated": server_truncated}}))
+    script = _function(WATCHER.read_text(encoding="utf-8"), "read_signal_meta")
+    result = subprocess.run(["/bin/bash", "-c", script + 'read_signal_meta "$1"\n', "watch", str(signal_file)],
+                            capture_output=True, text=True, check=True, timeout=10)
+    lines = result.stdout.splitlines()
+    assert lines[6] == body[:2000].replace("\n", " ⏎ ")
+    assert lines[7] == ("1" if server_truncated or length > 2000 else "0")
+
+
 def test_a_lease_freed_by_a_finished_worker_does_not_start_a_second_one(tmp_path):
     """The previous worker records success and frees the lease between this
     handler's state check and its lease: the handler must re-check and stand
