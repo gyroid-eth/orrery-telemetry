@@ -208,6 +208,10 @@ cannot be loaded.
 
 ## Dashboard controls
 
+管理された対話型 Antigravity では、親なしの **Standalone** と委任された子の両方で、
+cockpit の左の一覧とスマホの一覧に context window のバーが出ます。
+Antigravity の statusLine が現在の使用率を返すと表示され、まだ観測値がない間は表示されません。
+
 macOS の対話子は `EXIT` で終了し、予約を解放して保持期間に入ります。
 `Resume` は確認できた同じ登録・worktree・会話 ID を使います。
 再開後に編集するときは必要な予約を取り直します。履歴を照合できない場合は理由を返します。
