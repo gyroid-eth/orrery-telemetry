@@ -2,14 +2,14 @@
 
 > English version: [hooks.en.md](hooks.en.md)
 
-[前: 委任と child agent](delegation.md) · [README に戻る](../README.md) · [次: Codex App 統合](codex-app.md)
+[前: 委任と child agent](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md) · [README に戻る](../README.md) · [次: Codex App 統合](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md)
 
 `hooks/` には、Claude Code の lifecycle event から自動実行される hook と、launcher・dashboard・skill が明示的に呼ぶ運用 helper、event hook が source / 起動する内部 library・worker が同居しています。Claude Code event hook は9件です。
 
 [`hooks/settings.template.json`](../hooks/settings.template.json) は event と command の対応を定義し、[`hooks/README.md`](../hooks/README.md) は settings merge の安全方針を定義します。この文書は、実際にいつ起動し、何を保証するかを説明する利用者向け reference です。
 
 
-停止した子の道具を変更する `agentstack-resume` は `/api/jump` を呼びます。`child_resume.py` が変更世代と生成設定の復元を管理します。[道具変更](delegation.md#停止した子の道具を変更して-resume-する)を参照してください。
+停止した子の道具を変更する `agentstack-resume` は `/api/jump` を呼びます。`child_resume.py` が変更世代と生成設定の復元を管理します。[道具変更](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md#停止した子の道具を変更して-resume-する)を参照してください。
 
 ## Claude Code event hook（9件）
 
@@ -53,12 +53,12 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 
 ### `check-file-reservation.sh`
 
-- **発火:** `Edit` / `Write` の直前。managed 起動では、計算済み `AGENTSTACK_PROTECTED_ROOTS`（設定順の意図的な `AGENTSTACK_EXTRA_PROTECTED_ROOTS`、次に実際の起動 workspace）内だけ enforcement します。保護するかどうかは root との一致で決めますが、managed 起動の予約識別子は root に依存しない物理絶対 path とし、同じ file を別の起動 folder から編集しても衝突を検知します。managed hook は file/root の canonical path を比較します。legacy/direct session は、root 未設定時の project root fallback を含む従来の root/path 解決を維持します。新しい managed 起動は path 形式の namespace を追加保護 root と見なしません。旧 session の restart 前に[保護設定の移行](configuration.md#reservation-の保護範囲と移行)を確認してください。
+- **発火:** `Edit` / `Write` の直前。managed 起動では、計算済み `AGENTSTACK_PROTECTED_ROOTS`（設定順の意図的な `AGENTSTACK_EXTRA_PROTECTED_ROOTS`、次に実際の起動 workspace）内だけ enforcement します。保護するかどうかは root との一致で決めますが、managed 起動の予約識別子は root に依存しない物理絶対 path とし、同じ file を別の起動 folder から編集しても衝突を検知します。managed hook は file/root の canonical path を比較します。legacy/direct session は、root 未設定時の project root fallback を含む従来の root/path 解決を維持します。新しい managed 起動は path 形式の namespace を追加保護 root と見なしません。旧 session の restart 前に[保護設定の移行](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md#reservation-の保護範囲と移行)を確認してください。
 - **project key:** `AGENTSTACK_PROJECT_KEY` → `PROJECT_KEY` → `${AGENTSTACK_HOME:-$HOME/.agentstack}/env.sh` の `AGENTSTACK_PROJECT_KEY` → hook input の cwd の順で解決します。installed `env.sh` は shell として source せず、対象の `export AGENTSTACK_PROJECT_KEY=...` だけを literal として読みます。この共通 resolver は registration guard、session reminder、child cleanup、`agentstack-await-reply` も使うため、launcher を経由しない editor session でも install 時と同じ project を参照します。
 - **identity:** `AGENT_NAME` を優先します。無い場合は `TMUX_PANE` で対象 pane の tmux session を明示取得し、pane metadata は一致確認にだけ使います。metadata と session が違う、placeholder、または解決不能なら HTTP を送る前に exit 2 で block します。untargeted な ambient tmux session は使いません。tmux 外の client でも、`register_agent` を呼んで `<runtime>/session_index/` に記録されていれば、hook input の `session_id` から identity を解決します（優先度は env → tmux → session index）。`session_id` は `[a-zA-Z0-9_-]` 以外を含むなら使わず、symlink の index entry は読みません。identity source が1つも無い session の扱いは下記「unmanaged session」に従います。
 - **動作:** managed 起動では物理絶対 path、従来の legacy/direct session では相対 path / absolute path の両方で既存 reservation を renew-only 確認し、他者の有効な exclusive 予約との重複も read-only で照会します。重複時は予約者を理由に示します。owner `registration_token` は読み込まず tool arguments に送りません。legacy HTTP bearer は別の transport credential で、generated selector が `disabled` の native endpoint には送りません。0件なら非同期 commit を考慮して1回だけ再確認し、auto-acquire はしません。
 - **判定:** 既存 reservation は exit 0、definitive zero、HTTP rejection、JSON-RPC error、MCP `isError=true`または非boolean、schema違反、malformed response、zero後のretry failureは exit 2 です。`isError` は省略または boolean `false` だけを成功として許します。exact identity と protected scope の確定後、**最初の照会**が transport unreachable の場合だけ運用上の fail-open があります。pathなしと protected root外は enforcement 対象外なので exit 0 です。
-- **予約の取得:** managed `workspace-v1` の拒否文は、必要な物理絶対 path を示します。bound proxy の `reserve_files` にその path を渡し、更新・解放にも同じ path を使います。相対予約を自動で絶対化する機能はありません。[共通 proxy の path 契約と更新手順](codex-app.md#agent-の利用手順)を参照してください。dsh/Hermes の native adapter と Codex の承認済み hook も同じ guard を使います。
+- **予約の取得:** managed `workspace-v1` の拒否文は、必要な物理絶対 path を示します。bound proxy の `reserve_files` にその path を渡し、更新・解放にも同じ path を使います。相対予約を自動で絶対化する機能はありません。[共通 proxy の path 契約と更新手順](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md#agent-の利用手順)を参照してください。dsh/Hermes の native adapter と Codex の承認済み hook も同じ guard を使います。
 - **deploy順:** strict identity版を既存sessionへ途中適用しません。cutover C5で全clientを`agent-start`経由でrestart/rebindし、exact identityを確認してからrepo版をliveへ同期し、予約あり/なしの両方向testを通します。
 
 ### `check-agent-registered.sh`
@@ -151,7 +151,7 @@ SessionStart の shell 登録成功時も、同じ writer にその event の pa
 
 `record-codex-session-index.py` が identity に使う runtime 値は SessionStart stdin の `session_id` だけです。`CODEX_THREAD_ID`、`CODEX_SESSION_ID`、cwd、時刻、候補数は使いません。payload path の実体が通常 file で、先頭 `session_meta` ID が一致し、launch metadata の project・数値 ID・name・program と launcher がこの process に渡した `launch_id` がすべて一致したときだけ `provider: codex` の receipt を書きます。provenance は launcher が `standalone`、または `child` と有効な MCP profile の組を明示した場合だけコピーし、矛盾する metadata は invalid binding として拒否します。receipt は通常 cleanup が削除する state / token / child home の外に残るため、dashboard は cleanup 済み child、製品起動の top-level session、origin 不明の session を名前から推測せず区別できます。provenance 導入前の receipt はどちらにも昇格しません。recorder は trusted plugin runner と同梱し、index の runtime root は launch metadata path から導出します。login shell が親の `AGENTSTACK_RUNTIME_DIR` を復元しても保存先をすり替えられません。内蔵 subagent event は別 CLI process ではなく root ID を共有するため除外します。
 
-この recorder は `agentstack-codex-app` の SessionStart hook plugin が導入・有効で、かつ Codex でその lifecycle hooks が承認されている場合にだけ呼ばれます。core install は配置済み plugin source を更新しても Codex が選ぶ optional marketplace/cache を自動更新・有効化せず、hook の承認も自動化しません。既存の有効な plugin には [plugin-only refresh](codex-app.md#core-更新後の既存-plugin-refresh) を実行し、Codex の `/hooks` で AgentStack hooks を review・承認してから fresh process で確認します。未導入・disabled の利用者は自動 opt-in されません。
+この recorder は `agentstack-codex-app` の SessionStart hook plugin が導入・有効で、かつ Codex でその lifecycle hooks が承認されている場合にだけ呼ばれます。core install は配置済み plugin source を更新しても Codex が選ぶ optional marketplace/cache を自動更新・有効化せず、hook の承認も自動化しません。既存の有効な plugin には [plugin-only refresh](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md#core-更新後の既存-plugin-refresh) を実行し、Codex の `/hooks` で AgentStack hooks を review・承認してから fresh process で確認します。未導入・disabled の利用者は自動 opt-in されません。
 
 launcher と recorder は同じ agent-ID lock を取ります。launch metadata は最初の `session_id` を一方向に claim し、別 ID を一度でも検出するとその generation を競合状態に固定します。各 callback は fresh receipt nonce を launch metadata に先に書き、index は同じ nonce を持つときだけ有効です。したがって index の削除に失敗しても古い receipt は通らず、新 launch まで別 ID、`clear`、再入力、`compact` で自動復旧しません。新 launch を記録した後に旧 callback が遅着しても current `launch_id` と一致せず、現在の receipt を上書きしません。SessionStart hook 自体は fail-open で CLI を止めませんが、`no_transcript`、`id_mismatch`、`write_failed` 等を launch metadata / stderr に残します。dashboard は約10秒の表示猶予後も current receipt が無ければ DECK に `? UNBOUND`、明示的に履歴保存なしなら `— NO HISTORY` を表示し、理由は History tab だけに出します。
 
@@ -161,9 +161,9 @@ source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返�
 
 ### `spawn_child.sh`
 
-`--resources` による対象宣言を既定で必須にし、競合を確認してから child を起動します。Claude / Codex、model、pre-registered identity、child-owned token file、per-child MCP proxy、任意 worktree に対応します。tmux REPL が ready または早期終了と判定されるまで待ち、正本 task を注入します。引数 / server / worktree failure は exit 1、resource 未宣言は2、reservation conflict は21です。通常は直接叩かず、[/delegate](launchers.md#delegate) または dashboard から利用します。
+`--resources` による対象宣言を既定で必須にし、競合を確認してから child を起動します。Claude / Codex、model、pre-registered identity、child-owned token file、per-child MCP proxy、任意 worktree に対応します。tmux REPL が ready または早期終了と判定されるまで待ち、正本 task を注入します。引数 / server / worktree failure は exit 1、resource 未宣言は2、reservation conflict は21です。通常は直接叩かず、[/delegate](https://github.com/gyroid-eth/orrery/blob/master/docs/launchers.md#delegate) または dashboard から利用します。
 
-`AGENTSTACK_CHILD_DEFAULT_TOOLS` は、CLI で `--base` / `--tools` / `--codex-mcp` を、標準の `/api/spawn` で `base` / `tools` を省略した Claude・Codex・dsh・Hermes の新規起動に適用します。最終の作業フォルダと provider で確認して使えない既定項目だけを外し、spawn 出力と最初の指示に残します。明示選択と resume は既存の fail-closed 経路です。[既定の道具](delegation.md#installer-の既定の道具)。
+`AGENTSTACK_CHILD_DEFAULT_TOOLS` は、CLI で `--base` / `--tools` / `--codex-mcp` を、標準の `/api/spawn` で `base` / `tools` を省略した Claude・Codex・dsh・Hermes の新規起動に適用します。最終の作業フォルダと provider で確認して使えない既定項目だけを外し、spawn 出力と最初の指示に残します。明示選択と resume は既存の fail-closed 経路です。[既定の道具](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md#installer-の既定の道具)。
 
 ### `cleanup-child-agent.sh`
 
@@ -189,7 +189,7 @@ dangerous command pattern の検査は `AGENTSTACK_MONITOR_DANGER_CHECK=1` の�
 
 ### `watch_agent_mail_signals.sh`
 
-`fswatch` があれば event watch、なければ2秒 polling を使います。runtime の delivery state と短期 lease で同じ `(agent, message)` の重複注入を抑えます。配送成功時は per-message signal を削除し、legacy signal は `fetch_inbox` が消します。session一覧で宛先不在を確認した場合は、その通知signalだけを削除して再試行を止めます。Mail本体やinboxは変更しません。timeout・権限エラーなど不在を確定できない失敗とheadless配送の失敗は再試行します。読み取り後に更新されたlegacy signalは削除しません。leaseのguardは固定256個を共有し、標準の`mail-watcher.log`はscan時に5MiBを超えていれば末尾5MiBを`.1`へ残して同じfileを切り詰めます。periodic scan（macOS は30秒、Linux は2秒）が取りこぼしを救済します。古くて session が無い signal の health 判定と任意の片付け方は [トラブルシューティング](troubleshooting.md#mail-watcher-が-yellow--red) を参照してください。
+`fswatch` があれば event watch、なければ2秒 polling を使います。runtime の delivery state と短期 lease で同じ `(agent, message)` の重複注入を抑えます。配送成功時は per-message signal を削除し、legacy signal は `fetch_inbox` が消します。session一覧で宛先不在を確認した場合は、その通知signalだけを削除して再試行を止めます。Mail本体やinboxは変更しません。timeout・権限エラーなど不在を確定できない失敗とheadless配送の失敗は再試行します。読み取り後に更新されたlegacy signalは削除しません。leaseのguardは固定256個を共有し、標準の`mail-watcher.log`はscan時に5MiBを超えていれば末尾5MiBを`.1`へ残して同じfileを切り詰めます。periodic scan（macOS は30秒、Linux は2秒）が取りこぼしを救済します。古くて session が無い signal の health 判定と任意の片付け方は [トラブルシューティング](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-troubleshooting.md#mail-watcher-が-yellow--red) を参照してください。
 
 guard方式の変更を反映する更新では、旧watcherと配送workerを通常の管理元で停止してから新しいwatcherを起動します。古いguardは自動削除しません。片付ける場合も、旧workerが動いたままlockを削除しないでください。
 
@@ -207,19 +207,19 @@ pattern の正本は Mail の `_patterns_overlap` だけです。hook に照合�
 
 Codex が guard の exit 2 と stderr を編集前の拒否として扱うため、対象のうち1つでも予約が無ければ patch 全体を実行しません。複数 path の照会は25秒で打ち切り、失敗を拒否にします。shell 経由の書き込みは両 CLI ともこの予約 guard の対象外です。Codex での予約 release は従来どおり model が明示的に行い、自動 release は足しません。
 
-保護が有効になるのは plugin が導入・有効で、**現在の hook 定義を人が `/hooks` で review・承認した新しい Codex process**だけです。core 更新後の [plugin-only refresh](codex-app.md#core-更新後の既存-plugin-refresh) と承認を行ってください。起動や更新は hook を自動承認しません。`agentstack-doctor` は guard の未導入・無効・未承認・不明を警告し、`hooks/list` で現在の定義が trusted / enabled と確認できた場合だけその状態を報告します。古い plugin に guard が無い場合も missing と報告します。警告時は `apply_patch` が保護されていると考えず、予約取得を必ず明示的に確認してください。
+保護が有効になるのは plugin が導入・有効で、**現在の hook 定義を人が `/hooks` で review・承認した新しい Codex process**だけです。core 更新後の [plugin-only refresh](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md#core-更新後の既存-plugin-refresh) と承認を行ってください。起動や更新は hook を自動承認しません。`agentstack-doctor` は guard の未導入・無効・未承認・不明を警告し、`hooks/list` で現在の定義が trusted / enabled と確認できた場合だけその状態を報告します。古い plugin に guard が無い場合も missing と報告します。警告時は `apply_patch` が保護されていると考えず、予約取得を必ず明示的に確認してください。
 
 公式 `SessionStart` hook は引き続き履歴 receipt に使います。Claude Code の registration `PostToolUse` とは別で、`mark-agent-registered.sh` は走りません。`agent-start-codex` は bootstrap で identity 登録、tmux rename、launch expectation を済ませ、予約済み child/resume と reregister は応答名不一致で停止します。direct spawn は警告後に応答名を採用し、raw MCP 登録は自動検出されません。managed `~/.codex/AGENTS.md` の reserve / renew / release 指示は引き続き必要です。mail watcher と ORRERY Mail registry は両 CLI 共通です。
 
-Codex Desktop はさらに別の plugin hook / Bridge lifecycle を使います。詳しくは [Codex App 統合](codex-app.md)を参照してください。
+Codex Desktop はさらに別の plugin hook / Bridge lifecycle を使います。詳しくは [Codex App 統合](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md)を参照してください。
 
 ## 関連文書
 
-- [インストール](install.md)
-- [Launcher と identity / Skills](launchers.md)
-- [Codex App 統合](codex-app.md)
-- [設定](configuration.md)
-- [トラブルシューティング](troubleshooting.md)
+- [インストール](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md)
+- [Launcher と identity / Skills](https://github.com/gyroid-eth/orrery/blob/master/docs/launchers.md)
+- [Codex App 統合](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md)
+- [設定](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md)
+- [トラブルシューティング](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-troubleshooting.md)
 
 ## 決定的daemonのlocal entry
 
@@ -233,7 +233,7 @@ Codex plugin の対象 hook だけを承認する API と未確認時の `/hooks
 
 明示的な隔離起動・配送と operator の復旧は [global delivery client](global-delivery-client.md) を参照してください。既定は旧 mode のままです。
 
-SessionStart は旧 block の件数だけを案内します。bare session の Mail 登録は行わず、編集 guard の方針は保持します。 [Details](instruction-migration.md#legacy-blocks).
+SessionStart は旧 block の件数だけを案内します。bare session の Mail 登録は行わず、編集 guard の方針は保持します。 [Details](https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md#legacy-blocks).
 
 ## ローカルモデルの鍵をagentのshellから読まない
 

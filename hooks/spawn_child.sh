@@ -3442,7 +3442,7 @@ PY
         if [[ "$legacy_status" != 0 ]]; then
             echo "Error: $CHILD_NAME was started by an earlier version, and ORRERY Mail did not confirm its saved credential; nothing was changed." >&2
             if [[ "$legacy_status" == 2 ]]; then
-                echo "  Update and restart ORRERY Mail first: docs/agentstack-mail-update.md" >&2
+                echo "  Update and restart ORRERY Mail first: https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md" >&2
             fi
             echo "  Resuming $CHILD_NAME from the dashboard reaches the same check and keeps its name and conversation." >&2
             echo "  Do not preregister it again: that registers a different name and leaves two agents in the same role." >&2

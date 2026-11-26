@@ -4,7 +4,7 @@
 function element(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=String(text);return e;}
 function button(text,fn,cls){const e=element('button',cls,text);e.type='button';e.onclick=fn;return e;}
 function link(text,url){const e=element('a','',text);e.href=url;e.target='_blank';e.rel='noopener';return e;}
-function details(parent){parent.append(' Details: ',link('English','https://github.com/gyroid-eth/orrery-telemetry/blob/master/docs/instruction-migration.en.md#legacy-blocks'),' / ',link('日本語','https://github.com/gyroid-eth/orrery-telemetry/blob/master/docs/instruction-migration.md#legacy-blocks'));}
+function details(parent){parent.append(' Details: ',link('English','https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#legacy-blocks'),' / ',link('日本語','https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md#legacy-blocks'));}
 function fingerprint(row){return JSON.stringify([row.provider,row.target_path,row.disk_state,row.session_state,(row.findings||[]).map(f=>[f.source_path,f.kind,f.block_sha256,f.template_id])]);}
 function dismissed(row){try{return sessionStorage.getItem('orrery.instruction-dismiss')===fingerprint(row);}catch(_){return false;}}
 function notice(row,{force=false}={}){

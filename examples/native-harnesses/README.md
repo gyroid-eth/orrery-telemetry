@@ -2,7 +2,7 @@
 
 > English: [README.en.md](README.en.md)
 
-**最初にDeepSeek・Localを追加する方へ：** [初期設定ガイド](https://github.com/gyroid-eth/orrery-telemetry/blob/master/docs/native-setup.md)で、APIキーの取得・OSへの保存・runtime追加の順序を確認してください。この文書は、設定例をコピーしてつなぐ工程の詳細です。
+**最初にDeepSeek・Localを追加する方へ：** [初期設定ガイド](https://github.com/gyroid-eth/orrery/blob/master/docs/native-setup.md)で、APIキーの取得・OSへの保存・runtime追加の順序を確認してください。この文書は、設定例をコピーしてつなぐ工程の詳細です。
 
 例の版: 1。これは設定補助用の例です。installは接続先の有効設定や鍵を作りません。
 ここにあるmanifestをそのままサービスへ登録しないでください。
@@ -42,7 +42,7 @@ installとagentが合わせる項目です。Bはruntime参照の手転記を省
 ### agentを使わずにDeepSeekの設定例を準備する
 
 Claude CodeやCodexを使わない人も、installerが作ったBのsnapshotから設定できます。
-先に[初期設定ガイドの手順2～4](../../docs/native-setup.md#2-dshhermesを追加する)で、
+先に[初期設定ガイドの手順2～4](https://github.com/gyroid-eth/orrery/blob/master/docs/native-setup.md#2-dshhermesを追加する)で、
 harnessの導入とキーのOS保存を済ませます。以下のコピー処理はキーを取得しません。
 
 Telemetryのソースフォルダー内で実行します。次の `SNAPSHOT` はinstallerの
@@ -128,7 +128,7 @@ Hermesを使う人は `--harness dsh` を `--harness hermes` に変更します�
 
 検査に成功したら、利用者が同じフォルダーで次を1回実行します。変更案が出た場合は
 内容を確認して本人がyes/noを選びます。`Install complete` の後にブラウザを再読み込みし、
-[最初の1体を試す](../../docs/native-setup.md#6-new-agentから1体だけ試す)へ進みます。
+[最初の1体を試す](https://github.com/gyroid-eth/orrery/blob/master/docs/native-setup.md#6-new-agentから1体だけ試す)へ進みます。
 
 ```bash
 ./scripts/install.sh --keep-mail --managed-spawn-config "$CONFIG_DIR/manifest.example.json"
@@ -187,7 +187,7 @@ dsh の選択モデル別 compaction 予算と固定 backend の扱いは [dsh c
 
 #### 従来の固定model接続（互換）
 
-既存Localを残して別のLocalも追加する場合は、置換せず[複数接続の設定](../../docs/configuration.md#native-connections)に従い、manifest・dsh backend・Hermes profileへ同じ新接続IDを追加します。
+既存Localを残して別のLocalも追加する場合は、置換せず[複数接続の設定](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md#native-connections)に従い、manifest・dsh backend・Hermes profileへ同じ新接続IDを追加します。
 
 Bの標準例はDeepSeek用です。Localはbackend IDを `strata` とし、利用者コピーの
 次のfieldを同じ接続先へ揃えます。runtime参照とコピー先の絶対pathはそのまま整合させます。

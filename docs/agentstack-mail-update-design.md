@@ -1,7 +1,7 @@
 # ORRERY Mail の build 差し替え: 設計メモ
 
 > English version: [agentstack-mail-update-design.en.md](agentstack-mail-update-design.en.md)
-> 手順と挙動の正本は [agentstack-mail-update.md](agentstack-mail-update.md)。この文書は、なぜその形にしたかと、まだ決めていないこと（既定にするか）を残すためのものです。
+> 手順と挙動の正本は [agentstack-mail-update.md](https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md)。この文書は、なぜその形にしたかと、まだ決めていないこと（既定にするか）を残すためのものです。
 
 ## 起点（2026-09-30 時点）
 
@@ -48,7 +48,7 @@ database は自動では戻しません。切り替え後に書かれた message
 
 ## 決定（2026-10-02）: 3 値を入れ、既定は keep のまま
 
-`--keep-mail`（既定）、`--update-mail`（厳格）、`AGENTSTACK_MAIL_UPDATE=auto`（opt-in）の 3 値にし、結果を最後の `mail-result:` 行と `install.sh --print-mail-plan` の `mail-plan:` 行で機械が読めるようにしました（[agentstack-mail-update.md](agentstack-mail-update.md#--update-mail-による差し替え)）。setup.sh・update.sh はこれを読みます。
+`--keep-mail`（既定）、`--update-mail`（厳格）、`AGENTSTACK_MAIL_UPDATE=auto`（opt-in）の 3 値にし、結果を最後の `mail-result:` 行と `install.sh --print-mail-plan` の `mail-plan:` 行で機械が読めるようにしました（[agentstack-mail-update.md](https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md#--update-mail-による差し替え)）。setup.sh・update.sh はこれを読みます。
 
 `auto` は、`agentstack-mailctl` 管理の配置で、検証が通り、止まる時間の見込み（検証で candidate が snapshot に応答するまでの秒数 + 1.5 秒）が `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET`（既定 8 秒）以内のときだけ差し替え、だめなら今の build を残して exit 0 で終わります。止まる時間の実測（2026-10-02、一時 HOME・別 port）: 停止は 1 秒未満、空の DB での起動は 1〜2 秒。stdio proxy（子）と top level の Codex は次の呼び出しで戻り（Codex は 71 秒でも）、top level の Claude Code（HTTP 直結）は 15 秒までなら自動で戻り、18 秒以上では `/mcp` から reconnect が要りました。
 

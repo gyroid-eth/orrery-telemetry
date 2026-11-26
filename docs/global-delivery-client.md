@@ -3,7 +3,7 @@
 [English](global-delivery-client.en.md)
 
 既定は旧 mode のまま、global の `activation_enabled` は false です。この手順は専用の一時 HOME と、一時 server の完成済み candidate を使います。実サービスへの切替と released 形式の import は後続です。
-Claude / Codex の固定 provider HOME は、起動前に `agentstack-runtime-client instruction-configure operator claude` / `codex` で指示 block を準備します。通常 launch は読むだけで、不足・古い版は `INSTRUCTION_PROVIDER_CONFIG_REQUIRED`。詳細は [指示の移行](instruction-migration.md#custom-provider-home) を参照してください。
+Claude / Codex の固定 provider HOME は、起動前に `agentstack-runtime-client instruction-configure operator claude` / `codex` で指示 block を準備します。通常 launch は読むだけで、不足・古い版は `INSTRUCTION_PROVIDER_CONFIG_REQUIRED`。詳細は [指示の移行](https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md#custom-provider-home) を参照してください。
 
 
 ## 正本と固定配置
@@ -169,7 +169,7 @@ App の `AGENTSTACK_CODEX_APP_COLD_WAKE`、`AGENTSTACK_CODEX_BINARY`、`AGENTSTA
 
 [English](global-delivery-client.en.md#operator-ui-access)
 
-既定の導入・旧 dashboard は変わりません。API 世代15の global backend は、完成した S2c candidate を私有管理 socket 経由で読みます。dashboard は Mail の SQLite を開きません。公開 Mail tool の追加はありません。API 16 では `global_dashboard_ui=1`・`instruction_migration=1` として [global dashboard](dashboard.md#global-mail-view) を有効にします。cockpit の接続は後続です。API の世代だけで画面の対応を推測しないでください。
+既定の導入・旧 dashboard は変わりません。API 世代15の global backend は、完成した S2c candidate を私有管理 socket 経由で読みます。dashboard は Mail の SQLite を開きません。公開 Mail tool の追加はありません。API 16 では `global_dashboard_ui=1`・`instruction_migration=1` として [global dashboard](https://github.com/gyroid-eth/orrery/blob/master/docs/dashboard.md#global-mail-view) を有効にします。cockpit の接続は後続です。API の世代だけで画面の対応を推測しないでください。
 
 専用の一時 HOME を使い、`AGENTSTACK_RUNTIME_MODE=global`、`AGENTSTACK_GLOBAL_SERVER_CONFIG`（完成した candidate の `server-config.json`）、`AGENTSTACK_MCP_URL`（同じ隔離 Mail の HTTP endpoint）、`AGENTSTACK_HOME`（同じ isolation root の `agentstack`）、`AGENTSTACK_PORT`（専用の空き port）を明示します。設定が壊れたときに旧 DB へ戻ることはありません。実サービスの切替は別の手順です。
 
@@ -217,7 +217,7 @@ MAX・keyset・limit・返却 revision は1つの read transaction に置き、f
 
 API 17 では登録の明示再送で status の digest を照合できます。browser の Lock は queue 済みの引継ぎと進行中の body を失効させ、storage 拒否時は page memory だけで動き reload 後に再 Unlock が必要です。
 
-API 18 の `global_runtime_observation=1`・`operator_session=1` と非秘密の `agentstack-http-operator probe` は [稼働状態と能力の確認](dashboard.md#global-runtime-proof)を参照してください。cockpit の実装と PR7 の切替は別の関門です。
+API 18 の `global_runtime_observation=1`・`operator_session=1` と非秘密の `agentstack-http-operator probe` は [稼働状態と能力の確認](https://github.com/gyroid-eth/orrery/blob/master/docs/dashboard.md#global-runtime-proof)を参照してください。cockpit の実装と PR7 の切替は別の関門です。
 
 ## mode の選択と context のない service
 

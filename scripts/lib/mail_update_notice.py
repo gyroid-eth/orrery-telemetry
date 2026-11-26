@@ -154,7 +154,7 @@ def stale(args: argparse.Namespace) -> list[str]:
                              " whether this checkout's build has them cannot be told here.")
             lines += lacks("Not working")
             lines.append("  Update ORRERY Mail from an orrery-telemetry checkout at least as new as the running"
-                         " build (docs/agentstack-mail-update.md).")
+                         " build (https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md).")
             lines += _risk()
         return lines
     lines = [f"ORRERY Mail is out of date{f' ({builds})' if builds else ''}."]

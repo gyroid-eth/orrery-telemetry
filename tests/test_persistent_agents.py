@@ -598,7 +598,7 @@ def test_claude_invalid_plugin_cache_environment_is_not_echoed(tmp_path: Path):
     assert error == {
         "ok": False,
         "reason": "claude-plugin-inventory-unreadable",
-        "docs": "docs/persistent-agents.md",
+        "docs": "https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md",
     }
     assert "SECRET-PLUGIN-CACHE-CANARY" not in result.stderr
     assert not marker.exists()
@@ -1734,7 +1734,7 @@ def test_profile_refuses_missing_local_credential_before_exec(tmp_path: Path):
     )
     assert result.returncode == 2
     assert json.loads(result.stderr) == {
-        "docs": "docs/persistent-agents.md",
+        "docs": "https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md",
         "ok": False,
         "reason": "local-credential-unavailable",
     }

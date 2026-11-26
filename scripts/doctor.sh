@@ -734,7 +734,7 @@ PYPLUGIN
       ;;
     absent)
       echo "warn: Codex apply_patch reservation guard is not installed; edits may be unguarded. Install the optional plugin and review /hooks."
-      echo "note: Codex history binding plugin is not installed in $codex_home; Codex CLI history requires this optional plugin; see docs/codex-app.md for setup and /hooks approval. Claude-only use is unaffected."
+      echo "note: Codex history binding plugin is not installed in $codex_home; Codex CLI history requires this optional plugin; see https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md for setup and /hooks approval. Claude-only use is unaffected."
       ;;
     *)
       echo "warn: Codex apply_patch reservation guard status is unknown; inspect the plugin and /hooks before relying on guarded edits."

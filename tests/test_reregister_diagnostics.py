@@ -338,7 +338,7 @@ def test_missing_owner_credential_fails_locally_without_transport(tmp_path: path
     assert completed.stdout == ""
     assert completed.stderr == (
         "agentstack-reregister: stage=local-token reason=credential-unavailable "
-        "docs=docs/persistent-agents.md#credential-unavailable operator_action=required\n"
+        "docs=https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#credential-unavailable operator_action=required\n"
     )
     assert calls == []
     _assert_no_secrets(completed)

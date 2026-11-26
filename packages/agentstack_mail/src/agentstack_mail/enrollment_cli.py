@@ -33,7 +33,8 @@ def _parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Workflow: inspect -> claim (server-null) or recover (server-token/local-missing) "
-            "-> verify the receipt -> start the persistent profile. See docs/persistent-agents.md."
+            "-> verify the receipt -> start the persistent profile. "
+            "See https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md."
         ),
     )
     subparsers = parser.add_subparsers(dest="operation", required=True)

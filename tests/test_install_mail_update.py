@@ -867,7 +867,7 @@ def test_auto_switches_to_a_newer_build(tmp_path):
             "result": "switched", "mode": "auto", "from": "fixture-old", "to": "fixture-new",
             "running": "fixture-new", "reason": "newer_build"}
         # This node checks switching and reporting, not the former <10s smoke
-        # performance condition. docs/agentstack-mail-update.md defines auto's
+        # performance condition. https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md defines auto's
         # budget as an estimate; mail_update_notice._risk guarantees no short
         # outage limit. The observed 13.3s smoke failure remains a performance
         # failure, not evidence that a 10s target has been met.

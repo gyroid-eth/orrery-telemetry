@@ -527,7 +527,7 @@ if command -v agy >/dev/null 2>&1; then
 else
   echo "$PROG: note: agy is not installed/on PATH; payload installation is still valid"
 fi
-echo "$PROG: usage polling is opt-in; see docs/antigravity.md for the enable marker."
+echo "$PROG: usage polling is opt-in; see https://github.com/gyroid-eth/orrery/blob/master/docs/antigravity.md for the enable marker."
 
 if [[ "$DRY_RUN" == true ]]; then
   echo "$PROG: Gemini provider payload dry-run complete"
