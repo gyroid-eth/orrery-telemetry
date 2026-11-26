@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/ge
 | --- | --- |
 | 手元のagentの働きを見る | 準備済みのagentを起動し、DECK / NETWORKを開く |
 | Claude CodeやCodexで始める | 共通部分を導入し、使うCLIにログインして[最初のagentを起動する](docs/getting-started.md#3-最初の-agent-を起動しdashboard-で見る) |
-| Gemini で始める | 共通部分を導入し、Antigravity CLI のサインインから NEW AGENT での起動まで進む。[Gemini の導入ガイド](docs/antigravity.md) |
+| Gemini で始める | 共通の `install.sh` で連携ファイルを入れ、Antigravity CLI を導入してサインインし、NEW AGENT から起動。[Gemini の導入ガイド](docs/antigravity.md) |
 | DeepSeekやLocal LLMで始める | 共通部分を導入し、[APIの初期設定ガイド](docs/native-setup.md)でdsh/Hermesの追加・キーの保存・接続設定・画面からの起動へ進む。Claude/Codexのログインは不要 |
 | agent 同士で仕事を分担する | [delegate と Mail の通し確認](docs/getting-started.md#5-しりとりで通しの確認をする)へ進む |
 
@@ -49,7 +49,7 @@ top-level / delegated child の起動は、選択した作業フォルダ（Git 
 `--project-key`は、agentに作業させるfolderの絶対パスです（このrepositoryではありません）。変更内容を確認・承認して導入し、`~/.agentstack/bin/agentstack-doctor`と`~/.agentstack/bin/agentstack-selftest`で共通部分を確かめます。その後、使う系統に合わせて準備します。
 
 - **Claude Code / Codex**: 同じOS環境に使うCLIを入れてログインし、`~/.agentstack/bin/agent-start <project folder>`または`~/.agentstack/bin/agent-start-codex <project folder>`で起動します。
-- **Gemini（Antigravity）**。Antigravity CLI（`agy`）を入れてサインインします。Telemetry の checkout で `scripts/install-gemini-provider.sh` を実行し、Dashboard を再起動します。NEW AGENT で **Antigravity** と model を選びます。対応する macOS 環境では親なしで起動でき、Linux／WSL では親を選んで委任起動します。[Gemini の導入ガイド](docs/antigravity.md)
+- **Gemini（Antigravity）**。上の `install.sh` に連携ファイルが含まれます。Antigravity CLI（`agy`）を入れてサインインし、NEW AGENT で **Antigravity** と model を選びます。対応する macOS 環境では親なしで起動でき、Linux／WSL では親を選んで委任起動します。[Gemini の導入ガイド](docs/antigravity.md)
 - **DeepSeek / Local LLM**: [APIの初期設定ガイド](docs/native-setup.md)でdshまたはHermes、キー、接続設定を準備し、`http://127.0.0.1:8770/`のNEW AGENTから選んで起動します。上のinstallだけでは、このAPI設定は済みません。
 
 起動した agent が DECK に現れることを確認します。準備・起動・Mail 確認の流れは[単独の導入手順](docs/getting-started.md#telemetry-単独の導入と確認)を参照してください。

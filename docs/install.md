@@ -2,6 +2,8 @@
 
 > English version: [install.en.md](install.en.md)
 
+通常の `scripts/install.sh` は Gemini の連携ファイルも導入・更新します。Gemini を使う場合は利用者が Antigravity CLI を導入し、サインインします。[Gemini の導入ガイド](antigravity.md)
+
 ## dsh / Hermes の任意導入
 
 **これまでClaude Code/Codexだけを使っていた方へ：** [DeepSeek・Localを追加する初期設定ガイド](native-setup.md)から始めてください。通常の更新だけでは、アプリの追加やAPIキーの登録は完了しません。以下は詳しい設定を調べるための参照です。

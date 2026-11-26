@@ -2,6 +2,8 @@
 
 > 日本語版: [install.md](install.md)
 
+The standard `scripts/install.sh` also installs and updates the Gemini integration files. To use Gemini, install and sign in to Antigravity CLI yourself. [Gemini setup guide](antigravity.en.md)
+
 ## Optional dsh / Hermes installation
 
 **Already using Claude Code or Codex?** Start with [Add DeepSeek or Local models](native-setup.en.md). An ordinary update does not install a new harness or register an API key for you. The sections below are the detailed configuration reference.

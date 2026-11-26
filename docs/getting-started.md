@@ -19,7 +19,7 @@
 | 使う系統 | 共通導入後の準備 |
 | --- | --- |
 | Claude Code / Codex | 使うCLIを入れてログインし、下の[最初のagentを起動する手順](#3-最初の-agent-を起動しdashboard-で見る)へ |
-| Gemini（Antigravity） | Antigravity CLI の導入とサインインを済ませ、NEW AGENT から起動。[Gemini の導入ガイド](antigravity.md) |
+| Gemini（Antigravity） | 共通導入に連携ファイルが含まれます。Antigravity CLI を導入してサインインし、NEW AGENT から起動します。[Gemini の導入ガイド](antigravity.md) |
 | DeepSeek / Local LLM | [APIの初期設定ガイド](native-setup.md)でdsh/Hermes・キー・接続設定を準備し、NEW AGENTから起動。Claude/Codexのログインは不要 |
 
 準備済みのagentを観測するときはDECK / NETWORKを開きます。agent同士を連携させるなら、[Mailの通し確認](#5-しりとりで通しの確認をする)へ進みます。APIの[対応組合せと制限](managed-catalog.md)も確認してください。
@@ -84,7 +84,7 @@ agentstack-selftest
 
 ### 3. 最初の agent を起動し、dashboard で見る
 
-**Gemini の場合**は [Gemini の導入ガイド](antigravity.md)で Antigravity CLI のサインインと Telemetry の設定を済ませます。NEW AGENT で **Antigravity** と model を選んで起動し、DECK にカードが現れることを確認します。
+**Gemini の場合**は、上の `install.sh` で連携ファイルが入ります。[Gemini の導入ガイド](antigravity.md)に沿って Antigravity CLI を導入し、サインインします。NEW AGENT で **Antigravity** と model を選んで起動し、DECK にカードが現れることを確認します。
 
 **DeepSeek / Local LLMの場合**: [APIの初期設定ガイド](native-setup.md)を終え、`http://127.0.0.1:8770/`のNEW AGENTで準備したModelとHarnessを選んで起動します。DECKに科学者名付きのカードが現れたら、ガイドの短い会話確認と下の[Mail確認](#5-しりとりで通しの確認をする)へ進みます。
 
