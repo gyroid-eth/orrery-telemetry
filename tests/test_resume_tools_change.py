@@ -142,6 +142,33 @@ def test_permission_computer_view_preserves_browser_settings(stopped, monkeypatc
                                "screen": {"server": "orrery-screen", "access": "read"}}
 
 
+@pytest.mark.parametrize("mode", ["off", "temporary", "personal"])
+def test_permission_resumes_same_conversation_with_explicit_browser_mode(stopped, monkeypatch, mode):
+    _, record, provider, _ = stopped
+    monkeypatch.setattr(child_tools.shutil, "which", lambda name: "/usr/bin/npx" if name == "npx" else None)
+    screen = {"server": "orrery-screen", "access": "read"}
+    old = {"screen": screen, "mcp": ["reader"], "browser_mode": "off" if mode == "personal" else "temporary"}
+    save_selection(record, provider, "mail-only", old)
+    calls = []
+
+    def resume(name, **options):
+        calls.append((name, options))
+        return {"ok": True, "action": "resumed"}
+
+    monkeypatch.setattr(server, "do_resume", resume)
+    permission = {"history_session_id": SID, "browser_mode": mode}
+    result = server.do_jump(NAME, permission=permission, open_terminal=False)
+    assert result["ok"] and result["tools_changed"], result
+    assert result["base"] == "mail-only"
+    assert result["tools"] == {**old, "browser_mode": mode}
+    assert calls == [(NAME, {"open_terminal": False, "expected_history_session_id": SID})]
+    saved = json.loads(record.read_text())
+    assert saved["tools"] == result["tools"]
+    if provider == "claude":
+        assert saved["claude_chrome"] is (mode == "personal")
+        assert saved.get("browser_disabled", False) is (mode == "off")
+
+
 def test_claude_explicit_browser_off_survives_a_computer_change(stopped, monkeypatch):
     _, record, provider, _ = stopped
     if provider != "claude":
@@ -209,11 +236,18 @@ def test_permission_rejects_whole_selection_and_invalid_patch_values(monkeypatch
     browser = {"history_session_id": SID, "browser_use": True}
     for options in ({"permission": browser, "base": "mail-only"}, {"permission": browser, "tools": {}},
                     {"permission": {**browser, "computer_use": "off"}},
+                    {"permission": {**browser, "browser_mode": "temporary"}},
+                    {"permission": {"history_session_id": "../fixture", "browser_mode": "personal"}},
+                    {"permission": {"history_session_id": SID, "browser_mode": "on"}},
                     {"permission": {"history_session_id": SID, "browser_use": 1}},
                     {"permission": {"computer_use": "view"}},
                     {"check_only": True},
                     {"permission": browser, "check_only": "true"}):
         assert not server.do_jump(NAME, **options)["ok"]
+
+
+def test_permission_request_accepts_bound_native_history_id():
+    assert server._valid_permission_request({"history_session_id": "native-session.2", "browser_mode": "temporary"})
 
 
 @pytest.mark.parametrize("selection", [{}, {"mcp": ["reader"]}])
@@ -692,7 +726,8 @@ def test_permission_resume_preserves_generated_standalone(stopped, monkeypatch):
     assert result["ok"] and result["tools_changed"], result
 
 
-def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch):
+@pytest.mark.parametrize("change", [{"browser_use": True}, {"browser_mode": "temporary"}])
+def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch, change):
     runtime, record, provider, state = stopped
     mark_generated_standalone(stopped)
     configure_fixture_browser(provider)
@@ -719,7 +754,7 @@ def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch):
     monkeypatch.setattr(server, "_tmux_run", lambda args, **kw:
         calls.append(args) or subprocess.CompletedProcess(args, 0, provider, ""))
     monkeypatch.setattr(server.time, "sleep", lambda seconds: None)
-    permission = {"history_session_id": SID, "browser_use": True}
+    permission = {"history_session_id": SID, **change}
     before = (state_file.read_bytes(), record.read_bytes())
     assert server.do_jump(NAME, check_only=True, permission=permission) == {"ok": True, "action": "validated"}
     assert (state_file.read_bytes(), record.read_bytes()) == before

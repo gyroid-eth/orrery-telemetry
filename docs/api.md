@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":53}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":54}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -712,12 +712,16 @@ API 43 から、停止した Claude の `resume_mode: conversation_only` でも�
 {"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
 ```
 
+API 54 の legacy roster は、権限を表示する行に `permission_controls` を返します。`computer_use` と `browser_use` のそれぞれに、現在の `value`（不明時は null）、根拠の `source` と `observation_reason`、操作可否の `can_change` と `change_reason`、反映方法の `action`（`restart`・`resume`・null）があります。サーバーは操作時に対象と起動設定を改めて検証します。
+
+`browser_use.mode` は `off`、`temporary`（Temporary Chrome）、`personal`（My Chrome）、または方式が不明な場合の null です。`browser_use.options` は起動時に選べる方式を返し、操作できない行では空になります。
+
 API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。直接起動、常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。直接起動などで設定の記録がない場合の理由は `No saved launch settings; use Resume` です。
 
-稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と、`computer_use`（`off`、`view`、`control`）または `browser_use`（真偽値）の片方だけを指定します。この確認に成功すると `{"ok":true,"action":"validated"}` を返し、設定と Mail 登録はそのままです。
+稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と変更欄を一つ指定します。`computer_use` は `off`、`view`、`control`、API 54 の `browser_mode` は `off`、`temporary`、`personal` です。従来のクライアントは引き続き真偽値の `browser_use` を指定できます。この確認に成功すると、起動設定や Mail 登録を変更せずに `{"ok":true,"action":"validated"}` を返します。
 
 ```json
-{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_use":true}}
+{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_mode":"temporary"}}
 ```
 
 次に `POST /api/exit` へ同じ `session` と `history_session_id` を渡します。両方のリクエストで、対象の会話、Mail 登録、保存された起動経路を照合します。Cockpit は停止を待ち、同じ `/api/jump` を `check_only` を省いて送ります。サーバーは会話・登録を再検証して、対象の tmux セッションと稼働中の lease がないことを確認します。`open:false` は端末ウィンドウを開かずに再開します。

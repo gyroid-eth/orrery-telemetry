@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 53
+API_GENERATION = 54
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -2185,7 +2185,8 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
     candidate_parent = agent_card.parent_name(session.get("parent_agent"), name) if kind else None
     parent = _card_session_env(name, session, "PARENT_AGENT", candidate_parent) or None
     parent_state = "child" if parent else "top" if row.get("parentless") is True else None
-    model = effort = computer = browser = None
+    model = effort = computer = browser = spec = None
+    managed_screen = False
     permission_reason = (_PERMISSION_SETTINGS_MISSING if kind in {"claude", "codex"}
                          else _PERMISSION_UNSUPPORTED)
     if kind == "codex":
@@ -2199,9 +2200,8 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
         children = Path(RUNTIME_DIR) / "child-agents"
         state = _card_child_state(children, name, registration)
         state_parent = agent_card.parent_name(state.get("parent_agent"), name)
-        spec = None
         servers = {}
-        chrome = isolated = managed_screen = False
+        chrome = isolated = False
         if kind == "claude":
             sid = row.get("history_session_id")
             model, effort, last_cwd = agent_card.claude_turn(transcript, sid)
@@ -2303,6 +2303,18 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
             computer = browser = None
 
     observed = agent_card.antigravity_tool_permissions(None) if kind == "antigravity" else {}
+    if spec is not None:
+        selected = spec["tools"]
+        if computer is not None:
+            observed["computer_use_source"] = "relay" if managed_screen and row.get("running") else "launch"
+        if browser is not None:
+            observed["browser_use_source"] = "launch"
+        if "browser_mode" in selected:
+            observed["browser_mode"] = selected["browser_mode"]
+        elif kind == "claude" and chrome:
+            observed["browser_mode"] = "personal"
+        if selected.get("chrome_extension"):
+            observed["browser_change_reason"] = "Disable the separately configured Chrome extension before changing Browser use"
     if (permission_reason == _PERMISSION_SETTINGS_MISSING and computer is None and browser is None
             and row.get("running") is True and session.get("mail_disabled") != "1"):
         observed = _card_process_permissions(session, process_tree, program, kind)
@@ -2500,6 +2512,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
     if any(rt.get("codex_card_model") and not codex_models.is_model_id(rt["codex_card_model"])
            for rt in runtime_by_name.values()):
         codex_catalog = (*codex_models.DEFAULT_MODELS, *codex_models.discover_models())
+    permission_browser_modes = None
     for row in rows:
         name = row["name"]
         row['annot'] = annotations.get(name)
@@ -2540,6 +2553,16 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 "ready", "verification_required", "not_required"}:
             row.update(permission_resume_supported=False,
                        permission_resume_reason=_resume_unavailable(row["resume_capability"])["error"])
+        if row["permission_resume_supported"] and permission_browser_modes is None:
+            try:
+                permission_browser_modes = _spawn_browser_modes()
+            except (OSError, RuntimeError, ValueError):
+                permission_browser_modes = {}
+        browser_kind = "claude-code" if row.get("harness_kind") == "claude" else row.get("harness_kind")
+        browser_options = (permission_browser_modes or {}).get(browser_kind, ("off",))
+        controls = agent_card.permission_controls(row, browser_options)
+        if controls is not None:
+            row["permission_controls"] = controls
         signature = (
             row.get("act_state"),
             row.get("ctx_used"),
@@ -8085,10 +8108,21 @@ def term_capture(session: str, lines: int) -> dict:
 
 
 _TOOLS_UNSET = object()
-_PERMISSION_HISTORY_ID = re.compile(r"[0-9A-Fa-f-]{8,128}")
+_PERMISSION_HISTORY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,255}")
 _PERMISSION_SETTINGS_MISSING = "No saved launch settings; use Resume"
 _PERMISSION_UNSUPPORTED = "Requires a generated Claude Code or Codex CLI agent"
 _PERMISSION_HISTORY_UNVERIFIED = "The agent's conversation or launch could not be verified"
+
+
+def _valid_permission_request(permission):
+    """Validate one change independently of the harness that owns the session."""
+    if not isinstance(permission, dict) or len(permission) != 2:
+        return False
+    sid = permission.get("history_session_id")
+    return (isinstance(sid, str) and _PERMISSION_HISTORY_ID.fullmatch(sid) is not None
+            and (permission.get("computer_use") in ("off", "view", "control")
+                 or permission.get("browser_mode") in ("off", "temporary", "personal")
+                 or type(permission.get("browser_use")) is bool))
 
 
 def _permission_resume_material(session, sid, *, live=None):
@@ -8181,14 +8215,8 @@ def do_jump(session: str, *, open_terminal: bool | None = None,
     if permission is not _TOOLS_UNSET:
         if requested:
             return {"ok": False, "error": "permission cannot be combined with base or tools"}
-        if (not isinstance(permission, dict)
-                or not isinstance(permission.get("history_session_id"), str)
-                or not _PERMISSION_HISTORY_ID.fullmatch(permission["history_session_id"])
-                or not ((set(permission) == {"history_session_id", "computer_use"}
-                         and permission["computer_use"] in ("off", "view", "control"))
-                        or (set(permission) == {"history_session_id", "browser_use"}
-                            and type(permission["browser_use"]) is bool))):
-            return {"ok": False, "error": "permission requires a history_session_id and one valid computer_use or browser_use value"}
+        if not _valid_permission_request(permission):
+            return {"ok": False, "error": "permission requires a history_session_id and one valid computer_use, browser_mode or browser_use value"}
         requested = True
     if not requested and not os.path.lexists(os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")):
         return _do_jump(session, open_terminal=open_terminal)
@@ -8266,7 +8294,8 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
             record = pathlib.Path(policy.session_path(str(runtime / "child-agents"), session, sid))
             saved = policy.session_record(str(record.parent), session, sid)
             old = {"base": saved["base"], "tools": saved["tools"]} if saved else {"base": "default", "tools": {}}
-    if provider == "claude" and saved and saved["claude_chrome"] and "browser" not in old["tools"]:
+    if (provider == "claude" and saved and saved["claude_chrome"]
+            and not {"browser", "browser_mode"}.intersection(old["tools"])):
         old = {**old, "tools": {**old["tools"], "browser": {"device": saved["chrome_device"]}}}
     if permission is None:
         spec = selection.normalize(old["base"] if base is _TOOLS_UNSET else base,
@@ -8293,19 +8322,25 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
         spec = selection.normalize(old["base"], selection.change_permission(old["tools"], permission, servers))
         selection.check_provider(spec, provider)
         if provider == "claude":
-            if "browser_use" in permission:
+            if "browser_mode" in permission:
+                keep_browser_off = permission["browser_mode"] == "off"
+            elif "browser_use" in permission:
                 keep_browser_off = not permission["browser_use"]
     if provider == "codex":
         selection.codex_apply(config, spec)
         candidate = {"version": selection.CODEX_RECORD_VERSION, **spec}
         profile = "orrery-only" if spec["base"] == "mail-only" else "inherit"
     else:
-        chrome = "browser" in spec["tools"]
+        keep_personal_device = (saved and spec["tools"].get("browser_mode") == "personal"
+                                and (permission is not None and "computer_use" in permission
+                                     or permission is None and tools is _TOOLS_UNSET))
+        saved_device = saved["chrome_device"] if keep_personal_device else ""
+        chrome, device = selection.merge_chrome(spec, False, saved_device)
         selection.claude_plan(spec, cwd=cwd, chrome=chrome, claude_json=claude_json)
         candidate = {"version": 4, "agent_name": session, "session_id": sid,
                      "launch_id": secrets.token_hex(16), "standalone": bool(saved and saved["standalone"]),
                      "claude_chrome": chrome,
-                     "chrome_device": spec["tools"].get("browser", {}).get("device", ""), **spec}
+                     "chrome_device": device, **spec}
         if keep_browser_off:
             candidate["browser_disabled"] = True
         profile = None

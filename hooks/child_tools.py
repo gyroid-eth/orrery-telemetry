@@ -1078,6 +1078,13 @@ def change_permission(tools: dict, permission: dict, definitions: dict | None) -
             if direct not in mcp:
                 mcp.append(direct)
             removed.discard(direct)
+    elif "browser_mode" in permission:
+        if tools.get("chrome_extension"):
+            raise ToolsError("Disable the separately configured Chrome extension before changing Browser use")
+        changed.pop("browser", None)
+        changed.pop("browser_off", None)
+        changed["browser_mode"] = permission["browser_mode"]
+        removed = {name for name in mcp if _codex_chrome_server(name, definition(name))}
     elif permission["browser_use"]:
         changed.pop("browser_off", None)
         changed.pop("browser_mode", None)

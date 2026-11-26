@@ -128,6 +128,60 @@ def test_card_permissions_distinguish_selection_and_configuration(without_cua_ov
     assert agent_card.tool_permissions(chosen, {"cua-driver": cua}) == ("view", True)
 
 
+def test_permission_controls_keep_state_without_offering_a_restart():
+    row = {
+        "harness_kind": "dsh", "running": True, "parent_state": "top",
+        "computer_use": "control", "computer_use_source": "launch",
+        "browser_use": None, "browser_use_reason": "Browser was not recorded",
+        "permission_resume_supported": False, "permission_resume_reason": "Unavailable for this launch",
+    }
+    assert agent_card.permission_controls(row) == {
+        "computer_use": {"value": "control", "source": "launch", "observation_reason": None,
+                         "can_change": False, "change_reason": "Unavailable for this launch", "action": None},
+        "browser_use": {"value": None, "source": None, "observation_reason": "Browser was not recorded",
+                        "can_change": False, "change_reason": "Unavailable for this launch", "action": None,
+                        "mode": None, "options": []},
+    }
+
+
+@pytest.mark.parametrize(("running", "category", "resume", "action"), [
+    (True, "agent", "not_required", "restart"),
+    (False, "gone", "ready", "resume"),
+    (False, "retired", "verification_required", "resume"),
+    (False, "finished", "ready", None),
+    (False, "gone", "no_history", None),
+])
+def test_permission_controls_use_current_state_and_bound_history(running, category, resume, action):
+    row = {
+        "harness_kind": "codex", "running": running, "category": category,
+        "parent_state": "top", "history_binding": "bound", "history_session_id": "session",
+        "permission_resume_supported": True, "resume_capability": resume, "browser_use": False,
+    }
+    controls = agent_card.permission_controls(row, ("off", "temporary", "personal"))
+    assert controls["browser_use"]["value"] is False
+    assert controls["browser_use"]["mode"] == "off"
+    assert controls["browser_use"]["options"] == (["off", "temporary", "personal"] if action else [])
+    for setting in controls.values():
+        assert setting["action"] == action
+        assert setting["can_change"] is bool(action)
+        assert bool(setting["change_reason"]) is not bool(action)
+    row["history_binding"] = "pending"
+    assert agent_card.permission_controls(row)["browser_use"]["change_reason"] == "No verified conversation"
+
+
+def test_separately_configured_browser_leaves_computer_permission_actionable():
+    row = {
+        "harness_kind": "codex", "running": True, "category": "agent", "parent_state": "child",
+        "history_binding": "bound", "history_session_id": "session", "permission_resume_supported": True,
+        "browser_use": True, "browser_change_reason": "Disable the separately configured Chrome extension",
+    }
+    controls = agent_card.permission_controls(row, ("off", "personal"))
+    assert controls["computer_use"]["action"] == "restart"
+    assert not controls["browser_use"]["can_change"]
+    assert controls["browser_use"]["options"] == []
+    assert controls["browser_use"]["change_reason"] == row["browser_change_reason"]
+
+
 @pytest.mark.parametrize(("mode", "enabled"), [("off", False), ("temporary", True), ("personal", True)])
 def test_explicit_browser_mode_takes_precedence_over_inference(mode, enabled):
     spec = {"base": "default", "tools": {"browser_mode": mode}}
@@ -296,7 +350,8 @@ def test_card_uses_native_metadata_only_for_the_bound_launch(tmp_path, monkeypat
     card = server._agent_card_fields(row, {}, {"dsh_card_effort": "high"}, registration, ())
     assert card == {"cwd": str(tmp_path), "model_id": "local-model-v2", "effort": "high",
                     "harness_kind": "dsh", "ctx_window_tokens": 1000000, "computer_use": None,
-                    "browser_use": True, "parent_state": "child", "parent_agent": "Parent"}
+                    "browser_use": True, "browser_use_source": "launch",
+                    "parent_state": "child", "parent_agent": "Parent"}
     mismatched = server._agent_card_fields(dict(row, history_session_id="other"), {}, {}, registration, ())
     assert mismatched["model_id"] is mismatched["browser_use"] is mismatched["parent_agent"] is None
 

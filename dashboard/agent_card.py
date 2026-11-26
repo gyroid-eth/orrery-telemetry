@@ -151,6 +151,58 @@ def antigravity_tool_permissions(spec, computer=None, *, screen_live=False):
                    else {"browser_use_source": "launch"}))
 
 
+def permission_controls(row, browser_options=()):
+    """Pair a display value with the action available for this roster row."""
+    computer = row.get("computer_use")
+    browser = row.get("browser_use")
+    if (not row.get("harness_kind") and row.get("surface") != "codex-app"
+            and row.get("lifecycle") != "persistent" and row.get("mail_status") != "unavailable"
+            and computer is None and type(browser) is not bool):
+        return None
+
+    running = row.get("running")
+    category = row.get("category")
+    standalone = (row.get("parent_state") == "top" or row.get("parentless") is True
+                  or row.get("standalone") is True)
+    reason = row.get("permission_resume_reason") if row.get("permission_resume_supported") is not True else None
+    if row.get("permission_resume_supported") is not True or row.get("permission_source") == "process":
+        reason = reason or "Permission changes are unavailable"
+    elif (not standalone and row.get("parent_state") != "child"
+          or row.get("history_binding") != "bound" or not row.get("history_session_id")):
+        reason = "No verified conversation" if standalone else "No verified child conversation"
+    elif category == "finished":
+        reason = "Exit this agent first"
+    elif not (running is True and category == "agent"):
+        if running is not False or category not in {"gone", "retired"}:
+            reason = "Agent is not confirmed stopped"
+        elif row.get("resume_capability") not in {"ready", "verification_required"}:
+            reason = "Conversation cannot be resumed"
+    action = None if reason else "restart" if running is True else "resume"
+    controls = {
+        key: {
+            "value": value,
+            "source": row.get(f"{key}_source") or row.get("permission_source"),
+            "observation_reason": row.get(f"{key}_reason"),
+            "can_change": action is not None,
+            "change_reason": reason,
+            "action": action,
+        }
+        for key, value in (
+            ("computer_use", computer if computer in ("off", "view", "control") else None),
+            ("browser_use", browser if type(browser) is bool else None),
+        )
+    }
+    browser_control = controls["browser_use"]
+    mode = row.get("browser_mode") if browser is True else "off" if browser is False else None
+    browser_reason = row.get("browser_change_reason")
+    if action and not any(option != mode for option in browser_options):
+        browser_reason = browser_reason or "No other Browser mode is available"
+    if action and browser_reason:
+        browser_control.update(can_change=False, change_reason=browser_reason, action=None)
+    browser_control.update(mode=mode, options=list(browser_options) if browser_control["can_change"] else [])
+    return controls
+
+
 def _cua_control(server):
     # A relay can pass through the standard local command. Filters and
     # environment overrides still leave the mode unspecified.
