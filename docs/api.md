@@ -191,9 +191,9 @@ API 12の配布物では、同梱 ORRERY Mail の MCP `health_check` が `server
 
 ### Mail に直接つないでファイルを表示する
 
-loopback の ORRERY Mail に直接つないだセッションは、MCP の `tools/list` で `show_files` を確認できます。`paths` に作業フォルダー内の絶対パスを1〜8個渡します。直接接続には作業フォルダーの情報がないため、相対パスは理由付きで拒否します。応答の `files` はファイルの有無・種類・サイズを示し、`present` には確認できた通常ファイルと画像のパスが入ります。
+loopback の ORRERY Mail に直接つないだセッションは、MCP の `tools/list` で `show_files` を確認できます。`paths` に絶対パスを1〜8個渡します。相対パスは理由付きで拒否します。応答の `files` はファイルの有無・種類・サイズを示し、`present` には存在を確認できた画像のパスが入ります。画像以外の通常ファイルには `status: "unverified"` と `reason` が付きます。
 
-cockpit とスマホは記録上の呼び出しをファイルの chip にします。開くときは表示側が作業フォルダー・種類・サイズを検査します。束縛済み proxy での相対パスの扱いは [Codex App のツール契約](codex-app.md#agent-の利用手順)を参照してください。
+テキストを表示できるのは、会話の作業フォルダー内か設定済みの workspace root 内にある場合です。直接つないだ Mail はこの範囲を照合できません。cockpit とスマホは呼び出しの記録を使い、表示の条件を満たすファイルに chip を出します。開くときにもパス・種類・サイズを検査します。束縛済み proxy での相対パスの扱いは [Codex App のツール契約](codex-app.md#agent-の利用手順)を参照してください。
 
 ## GET `/api/quotas` — 任意のDeepSeek残高（API 21）
 

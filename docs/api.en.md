@@ -192,9 +192,9 @@ In API 12 distributions, bundled ORRERY Mail's MCP `health_check` returns `serve
 
 ### Show files over a direct Mail connection
 
-Sessions connected directly to loopback ORRERY Mail can discover `show_files` via MCP `tools/list`. Pass one to eight absolute paths inside the working folder as `paths`. A direct connection has no working-folder information, so the tool rejects relative paths with a reason. The response's `files` gives existence, kind, and size metadata. `present` lists the paths of the regular files and images it found.
+Sessions connected directly to loopback ORRERY Mail can discover `show_files` via MCP `tools/list`. Pass one to eight absolute paths as `paths`. The tool rejects relative paths with a reason. The response's `files` gives existence, kind, and size metadata. `present` lists the image paths it found. Other regular files get `status: "unverified"` and a `reason`.
 
-The cockpit and the phone turn the recorded call into file chips. The preview checks the working folder, file kind, and size when opened. See the [Codex App tool contract](codex-app.en.md#agent-usage) for how bound proxies handle relative paths.
+Text previews are available inside the conversation's working folder or a configured workspace root. A direct Mail connection cannot verify those roots. The cockpit and the phone use the recorded call to show chips for eligible files and check the path, kind, and size again when a preview opens. See the [Codex App tool contract](codex-app.en.md#agent-usage) for how bound proxies handle relative paths.
 
 ## GET `/api/quotas` — 任意のDeepSeek残高（API 21）
 
