@@ -206,7 +206,7 @@ def stop_supervisor(pidfile, runner, saved=None):
     Path(str(pidfile)+'.identity.json').unlink(missing_ok=True)
 
 
-def check_launchd(data, install_dir):
+def check_launchd(data, install_dir, *, running_only=False):
     """Check both the owned plist and the currently loaded job before bootout."""
     import plistlib
     import re
@@ -227,7 +227,7 @@ def check_launchd(data, install_dir):
     arguments = [line.strip() for line in match[1].splitlines()] if match else []
     if not owned_arguments(arguments, install_dir):
         raise OwnershipUnknown('loaded launchd definition differs from its receipt')
-    return True
+    return not running_only or re.search(r'^[ \t]+state = running[ \t]*$', result.stdout, re.M) is not None
 
 
 def owned_arguments(arguments, install_dir):

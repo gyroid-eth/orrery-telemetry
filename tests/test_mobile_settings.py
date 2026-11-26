@@ -22,6 +22,7 @@ import pytest
 
 from dashboard import mobile_relay as relay
 from dashboard import mobile_settings as ms
+from scripts.lib import mobile_relay_restart as refresh
 
 REPO = Path(__file__).resolve().parents[1]
 OWNER = 'owner@example.test'
@@ -36,7 +37,13 @@ with open(log, 'a') as f:
 loaded = os.path.exists(state)
 cmd = sys.argv[1]
 if cmd == 'print':
+    if loaded:
+        print('    path = ' + open(state).read())
+        print('    state = ' + os.environ.get('FAKE_LAUNCHD_JOB_STATUS', 'running'))
     sys.exit(0 if loaded else 113)
+if cmd == 'kickstart':
+    assert loaded and sys.argv[2] == '-k'
+    sys.exit(5 if os.environ.get('FAKE_LAUNCHD_FAIL_RESTART') else 0)
 if cmd == 'bootstrap':
     if os.environ.get('FAKE_LAUNCHD_FAIL_BOOTSTRAP'):
         if os.environ['FAKE_LAUNCHD_FAIL_BOOTSTRAP'] == 'loaded':
@@ -140,6 +147,7 @@ def env(tmp_path, monkeypatch):
         pass
     e = Env()
     e.home, e.state, e.port, e.data, e.tools = home, state, port, data, tools
+    e.log = log
     e.calls = lambda: [json.loads(line)[0] for line in log.read_text().splitlines()]
     return e
 
@@ -470,8 +478,59 @@ def test_command_prints_json_and_fixed_error_codes(env):
     assert json.loads(done.stdout) == {'ok': False, 'error': 'change_invalid'}
 
 
-def test_installer_places_the_command_but_starts_no_job():
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_installer_refreshes_an_existing_launchd_relay(env, monkeypatch, capsys, dry_run):
+    monkeypatch.setattr(refresh.sys, 'platform', 'darwin')
+    monkeypatch.setattr(ms, 'relay_script', lambda: ms.home() / 'dashboard/mobile_relay.py')
+    turn_on(policy_reviewed=True)
+    config = ms.settings_path().read_bytes()
+    plist = ms.plist_path().read_bytes()
+    env.log.write_text('')
+    refresh.restart(ms.home(), dry_run=dry_run)
+    target = f'{ms.domain()}/{ms.LABEL}'
+    calls = [json.loads(line) for line in env.log.read_text().splitlines()]
+    assert calls == ([] if dry_run else [['print', target], ['kickstart', '-k', target]])
+    assert ('DRY-RUN would restart' if dry_run else 'Restarted the mobile relay') in capsys.readouterr().out
+    assert ms.settings_path().read_bytes() == config
+    assert ms.plist_path().read_bytes() == plist
+
+
+@pytest.mark.parametrize('case', ['off', 'absent', 'not_running', 'other_install', 'foreign_loaded', 'restart_failed'])
+def test_refresh_only_restarts_a_running_job_owned_by_this_install(env, monkeypatch, case):
+    monkeypatch.setattr(refresh.sys, 'platform', 'darwin')
+    monkeypatch.setattr(ms, 'relay_script', lambda: ms.home() / 'dashboard/mobile_relay.py')
+    turn_on()
+    if case == 'off':
+        ms.save({**ms.load(), 'access': False})
+    elif case == 'absent':
+        env.state.unlink()
+    elif case == 'not_running':
+        monkeypatch.setenv('FAKE_LAUNCHD_JOB_STATUS', 'not running')
+    elif case == 'other_install':
+        job = plistlib.loads(ms.plist_path().read_bytes())
+        job['ProgramArguments'][1] = '/another/install/dashboard/mobile_relay.py'
+        ms.plist_path().write_bytes(plistlib.dumps(job))
+    elif case == 'foreign_loaded':
+        env.state.write_text('/another/home/Library/LaunchAgents/org.agentstack.mobile-relay.plist')
+    elif case == 'restart_failed':
+        monkeypatch.setenv('FAKE_LAUNCHD_FAIL_RESTART', '1')
+    config, plist = ms.settings_path().read_bytes(), ms.plist_path().read_bytes()
+    env.log.write_text('')
+    errors = {'foreign_loaded': 'launchd_job_conflict', 'restart_failed': 'launchd_restart_failed'}
+    if case in errors:
+        with pytest.raises(ms.SettingsError, match=errors[case]):
+            refresh.restart(ms.home(), dry_run=False)
+    else:
+        refresh.restart(ms.home(), dry_run=False)
+    assert ('kickstart' in env.calls()) == (case == 'restart_failed')
+    assert ms.settings_path().read_bytes() == config
+    assert ms.plist_path().read_bytes() == plist
+
+
+def test_installer_places_the_command_and_refreshes_after_the_dashboard():
     install = (REPO / 'scripts/install.sh').read_text()
     assert 'cp "$REPO_ROOT/bin/agentstack-mobile" "$BIN_DIR/agentstack-mobile"' in install
+    main = install.split('\nmain() {', 1)[1]
+    assert main.index('start_service "$service_kind"') < main.index('\n  restart_mobile_relay\n')
     assert 'org.agentstack.mobile-relay' not in install
     assert 'org.agentstack.mobile-relay' in (REPO / 'scripts/uninstall.sh').read_text()
