@@ -500,6 +500,8 @@ def test_show_files_checks_paths_locally_and_contacts_nothing(tmp_path, monkeypa
     (work / "docs/report.md").write_text("# secret body\n")
     (work / "figure.PNG").write_bytes(b"\x89PNG")
     (work / "link.md").symlink_to(work / "docs/report.md")
+    outside = tmp_path / "elsewhere.md"
+    outside.write_text("# external report")
     # The Bridge snapshot knows the agent's working folder; the proxy's cwd does not count.
     proxy.snapshots.upsert(runtime_record(
         build_binding(session_id="session-example", agent_id=None, agent_name="Calm-Noether",
@@ -509,9 +511,9 @@ def test_show_files_checks_paths_locally_and_contacts_nothing(tmp_path, monkeypa
     proxy.bootstrap("session-example")
 
     result = _dispatch(proxy, "show_files", {"paths": [
-        "docs/report.md", str(work / "figure.PNG"), "missing.md", "docs", "link.md", "../elsewhere.md"]})
+        "docs/report.md", str(work / "figure.PNG"), "missing.md", "docs", "link.md", "../elsewhere.md", str(outside)]})
 
-    assert result["present"] == ["docs/report.md", str(work / "figure.PNG")]
+    assert result["present"] == ["docs/report.md", str(work / "figure.PNG"), str(outside)]
     by_path = {item["path"]: item for item in result["files"]}
     assert by_path["docs/report.md"] == {"path": "docs/report.md", "exists": True, "kind": "file", "bytes": 14}
     assert by_path[str(work / "figure.PNG")]["kind"] == "image"
@@ -554,7 +556,7 @@ def test_show_files_description_says_when_to_use_it():
     tool = next(tool for tool in TOOL_DEFINITIONS if tool["name"] == "show_files")
     text = tool["description"]
     for phrase in ("cockpit", "History", "preview", "created or changed", "image",
-                   "right before your final message", "working folder", "relative or absolute",
+                   "right before your final message", "outside your working folder", "absolute path",
                    "Nothing is sent or written"):
         assert phrase in text, phrase
     assert tool["inputSchema"]["required"] == ["paths"]

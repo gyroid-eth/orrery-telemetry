@@ -83,7 +83,7 @@ ERRORS = frozenset({
     'history_changed', 'history_unavailable', 'dashboard_unavailable', 'claude_next_phase',
     'record_too_large', 'invalid_cursor', 'invalid_agent', 'history_slow',
     'preview_unavailable', 'preview_too_large', 'preview_type_denied', 'preview_path_denied',
-    'preview_changed',
+    'preview_changed', 'preview_permission_denied',
 }) | DIFF_ERRORS | DETAIL_ERRORS
 
 

@@ -2,17 +2,16 @@
 
 The recorded call is what the cockpit turns into preview chips, under its own
 checks (the working folder, the kind and the size). The proxy only gives the
-agent a hint about each path: it sends nothing, writes nothing and never
-opens, reads or follows a path. Keep the description and `result` identical to
+agent metadata and a readability check without reading or sending the file.
+Keep the description and bound-proxy result identical to
 integrations/codex_app/.../mcp_server.py (tests compare them).
 
 `base` is the agent's working folder, and only when the binding knows it (for
 example a Codex App snapshot). The proxy's own cwd is never used: a plugin
 proxy runs in its cache folder, where every relative path would look missing.
 Without a base, relative paths are not checked here (`checked: false`); with
-one, a path outside it is reported as such and not even lstat'ed.
-The direct Mail server requires absolute paths and reports non-image regular
-files as unverified when it has no session working folder.
+one, relative paths must stay inside the working folder. Absolute paths can
+refer to files elsewhere. The direct Mail server requires absolute paths.
 """
 from __future__ import annotations
 
@@ -25,17 +24,15 @@ DESCRIPTION = (
     "a chip in the conversation's History that opens a preview (Markdown is "
     "drawn, images are shown). Call it when you created or changed a file or "
     "image the person should look at (a report, a figure, a screenshot, a log), "
-    "usually right before your final message. Use paths inside your working "
-    "folder, relative or absolute. Nothing is sent or written, and the file is "
+    "usually right before your final message. Use an absolute path for files "
+    "outside your working folder. Nothing is sent or written, and the file is "
     "not read into your context."
 )
 DIRECT_DESCRIPTION = (
     "Show files or images as preview chips in the ORRERY cockpit's History. "
-    "Pass 1 to 8 absolute paths. The cockpit previews text files only inside "
-    "the conversation's working folder or a configured workspace root. "
-    "Direct Mail cannot verify that boundary, so it reports non-image regular "
-    "files as unverified and omits them from present. The cockpit applies its "
-    "preview checks to recorded images. "
+    "Pass 1 to 8 absolute paths. Paths can be outside your working folder. "
+    "Only readable regular files are listed in present. "
+    "The cockpit checks supported file types, sizes and symbolic links. "
     "This checks file metadata without reading or sending the contents."
 )
 INPUT_SCHEMA = {
@@ -46,18 +43,11 @@ INPUT_SCHEMA = {
     'additionalProperties': False,
 }
 IMAGE_SUFFIXES = frozenset({'.png', '.jpg', '.jpeg', '.gif', '.webp'})
-PREVIEW_NOTE = ("Each path is shown as a chip in the cockpit's History; the cockpit checks it against your "
-                "working folder, kind and size when it is opened.")
+PREVIEW_NOTE = ("The cockpit uses the recorded call to show file chips. "
+                "Previews check the file type, size, path and read permissions.")
 NOTE = (PREVIEW_NOTE + " checked:false means this connection does "
         "not know your working folder, so a relative path was not checked here; an absolute path is.")
-DIRECT_FILE_REASON = (
-    "The cockpit previews text files only inside the conversation's working folder "
-    "or a configured workspace root. This direct Mail connection cannot verify those roots."
-)
-DIRECT_NOTE = (
-    "Unverified paths are omitted from present. The cockpit uses the recorded call "
-    "and checks each preview against its file policy."
-)
+READ_DENIED = "OS permissions do not allow reading this path."
 
 
 def _inside(path, root):
@@ -85,20 +75,23 @@ def result(values, base=None, *, absolute_only=False):
         else:
             files.append({'path': value, 'checked': False})
             continue
-        if roots and not any(_inside(target, item) for item in roots):
+        if not os.path.isabs(value) and not any(_inside(target, item) for item in roots):
             files.append({'path': value, 'outside_working_folder': True})
             continue
         try:
             info = os.lstat(target)
+        except PermissionError:
+            files.append({'path': value, 'reason': READ_DENIED})
+            continue
         except OSError:
             files.append({'path': value, 'exists': False})
             continue
         regular = stat.S_ISREG(info.st_mode)
         kind = ('image' if os.path.splitext(target)[1].lower() in IMAGE_SUFFIXES else 'file') if regular else 'other'
         item = {'path': value, 'exists': True, 'kind': kind, 'bytes': info.st_size if regular else None}
-        if absolute_only and root is None and kind == 'file':
-            item.update(status='unverified', reason=DIRECT_FILE_REASON)
+        if regular and not os.access(target, os.R_OK):
+            item['reason'] = READ_DENIED
         files.append(item)
     return {'present': [item['path'] for item in files
-                        if item.get('kind') in {'file', 'image'} and item.get('status') != 'unverified'],
-            'files': files, 'note': DIRECT_NOTE if absolute_only else NOTE}
+                        if item.get('kind') in {'file', 'image'} and 'reason' not in item],
+            'files': files, 'note': PREVIEW_NOTE if absolute_only else NOTE}

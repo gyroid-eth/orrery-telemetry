@@ -88,8 +88,8 @@ def test_direct_mcp_show_files_lists_and_checks_only_absolute_paths(mail_listene
     assert set(schema['properties']) == {'paths'}
     assert schema['required'] == ['paths']
     description = tools['show_files']['description']
-    assert 'working folder or a configured workspace root' in description
-    assert 'unverified and omits them from present' in description
+    assert 'Paths can be outside your working folder' in description
+    assert 'Only readable regular files' in description
 
     report = tmp_path / 'report.md'
     content = b'# Only metadata should return'
@@ -110,19 +110,13 @@ def test_direct_mcp_show_files_lists_and_checks_only_absolute_paths(mail_listene
     response = show([str(report), str(image), str(link), str(missing)])
     assert not response.get('isError')
     value = response['structuredContent']
-    assert value['present'] == [str(image)]
+    assert value['present'] == [str(report), str(image)]
     assert value['files'] == [
-        {'path': str(report), 'exists': True, 'kind': 'file', 'bytes': len(content),
-         'status': 'unverified',
-         'reason': "The cockpit previews text files only inside the conversation's working folder "
-                   "or a configured workspace root. This direct Mail connection cannot verify those roots."},
+        {'path': str(report), 'exists': True, 'kind': 'file', 'bytes': len(content)},
         {'path': str(image), 'exists': True, 'kind': 'image', 'bytes': len(b'fixture image')},
         {'path': str(link), 'exists': True, 'kind': 'other', 'bytes': None},
         {'path': str(missing), 'exists': False},
     ]
-    assert show([str(report)])['structuredContent']['present'] == []
-    assert 'Unverified paths are omitted from present' in value['note']
-
     rejected = show([str(report), report.name])
     assert rejected['isError']
     assert 'requires absolute paths on a direct Mail connection' in rejected['content'][0]['text']

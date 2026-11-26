@@ -810,22 +810,23 @@ def _reservation_paths(
 # agentstack_mail/show_files.py (tests compare them). `base` is the agent's
 # working folder only when the binding knows it (a Codex App snapshot); the
 # proxy's own cwd is never used, so without a base relative paths are not
-# checked here, and with one a path outside it is not even lstat'ed.
+# checked here. Relative paths must stay inside the working folder.
 SHOW_FILES_DESCRIPTION = (
     "Show files or images to the person in the ORRERY cockpit: each path becomes "
     "a chip in the conversation's History that opens a preview (Markdown is "
     "drawn, images are shown). Call it when you created or changed a file or "
     "image the person should look at (a report, a figure, a screenshot, a log), "
-    "usually right before your final message. Use paths inside your working "
-    "folder, relative or absolute. Nothing is sent or written, and the file is "
+    "usually right before your final message. Use an absolute path for files "
+    "outside your working folder. Nothing is sent or written, and the file is "
     "not read into your context."
 )
 _SHOW_FILES_NOTE = (
-    "Each path is shown as a chip in the cockpit's History; the cockpit checks it against your "
-    "working folder, kind and size when it is opened. checked:false means this connection does "
+    "The cockpit uses the recorded call to show file chips. "
+    "Previews check the file type, size, path and read permissions. checked:false means this connection does "
     "not know your working folder, so a relative path was not checked here; an absolute path is."
 )
 _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+_READ_DENIED = "OS permissions do not allow reading this path."
 
 
 def _inside(path: str, root: str) -> bool:
@@ -833,7 +834,7 @@ def _inside(path: str, root: str) -> bool:
 
 
 def show_files_result(values: Any, base: str | None = None) -> dict[str, Any]:
-    """Check paths with lstat only; never open, read or follow them."""
+    """Check metadata and readability without opening files."""
     if not isinstance(values, list) or not 1 <= len(values) <= 8:
         raise ProxyError("paths must be a list of 1 to 8 paths")
     for value in values:
@@ -851,19 +852,25 @@ def show_files_result(values: Any, base: str | None = None) -> dict[str, Any]:
         else:
             files.append({"path": value, "checked": False})
             continue
-        if roots and not any(_inside(target, item) for item in roots):
+        if not os.path.isabs(value) and not any(_inside(target, item) for item in roots):
             files.append({"path": value, "outside_working_folder": True})
             continue
         try:
             info = os.lstat(target)
+        except PermissionError:
+            files.append({"path": value, "reason": _READ_DENIED})
+            continue
         except OSError:
             files.append({"path": value, "exists": False})
             continue
         regular = stat.S_ISREG(info.st_mode)
         kind = ("image" if os.path.splitext(target)[1].lower() in _IMAGE_SUFFIXES else "file") if regular else "other"
-        files.append({"path": value, "exists": True, "kind": kind, "bytes": info.st_size if regular else None})
+        item = {"path": value, "exists": True, "kind": kind, "bytes": info.st_size if regular else None}
+        if regular and not os.access(target, os.R_OK):
+            item["reason"] = _READ_DENIED
+        files.append(item)
     return {
-        "present": [item["path"] for item in files if item.get("kind") in {"file", "image"}],
+        "present": [item["path"] for item in files if item.get("kind") in {"file", "image"} and "reason" not in item],
         "files": files,
         "note": _SHOW_FILES_NOTE,
     }
