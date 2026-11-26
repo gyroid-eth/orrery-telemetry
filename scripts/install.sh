@@ -2264,7 +2264,7 @@ mail_update_decide() {
   fi
   if [[ "$MAIL_UPDATE_MODE" == keep ]]; then
     say "notice: the running ORRERY Mail is built from $old_source; this checkout would build $NEW_NATIVE_MAIL_SOURCE_ID"
-    say "notice: the running build was kept. Re-run with --update-mail to switch (docs/agentstack-mail-update.md)"
+    say "notice: the running build was kept. Re-run with --update-mail to switch (https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md)"
     MAIL_RESULT=kept MAIL_RESULT_CODE="$MAIL_KEEP_CODE"
     return 0
   fi
@@ -2272,7 +2272,7 @@ mail_update_decide() {
     [[ "$UPDATE_MAIL" != true ]] || \
       die "--update-mail can only replace an ORRERY Mail started by agentstack-mailctl, and $NATIVE_MAIL_PIDFILE does not name a live runner; nothing was stopped"
     warn "the running ORRERY Mail is built from $old_source; this checkout would build $NEW_NATIVE_MAIL_SOURCE_ID"
-    warn "it was not started by agentstack-mailctl ($NATIVE_MAIL_PIDFILE names no live runner), so it was kept; see docs/agentstack-mail-update.md"
+    warn "it was not started by agentstack-mailctl ($NATIVE_MAIL_PIDFILE names no live runner), so it was kept; see https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md"
     MAIL_RESULT=refused MAIL_RESULT_CODE=not_mailctl_managed
     return 0
   fi

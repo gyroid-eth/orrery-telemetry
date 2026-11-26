@@ -9,14 +9,37 @@ getting-started and the complete document lists to the indexes.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INSTALLER = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+COCKPIT = "https://github.com/gyroid-eth/orrery/blob/master/"
+GUIDES = frozenset("""
+agentstack-mail-update antigravity codex-app computer-use configuration
+dashboard delegation getting-started instruction-migration install launchers
+mobile native-setup obsidian persistent-agents troubleshooting windows-local wsl-keyring
+""".split())
+
+
+def _guide_path(rel: str) -> str:
+    if rel.startswith("integrations/chatgpt_mcp/"):
+        return "docs/" + ("en/" if rel.endswith(".en.md") else "") + "chatgpt-mcp.md"
+    name = pathlib.PurePosixPath(rel).name.removesuffix(".md").removesuffix(".en")
+    if name in {"configuration", "install", "troubleshooting"}:
+        name = f"telemetry-{name}"
+    return "docs/" + ("en/" if rel.endswith(".en.md") else "") + f"{name}.md"
 
 
 def _read(rel: str) -> str:
+    if rel.startswith("docs/") and pathlib.PurePosixPath(rel).name.removesuffix(".md").removesuffix(".en") in GUIDES:
+        cockpit = os.environ.get("ORRERY_TEST_USER_DOCS_ROOT")
+        if not cockpit:
+            pytest.skip("ORRERY_TEST_USER_DOCS_ROOT must name the cockpit checkout for user guide checks")
+        return (pathlib.Path(cockpit) / _guide_path(rel)).read_text(encoding="utf-8")
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
@@ -89,7 +112,7 @@ def _approval_prompt_count() -> int:
 def test_docs_share_the_actual_conditional_consent_contract() -> None:
     assert _approval_prompt_count() == 4  # Maximum approval sites, not a fixed prompt count.
     for name in ('AGENTS.md', 'CLAUDE.md', 'docs/install.en.md', 'docs/getting-started.en.md'):
-        assert 'instruction-migration.en.md#consent' in _read(name)
+        assert 'instruction-migration.md#consent' in _read(name)
         assert 'four typed confirmations' not in _read(name)
         assert 'four approvals' not in _read(name)
     for name in ('docs/install.md','docs/getting-started.md'):
@@ -117,32 +140,39 @@ def test_hook_count_matches_the_settings_template() -> None:
     assert f"{words[count]} Claude event hooks" in _read("docs/getting-started.en.md")
 
 
-def test_english_readme_lists_every_guide_the_japanese_readme_lists() -> None:
-    ja_pattern = re.compile(r"^\|[^\n]*\[[^\]]+\]\((docs/[\w-]+\.md)\) \|", re.M)
-    en_pattern = re.compile(r"^\|[^\n]*\[[^\]]+\]\((docs/[\w-]+(?:\.en)?\.md)\) \|", re.M)
-    ja = ja_pattern.findall(_read("README.md"))
-    en = [path.replace(".en.md", ".md") for path in en_pattern.findall(_read("README.en.md"))]
-    assert ja, "no guide table in README.md"
-    assert set(ja) == set(en), sorted(set(ja) ^ set(en))
+def test_moved_guides_redirect_to_the_canonical_language_pair() -> None:
+    for suffix in (".md", ".en.md"):
+        sources = [
+            *(f"docs/{name}{suffix}" for name in sorted(GUIDES)),
+            f"integrations/chatgpt_mcp/README{suffix}",
+        ]
+        for rel in sources:
+            stub = (ROOT / rel).read_text(encoding="utf-8")
+            assert f"]({COCKPIT}{_guide_path(rel)})" in stub, rel
+            assert "このページは ORRERY の文書に移りました。" in stub or "This guide moved to the ORRERY documentation." in stub, rel
 
 
-def test_both_readmes_route_to_guides_and_standalone_setup() -> None:
-    for name, setup, index in (("README.md", "docs/getting-started.md", "docs/README.md"),
-                               ("README.en.md", "docs/getting-started.en.md", "docs/README.en.md")):
-        text = _read(name)
-        for needle in ("https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh",
-                       "Your first flight", "Show help map", "Full tour", setup, index):
-            assert needle in text, (name, needle)
-        for needle in ("--dry-run", "agentstack-doctor", "agentstack-selftest", "/delegate", "http://127.0.0.1:8770/"):
-            assert needle in _read(setup), (setup, needle)
-    for setup, dashboard in (
-        ("docs/getting-started.md", "dashboard.md"),
-        ("docs/getting-started.en.md", "dashboard.en.md"),
+def test_both_readmes_route_to_cockpit_and_the_developer_index() -> None:
+    for name, start, setup, index in (
+        ("README.md", "README.md#始める", "docs/getting-started.md", "docs/README.md"),
+        ("README.en.md", "README.en.md#get-started", "docs/en/getting-started.md", "docs/README.en.md"),
     ):
-        assert f"]({dashboard})" in _read(setup), (setup, dashboard)
-        guide = _read(f"docs/{dashboard}")
-        for image in ("images/deck_growing.png", "img/network.jpg", "img/native-harness-selection.gif"):
-            assert f"]({image})" in guide, (dashboard, image)
+        text = _read(name)
+        for needle in (COCKPIT + start, COCKPIT + setup, index, "CONTRIBUTING.md"):
+            assert needle in text, (name, needle)
+
+
+def test_standalone_guides_cover_installation_and_dashboard() -> None:
+    for setup, dashboard in (
+        ("docs/getting-started.md", "docs/dashboard.md"),
+        ("docs/getting-started.en.md", "docs/dashboard.en.md"),
+    ):
+        guide = _read(setup)
+        for needle in ("--dry-run", "agentstack-doctor", "agentstack-selftest", "/delegate", "http://127.0.0.1:8770/"):
+            assert needle in guide, (setup, needle)
+        assert "](dashboard.md)" in guide, setup
+        for image in ("deck_growing.png", "network.jpg", "native-harness-selection.gif"):
+            assert f"/{image})" in _read(dashboard), (dashboard, image)
 
 
 def test_documentation_indexes_cover_the_actual_tree() -> None:
@@ -175,7 +205,7 @@ def test_protection_setting_is_documented_across_launch_and_agent_guides() -> No
     assert "AGENTSTACK_EXTRA_PROTECTED_ROOTS=/path/to/shared-vault" in example
     assert "AGENTSTACK_PROTECTED_ROOTS=" not in example
     for rel in (
-        "AGENTS.md", "README.md", "README.en.md",
+        "AGENTS.md",
         "docs/configuration.md", "docs/configuration.en.md",
         "docs/install.md", "docs/install.en.md", "docs/hooks.md", "docs/hooks.en.md",
         "docs/launchers.md", "docs/launchers.en.md",
@@ -262,7 +292,7 @@ def test_child_tool_docs_explain_approval_refusal_reports_and_repair():
     for link in (
         "(#approval)", "(#choosing-the-tools-a-child-gets---base----tools)",
         "(#resume-a-stopped-child-with-different-tools)",
-        "(troubleshooting.en.md#mcp-tool-call-requires-approval-but-approval-policy-is-never)",
+        "(telemetry-troubleshooting.md#mcp-tool-call-requires-approval-but-approval-policy-is-never)",
         "(#when-another-mcp-is-needed-partway-through-a-task)",
         "(#what-a-person-does-setup-and-permission-for-connections-and-operations)",
     ):
@@ -273,7 +303,7 @@ def test_child_tool_docs_explain_approval_refusal_reports_and_repair():
     for link in (
         "(#承認)", "(#子に渡す道具を選ぶ--base----tools)",
         "(#停止した子の道具を変更して-resume-する)",
-        "(troubleshooting.md#mcp-tool-call-requires-approval-but-approval-policy-is-never)",
+        "(telemetry-troubleshooting.md#mcp-tool-call-requires-approval-but-approval-policy-is-never)",
         "(#途中で必要な-mcp-が増えたとき)",
         "(#人がやること事前の設定と接続操作時の許可)",
     ):

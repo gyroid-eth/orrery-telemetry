@@ -12,7 +12,7 @@ importantly, the three things you must not do.
 ## The four rules
 
 **1. Approvals belong to the human.** Follow the single
-[consent contract](docs/instruction-migration.en.md#consent) for installer
+[consent contract](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#consent) for installer
 and standalone setup. Hand the terminal back at human approval steps. Use
 `--assume-yes` only when the user explicitly chose it.
 
@@ -85,7 +85,7 @@ than a completed install.
 Then, for the real run, choose one of two paths.
 
 Run the installer in a terminal the user controls, or tell them to run it.
-The [consent contract](docs/instruction-migration.en.md#consent) explains
+The [consent contract](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#consent) explains
 interactive prompts, non-interactive skips, and explicit `--assume-yes`.
 Reuse of a running ORRERY Mail is reported without another approval.
 
@@ -114,7 +114,7 @@ fallback you need to fix.
 
 ## When something goes wrong
 
-Read `docs/troubleshooting.md` before improvising. If the failure is not
+Read the [Telemetry troubleshooting guide](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-troubleshooting.md) before improvising. If the failure is not
 covered there, run
 
 ```sh
@@ -134,12 +134,12 @@ For local daemon helper development use [docs/daemon-agents.md](docs/daemon-agen
 
 | Topic | File |
 |---|---|
-| Install, requirements, service modes | `docs/install.md` |
-| Configuration and environment variables | `docs/configuration.md` |
-| Dashboard views and API | `docs/dashboard.md`, `docs/api.md` |
-| Launchers and child agents | `docs/launchers.md` |
+| Install, requirements, service modes | [Telemetry installation](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md) |
+| Configuration and environment variables | [Telemetry configuration](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md) |
+| Dashboard views and API | [Telemetry dashboard](https://github.com/gyroid-eth/orrery/blob/master/docs/dashboard.md), [API](docs/api.md) |
+| Launchers and child agents | [Telemetry launchers](https://github.com/gyroid-eth/orrery/blob/master/docs/launchers.md) |
 | Hooks | `docs/hooks.md` |
-| Failure modes | `docs/troubleshooting.md` |
+| Failure modes | [Telemetry troubleshooting](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-troubleshooting.md) |
 
 If you are changing this repository rather than installing it, read
 `CONTRIBUTING.md`, create the dev venv once (see "Test environment" there —
@@ -149,4 +149,4 @@ change as done.
 
 隔離 global client の子・再開・予約 hook の準備は [global child client](docs/global-child-client.md) を参照してください。実起動と配送は [global delivery client](docs/global-delivery-client.md) を参照してください。既定の旧運用は維持し、実サービスの切替は後続です。
 
-User instruction migration uses the shared setup plan/receipt engine. Read [instruction migration](docs/instruction-migration.md) before editing user blocks. Bare sessions do not auto-register; editing guards retain their configured protection.
+User instruction migration uses the shared setup plan/receipt engine. Read [instruction migration](https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md) before editing user blocks. Bare sessions do not auto-register; editing guards retain their configured protection.

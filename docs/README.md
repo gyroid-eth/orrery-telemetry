@@ -1,98 +1,68 @@
-# ドキュメント索引
+# 開発者向け文書
 
-[English](README.en.md) · [README](../README.md)
+[English](README.en.md) · [Telemetry README](../README.md) · [ORRERY の利用者向けガイド](https://github.com/gyroid-eth/orrery/blob/master/docs/README.md)
 
-Claude Code・Codex・DeepSeek・Local LLMのどれからでも始められます。まず[単独導入](getting-started.md#telemetry-単独の導入と確認)か[cockpitと共通導入](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#1-行で入れる更新する)を選び、Claude/Codexは使うCLIへのログイン、DeepSeek/Localは[APIの初期設定](native-setup.md)へ進みます。準備後の画面操作は **Your first flight → help map → Full tour**。cockpitの`Settings → Getting started`から開けます。ここは導入・更新・困ったときに読む参照の目次です。
+## API と実行契約
 
-Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS` の隣）から見回せます。単独の画面でも cockpit 内の埋め込みでも、DECK / NETWORK の操作に注記します。agent の詳細パネルでは、パネル内の `HELP MAP` からパネルの操作を説明できます。
-
-全体像: cockpit は terminal を操作する画面、Telemetry は dashboard と agent graph の画面です。cockpit は Telemetry の画面を埋め込めます。
-
-![cockpit は terminal を操作する画面、Telemetry は dashboard と agent graph の画面。cockpit は Telemetry の画面を埋め込める。agent は tmux の中で動き、両方の画面から見え、Mail で話す](https://raw.githubusercontent.com/gyroid-eth/orrery/master/docs/images/cockpit_telemetry_relation.svg)
-
-## はじめる
-
-- [DeepSeek・Local LLMの初期設定](native-setup.md) — 共通導入後、dsh/Hermes・APIキー・接続設定・画面からの起動へ。新規・既存利用者とも使え、Claude/Codexのログインは不要。
-- [Ubuntu WSLにAPIキーを保存する](wsl-keyring.md) — 標準GUIで鍵束を準備し、APIキーを非表示入力で保存する初回手順。
-
-- [目的と provider・model・harness を選ぶ](getting-started.md#provider-model-harness) — 観測、API の model で作成、agent 同士の連携の3導線。[対応組合せと現在の制限](managed-catalog.md)で準備・OS・画面の範囲を確認する。
-- [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#1-行で入れる更新する) — 1行で両方を入れ、画面の初回ガイドから始める。
-- [利用中の agent と導入を進める](https://github.com/gyroid-eth/orrery/blob/master/docs/install-with-agent.md) — 共通導入の計画と承認。
-- [Telemetry 単独で使い始める](getting-started.md) — 対象者・用語と、単独 install、agent 起動、Mail の通し確認。
-
-## 使い方
-
-- [Dashboard](dashboard.md) — DECK/NETWORK、履歴、RESUME/EXIT、REPLAY と詳細の参照。
-- [指定スマホで状況を見る](mobile.md) — 既定オフの閲覧画面、本人認証と端末制限、手動有効化と停止。
-- [委任と child agent](delegation.md) — ORRERY /delegate、組み込み子との違いと渡す道具の選択。
-- [Launcher と identity](launchers.md) — agent-start、名前、resume、/delegate と /log、通知の流れ。
-- [Computer use](computer-use.md) — NEW AGENT の画面操作とブラウザ、権限の確認、Cua Driver の準備。
-- [ChatGPT MCP](../integrations/chatgpt_mcp/README.md) — 読み取り専用アダプターと専用 Tunnel。
-- [Obsidian と一緒に使う](obsidian.md) — ログ・論文ノート・タスクを vault と Daily Note に置く。
-
-## 空のMailへの切替候補
-
-- [fresh移行・停止復旧](fresh-global-update.md) — 新しい空instanceを使う明示手順。通常設定からの私有起動・停止は確認済み。通常updateでは切り替わらず、実OS manager/Finder GUI・実provider/trust/導入・最終CIと本人在席の切替は未受入。復帰・App前面化は今回の対象外。
-
-## install・update
-
-- [Update](install.md#upgrade) — 既存設定を引き継いで更新する手順。
-- [インストール](install.md) — 要件、単独 install、検証、upgrade/uninstall と移行手順。
-- [設定](configuration.md) — AGENTSTACK_*、保存・公開範囲、model・child の設定を調べる。
-- [Codex plugin 導入処理の再利用](codex-plugin-lifecycle.md) — 本体 install 接続前の共通処理、対象 hook の信頼と隔離確認。
-- [Codex App 統合](codex-app.md) — optional provider として Desktop の task/subagent を載せる。
-- [Gemini（Antigravity）](antigravity.md) — CLI の導入・サインイン、NEW AGENT での起動と対応範囲。
-- [DeepSeekの表示と残高](dsh-stage-a.md) — 段Aの歴史記録。現在の dsh / Hermes の導入は[インストール](install.md)、子の起動は provider と harness の指定が必要（[API](api.md)）。
-- [常駐 agent](persistent-agents.md) — enrollment、interactive/headless 起動、credential の復旧。
-- [決定論的 daemon](daemon-agents.md) — 専用 identity、正規 binding、通知待機と停止の契約。
-- [Mail service の更新](agentstack-mail-update.md) — 稼働中 Mail の build を検証して差し替える運用手順。
-
-## Windows・WSL
-
-- [WSL2](install.md#windowswsl2で入れる) — 標準の Windows 導入は Ubuntu 内で行い、Windows のブラウザで開く。
-- [native Windows helper（実験的）](windows-local.md) — 標準 WSL2 導入とは別の、community による Mail/dashboard 起動。
-- [native Windows Codex launcher（実験的）](windows-codex-launcher.md) — 事前登録した子を専用 Windows tmux から起動する境界。
-- [native Windows spawn（実験的）](windows-spawn.md) — native NEW AGENT の名前 catalog 取得と、SPAWN が無効である境界を読む。
-
-## 困ったとき
-
-- [トラブルシューティング](troubleshooting.md) — service、通知、spawn、認証、WSL の止まり方を切り分ける。
-- [ローカル HTTP の信頼境界](local-http-security.md) — Dashboard と Mail が受け付ける要求元と、信頼する前提。
-
-## 設計・開発者向け
-
-- [Hooks と helper](hooks.md) — event、block/release/cleanup と運用 guard の仕様。
-- [API reference](api.md) — route、request/response と互換世代の契約。
-- [デザイン言語](design.md) — dashboard の見え方と動きの基準。
-- [Embedded tour events（英語）](embedded-tour-events.md) — 埋め込み Telemetry が cockpit の checklist に実操作を通知する契約。
-- [ORRERY Mail の内部構成](agentstack-mail.md) — 同梱 package の境界、provenance、cutover と正本。
-- [project 廃止の契約と移行計画](project-removal-plan.md) — PR1 の candidate API と gate。既定の動作は変えず、切替は後続 PR。
-- [絶対 path の予約候補](absolute-reservations.md) — PR2 の normalizer、認証付き隔離 store、client adapter と予約ごとの activity/GC。既定は旧 mode。
-- [Mail と配送の記録の移行候補](namespace-state-migration.md) — PR3 の隔離 snapshot、永続 store と phase ごとの復旧。activation false。
-- [保存元を保つ B1 の内部 kernel](storage-origin-b1.md) — S′ の候補解決・本人操作・pure peek。未公開で、既定の起動経路は変更しない。
-- [global server の S1 準備](global-server.md) — 隔離 HTTP の登録・再接続・inbox・enrollment と authority epoch。既定は旧 mode。
-- [隔離 global 予約・welcome](global-reservations.md) — S2c の唯一 SQL engine、TTL、管理復旧、試験移設。既定は旧 mode。
-- [隔離 global message と通知（S2b）](global-messages.md) — 8 tool・DB 添付・純粋 inbox・signal の再照合。既定は旧 mode。
-- [global runtime client の4a準備](global-runtime-client.md) — S1 の登録・復旧・待機、専用 HOME と profile の再接続。
-- [Mail 更新の設計メモ](agentstack-mail-update-design.md) — 差し替え方式の理由と未決事項。操作は更新手順を参照。
-- [Mail 性能 gate の設計](agentstack-mail-performance-gate.md) — 設計のみの benchmark と採否基準。常設 benchmark の実行手順ではない。
-- [Claim/enrollment 設計](agentstack-mail-claim-enrollment-design.md) — product-decision ledger に対応する enrollment の設計資料。
-- [第三者コンポーネント（日本語）](third-party.md) — ORRERY Mail、provider ロゴ、肖像画像の license と来歴。
-- [開発への入口](../CONTRIBUTING.md) — build・検証・変更を送るときの手順。
-
-英語版の無い文書は原語を明記しています。画像/GIFは各文書に付随する資料です。索引の網羅性は `python3 scripts/check_docs_index.py`（repository の根から）で確認できます。
-
-- [global client の子・再開の準備](global-child-client.md) — 固定 layout、同じ登録 intent の再送、共通 end と予約 hook。
-- [呼び手・中断・受け入れの表](global-child-client-contract.md) — global client の fixture から生成した契約の一覧。
-
-- [global client の配送・起動](global-delivery-client.md) — 固定 layout、通知の再試行、明示的な復旧と provider の準備。
-- [tmux consumer の共有境界](runtime-tmux.md) — transport の固定、対象 admission と修復診断。
-
-- [指示 block の移行](instruction-migration.md) — 利用者単位への移行と復旧。
-
-- [専用 tmux 起動・終了の受け入れ計画](r2-tb-lifecycle-plan-v3.md) — R2-Tb の確定 caller 表・schema・中断点と fixture。
-
-- [dsh の標準 CLI 起動](dsh-thin.md)
-
-- [Native context と helper model](native-capabilities.md) — dsh / Hermes の context 読取とモデル別の能力。
+- [API reference](api.md)
+- [Hooks と運用 helper](hooks.md)
+- [ORRERY Mail extraction](agentstack-mail.md)
+- [決定的daemonの正規bindingと通知](daemon-agents.md)
+- [tmux consumer の共有境界](runtime-tmux.md)
+- [ローカル HTTP の信頼境界](local-http-security.md)
+- [Embedded interaction notifications](embedded-tour-events.md)
+- [Native context and helper models](native-capabilities.md)
 - [Native catalog and effort capabilities](managed-catalog.md)
+
+## 移行と受け入れ計画
+
+- [絶対 path の正規化と予約 adapter](absolute-reservations.md)
+- [空の Mail へ切り替える手順（準備中）](fresh-global-update.md)
+- [global client の子・再開の準備](global-child-client.md)
+- [global 子 client の契約表](global-child-client-contract.md)
+- [隔離 global client の起動と配送](global-delivery-client.md)
+- [隔離 global server の message と通知（S2b）](global-messages.md)
+- [隔離 global 予約・contact welcome（S2c）](global-reservations.md)
+- [global runtime client の4a準備](global-runtime-client.md)
+- [global server の S1 / S2a 準備](global-server.md)
+- [Mail と配送の記録を統合する候補](namespace-state-migration.md)
+- [project 廃止の契約と移行計画（PR1）](project-removal-plan.md)
+- [R2-Tb v3: 起動・終了 lifecycle と red fixture](r2-tb-lifecycle-plan-v3.md)
+- [保存元を維持する B1（未公開）](storage-origin-b1.md)
+
+## 設計と来歴
+
+- [ORRERY Mail claim and enrollment design](agentstack-mail-claim-enrollment-design.md)
+- [ORRERY Mail performance gate design](agentstack-mail-performance-gate.md)
+- [ORRERY Mail の build 差し替え: 設計メモ](agentstack-mail-update-design.md)
+- [Codex plugin 導入処理の再利用](codex-plugin-lifecycle.md)
+- [デザイン言語](design.md)
+- [DeepSeekの表示と残高](dsh-stage-a.md)
+- [dsh の標準 CLI 起動](dsh-thin.md)
+- [第三者コンポーネント](third-party.md)
+- [Windows Codex child launcher（PR1）](windows-codex-launcher.md)
+- [ネイティブ Windows での起動境界](windows-spawn.md)
+
+<details>
+<summary>利用者向けガイドの旧 URL</summary>
+
+- [ORRERY Mail の更新と復旧](agentstack-mail-update.md)
+- [Gemini を使う](antigravity.md)
+- [Codex App とつなぐ](codex-app.md)
+- [画面を見て操作する](computer-use.md)
+- [Telemetry の設定](configuration.md)
+- [Telemetry の画面で状態と履歴を調べる](dashboard.md)
+- [agent に仕事を分ける](delegation.md)
+- [Telemetry 単体で始める](getting-started.md)
+- [ORRERY の指示を移行する](instruction-migration.md)
+- [Telemetry 単体を導入・更新・削除する](install.md)
+- [agent を起動・再開する](launchers.md)
+- [スマホで見る・指示を送る](mobile.md)
+- [DeepSeek・Local LLM を設定する](native-setup.md)
+- [Obsidian と一緒に使う](obsidian.md)
+- [常駐 agent を用意する](persistent-agents.md)
+- [Telemetry のトラブルを調べる](troubleshooting.md)
+- [native Windows の開発用起動を試す](windows-local.md)
+- [WSL の鍵束に API キーを保存する](wsl-keyring.md)
+
+</details>

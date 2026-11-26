@@ -3,7 +3,7 @@
 [日本語](global-delivery-client.md)
 
 Legacy mode remains the default and global activation remains false. Use a temporary HOME and a freshly prepared isolated server candidate. Live cutover and import of released legacy formats remain outside this change.
-Prepare the fixed Claude / Codex provider HOME with `agentstack-runtime-client instruction-configure operator claude` / `codex` before launch. Normal launch only reads the block; missing or stale instructions return `INSTRUCTION_PROVIDER_CONFIG_REQUIRED`. See [instruction migration](instruction-migration.en.md#custom-provider-home).
+Prepare the fixed Claude / Codex provider HOME with `agentstack-runtime-client instruction-configure operator claude` / `codex` before launch. Normal launch only reads the block; missing or stale instructions return `INSTRUCTION_PROVIDER_CONFIG_REQUIRED`. See [instruction migration](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#custom-provider-home).
 
 
 ## Authorities and layout
@@ -168,7 +168,7 @@ Global watcher reacts to signal-directory events, falling back to the legacy two
 
 [日本語](global-delivery-client.md#operator-ui-access)
 
-Default installation and the legacy dashboard are unchanged. API generation 15 adds an isolated global backend reading a completed S2c candidate through its private management socket. The dashboard never opens Mail SQLite. No public Mail tools are added. API 16 enables `global_dashboard_ui=1` and `instruction_migration=1` for the [global dashboard](dashboard.en.md#global-mail-view); cockpit integration follows separately. Never infer screen support from the API number alone.
+Default installation and the legacy dashboard are unchanged. API generation 15 adds an isolated global backend reading a completed S2c candidate through its private management socket. The dashboard never opens Mail SQLite. No public Mail tools are added. API 16 enables `global_dashboard_ui=1` and `instruction_migration=1` for the [global dashboard](https://github.com/gyroid-eth/orrery/blob/master/docs/en/dashboard.md#global-mail-view); cockpit integration follows separately. Never infer screen support from the API number alone.
 
 Use a dedicated temporary HOME and explicitly set `AGENTSTACK_RUNTIME_MODE=global`, `AGENTSTACK_GLOBAL_SERVER_CONFIG` (the completed candidate's `server-config.json`), `AGENTSTACK_MCP_URL` (that isolated Mail HTTP endpoint), `AGENTSTACK_HOME` (the same isolation root's `agentstack`) and `AGENTSTACK_PORT` (a dedicated free port). Invalid global configuration never falls back to the legacy database. Live cutover is a separate procedure.
 
@@ -216,7 +216,7 @@ A registration race can still leave a pending intent. Read `registration_sha256`
 
 API 17 additionally accepts the status digest on explicit registration replay. Browser Lock invalidates queued handoffs and in-flight bodies; denied storage uses page memory and requires Unlock after reload.
 
-For API 18 `global_runtime_observation=1`, `operator_session=1` and the non-secret `agentstack-http-operator probe`, see [activity and capability checks](dashboard.en.md#global-runtime-proof). Cockpit implementation and PR7 activation remain separate gates.
+For API 18 `global_runtime_observation=1`, `operator_session=1` and the non-secret `agentstack-http-operator probe`, see [activity and capability checks](https://github.com/gyroid-eth/orrery/blob/master/docs/en/dashboard.md#global-runtime-proof). Cockpit implementation and PR7 activation remain separate gates.
 
 ## Mode selection and services without an owner context
 

@@ -1,0 +1,30 @@
+name: user docs
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: gyroid-eth/orrery
+          # Keep the guide fixtures in sync with this revision of Telemetry.
+          ref: 0f2516d1ca3eb97f54abc85b8643f6dd37d86935
+          path: .orrery-user-docs
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest pytest-timeout pytest-xdist
+      - name: Check docs against the implementation
+        env:
+          ORRERY_TEST_USER_DOCS_ROOT: ${{ github.workspace }}/.orrery-user-docs
+        run: python -m pytest --noconftest -q -n 2 --dist loadfile tests/test_docs_consistency.py

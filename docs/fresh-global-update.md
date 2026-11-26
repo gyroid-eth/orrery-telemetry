@@ -1,6 +1,6 @@
 # 空の Mail へ切り替える手順（準備中）
 
-[English](fresh-global-update.en.md) · [利用者単位の指示](instruction-migration.md)
+[English](fresh-global-update.en.md) · [利用者単位の指示](https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md)
 
 **この手順だけで本番切替を完了できる段階ではありません。** 空のMail・明示client、子起動・managed harness・App adapter、画面API・PC入力・R4・終了済み整理は限定fixtureで確認しています。通常設定の保存・受渡しとMail/controller→dashboard host→Cockpitの起動・拒否・所有process停止も私有環境で確認済みです。実OS manager／Finder GUI／App／provider／login／trust／live install、最終CIと本人在席の切替は未受入です。case-insensitive な Mac の日本語pathは **nativeで確認したAPFSの限定profileだけ** が対象で、範囲外やHFS等では `CASE_RULES_UNKNOWN` の拒否が残ります。WSL の Windows 側 folder も実機未受入です。自分の作業先の支持範囲を下記で確認し、範囲外なら止めてください。未受入項目の解消と本人在席の切替判断が済むまで、以下を既存環境へ実行しません。
 
@@ -91,9 +91,9 @@ env AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_CLIENT_CONFIG= AGENTSTACK_GLOBAL_SE
     --host 127.0.0.1 --port "$orrery_cockpit_port" --tmux-bin "$orrery_tmux"
 ```
 
-これは明示backendの起動例です。準備済みcontextと私有socketを明示したinstallerは同じconfig/Iを保存・通常サービスへ渡し、再更新でも保持します。指定Pythonには対応Mail moduleが必要です。Cockpit scriptとFinderは共有loaderで保存設定を読み、同じI/context digest/epochのhealthを照合します。別配布先はCockpitの共有configへtelemetry_homeの絶対pathを指定します。Finderがshellのexportを自動継承するとは扱いません。同じbackendを二重起動しません。R4は[スマホ手順](mobile.md#スマホからpaneを確認して送る)の本人opt-inが別途必要です。
+これは明示backendの起動例です。準備済みcontextと私有socketを明示したinstallerは同じconfig/Iを保存・通常サービスへ渡し、再更新でも保持します。指定Pythonには対応Mail moduleが必要です。Cockpit scriptとFinderは共有loaderで保存設定を読み、同じI/context digest/epochのhealthを照合します。別配布先はCockpitの共有configへtelemetry_homeの絶対pathを指定します。Finderがshellのexportを自動継承するとは扱いません。同じbackendを二重起動しません。R4は[スマホ手順](https://github.com/gyroid-eth/orrery/blob/master/docs/mobile.md#スマホからpaneを確認して送る)の本人opt-inが別途必要です。
 
-新旧それぞれの実行版、明示config／root、サービスの管理方法、停止・再起動の正確なコマンドを、その環境の [install](install.md)・[設定](configuration.md) と実際の登録内容から確認します。このページは launchd／systemd の名前や停止コマンドを推測しません。接続先・管理元が不明なら止め、勝手に別の DB や port を選びません。
+新旧それぞれの実行版、明示config／root、サービスの管理方法、停止・再起動の正確なコマンドを、その環境の [install](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md)・[設定](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md) と実際の登録内容から確認します。このページは launchd／systemd の名前や停止コマンドを推測しません。接続先・管理元が不明なら止め、勝手に別の DB や port を選びません。
 
 先に仕事・返信待ちと編集担当を控えます。ノートを変更するなら、その時点の正規接続で対象pathを予約してから書きます。予約切れ・通信不能のまま編集を続けません。停止後は旧予約で作業を再開しません。
 
@@ -175,10 +175,10 @@ printf '%s\n' '{}' | "$orrery_python" -m agentstack_mail.fresh_client call-json 
 
   | 対象 | 起動前に用意するもの |
   |---|---|
-  | Claude Channels | 準備済みの Claude HOME に現行の Channels plugin と selector を設定し、対応する Channels state を指定する。[Claude Channels の設定](persistent-agents.md#fresh-の-claude-channels) |
-  | Hermes Telegram | 管理 installer で検証済みの TUI を用意し、managed manifest と Telegram 資格の参照・allowlist を設定する。必要な非秘密の設定を専用 Hermes HOME に置く。[Hermes Telegram の設定](persistent-agents.md#fresh-の-hermes-telegraminteractive) |
+  | Claude Channels | 準備済みの Claude HOME に現行の Channels plugin と selector を設定し、対応する Channels state を指定する。[Claude Channels の設定](https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#fresh-の-claude-channels) |
+  | Hermes Telegram | 管理 installer で検証済みの TUI を用意し、managed manifest と Telegram 資格の参照・allowlist を設定する。必要な非秘密の設定を専用 Hermes HOME に置く。[Hermes Telegram の設定](https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#fresh-の-hermes-telegraminteractive) |
 
-- **確かめ方**　`reconnect` で新 Mail の instance と対象 bot の ID を照合し、[常駐 agent の手順](persistent-agents.md#fresh-の-claude-channels)にある `agentstack-persistent inspect --profile` を各 profile に実行します。確認済みの Python と配布版の launcher を使い、保存した旧設定と新 profile が別であることを確認します。
+- **確かめ方**　`reconnect` で新 Mail の instance と対象 bot の ID を照合し、[常駐 agent の手順](https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#fresh-の-claude-channels)にある `agentstack-persistent inspect --profile` を各 profile に実行します。確認済みの Python と配布版の launcher を使い、保存した旧設定と新 profile が別であることを確認します。
 - **戻し方**　準備が通らなければ起動せず、結果を控えます。本番の旧側を停止済みなら [8. 復旧](#8-失敗したら手順で戻す) へ進みます。
 
 ### 利用者単位のfresh指示を、既存setupで置く
@@ -208,7 +208,7 @@ contextはprepareの返した正確な `context.json` のpathを使います。�
 )
 ```
 
-`target_path`／`resolved_home`、選ばれたfresh template、変更対象と `plan_id` を確認します。planはfileやlockを作りません。[指示移行の同意契約](instruction-migration.md#consent)に従い、既存内容を変えるなら **本人の端末へ渡して確認**します。新fileの作成だけなら既存engineの契約どおり追加同意は不要です。agentが `--assume-yes` を足したり、確認待ちを別writerで回避したりしません。
+`target_path`／`resolved_home`、選ばれたfresh template、変更対象と `plan_id` を確認します。planはfileやlockを作りません。[指示移行の同意契約](https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md#consent)に従い、既存内容を変えるなら **本人の端末へ渡して確認**します。新fileの作成だけなら既存engineの契約どおり追加同意は不要です。agentが `--assume-yes` を足したり、確認待ちを別writerで回避したりしません。
 
 確認したplan IDを使い、**同じcwd・全env指定**でapplyします。planに出た `apply_argv` だけを環境指定なしで別端末へ貼りません。
 
@@ -312,7 +312,7 @@ resumeは **この新clientで記録済みのnative sessionだけ** が対象で
 ### 未終了 run の解決と通常の再起動
 
 prepared context 共通の `agentstack-runtime-client resolve-ended --launch-id <current-run-UUID> --confirm-ended`
-を、上と同じ fresh 環境・Python で呼びます。[終了種別と拒否理由](persistent-agents.md#fresh-の未終了-run-を閉じる)を確認し、
+を、上と同じ fresh 環境・Python で呼びます。[終了種別と拒否理由](https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#fresh-の未終了-run-を閉じる)を確認し、
 `ok:true` のときだけ同じ context の通常 launch／persistent run を別に実行します。旧 run は保持します。
 これは旧 global の `operator-json launch-resolve` とは別の契約です。legacy と Desktop の終了口は変えません。
 版付き group 記録のない古い run、観測不能、生きた process、別 identity／世代は HOLD／拒否で、手書きの復旧はしません。
@@ -469,7 +469,7 @@ Codexの既知の空欄表示 `› Ask Codex to do anything` は空欄として�
 ### 常駐 bot を戻す
 
 - **本人**　別の保守端末で、どこまで切り替わったかを確認し、復旧するかを判断します。
-- **agent**　新 bot が動いていれば、新側の再起動元を止め、launcher がまだ動いていれば SIGTERM で終了を待ちます。記録した起動元ごとに所有 process と poller の終了を確認します。終了が確定しなければ旧 poller を起動せず、理由を報告します。[常駐 agent の未終了 run の扱い](persistent-agents.md#fresh-の未終了-run-を閉じる)を参照してください。下の共通手順で新側を保全して旧 Mail と関連サービスを復旧してから、保全した旧版・設定を使って元の管理元で bot ごとに起動します。
+- **agent**　新 bot が動いていれば、新側の再起動元を止め、launcher がまだ動いていれば SIGTERM で終了を待ちます。記録した起動元ごとに所有 process と poller の終了を確認します。終了が確定しなければ旧 poller を起動せず、理由を報告します。[常駐 agent の未終了 run の扱い](https://github.com/gyroid-eth/orrery/blob/master/docs/persistent-agents.md#fresh-の未終了-run-を閉じる)を参照してください。下の共通手順で新側を保全して旧 Mail と関連サービスを復旧してから、保全した旧版・設定を使って元の管理元で bot ごとに起動します。
 - **確かめ方**　各 Telegram bot に poller が 1 つだけあり、旧 Mail の本人として送受信できることを確かめます。Telegram・Mail・Reader をもう一度確認し、Reader は切替前の状態と照合します。
 - **戻し方**　旧 bot の復旧にも失敗したら対象の再起動元を停止し、旧側と新側の記録を保全します。別の端末で指揮を続け、状態が確定してから再開します。
 

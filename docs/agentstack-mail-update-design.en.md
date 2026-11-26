@@ -1,7 +1,7 @@
 # Replacing the ORRERY Mail build: design note
 
 > 日本語版: [agentstack-mail-update-design.md](agentstack-mail-update-design.md)
-> The procedure and behaviour are specified in [agentstack-mail-update.en.md](agentstack-mail-update.en.md). This note keeps why it has this shape, and what is still undecided (whether to make it the default).
+> The procedure and behaviour are specified in [agentstack-mail-update.en.md](https://github.com/gyroid-eth/orrery/blob/master/docs/en/agentstack-mail-update.md). This note keeps why it has this shape, and what is still undecided (whether to make it the default).
 
 ## Starting point (as of 2026-09-30)
 
@@ -48,7 +48,7 @@ The final decision is the maintainer's.
 
 ## Decision (2026-10-02): three modes, the default stays keep
 
-There are now three modes: `--keep-mail` (the default), `--update-mail` (strict) and `AGENTSTACK_MAIL_UPDATE=auto` (opt-in). The outcome is machine-readable through the final `mail-result:` line and the `mail-plan:` line of `install.sh --print-mail-plan` ([agentstack-mail-update.en.md](agentstack-mail-update.en.md#replacing-the-build-with---update-mail)); setup.sh and update.sh read them.
+There are now three modes: `--keep-mail` (the default), `--update-mail` (strict) and `AGENTSTACK_MAIL_UPDATE=auto` (opt-in). The outcome is machine-readable through the final `mail-result:` line and the `mail-plan:` line of `install.sh --print-mail-plan` ([agentstack-mail-update.en.md](https://github.com/gyroid-eth/orrery/blob/master/docs/en/agentstack-mail-update.md#replacing-the-build-with---update-mail)); setup.sh and update.sh read them.
 
 `auto` switches only for a deployment managed by `agentstack-mailctl`, after verification passes, and when the expected outage (the time the candidate took to answer against the snapshot during verification, plus 1.5 s) is within `AGENTSTACK_MAIL_UPDATE_OUTAGE_BUDGET` (default 8 s); otherwise it keeps the running build and exits 0. Outage measurements (2026-10-02, temporary HOME, separate port): a stop takes under a second and a start on an empty database 1 to 2 s. The stdio proxy (children) and top-level Codex come back on their next call (Codex even after 71 s); top-level Claude Code (direct HTTP) reconnected by itself after outages up to 15 s and needed a reconnect from `/mcp` after 18 s or more.
 

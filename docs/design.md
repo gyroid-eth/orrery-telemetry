@@ -2,7 +2,7 @@
 
 > English version: [design.en.md](design.en.md)
 
-[前: Dashboard](dashboard.md) · [README に戻る](../README.md)
+[前: Dashboard](https://github.com/gyroid-eth/orrery/blob/master/docs/dashboard.md) · [README に戻る](../README.md)
 
 この文書は、ORRERY Telemetry の dashboard がどう見え、どう動くかを決めている判断を言葉にしたものです。maintainer がこれまでの実装で積み上げてきたデザイン言語の正本であり、新しく決めるための提案書ではありません。
 
@@ -199,7 +199,7 @@ python3 scripts/dashboard_theme_manifest.py --write
 python3 scripts/dashboard_theme_manifest.py --check
 ```
 
-仕組みの詳細は [Dashboard の Theme axis bridge](dashboard.md#theme-axis-bridge) にあります。
+仕組みの詳細は [Dashboard の Theme axis bridge](https://github.com/gyroid-eth/orrery/blob/master/docs/dashboard.md#theme-axis-bridge) にあります。
 
 ## 10. UI を足すときの作法
 
@@ -227,6 +227,6 @@ visual change を PR にする前に、次を自分の目で見ます。
 ## 関連文書
 
 - cockpit の [DESIGN.md](https://github.com/gyroid-eth/orrery/blob/master/docs/DESIGN.md)（親。概念と cockpit 側の layout）
-- [Dashboard](dashboard.md)（機能と操作）
-- [設定](configuration.md)（`AGENTSTACK_*` 環境変数）
+- [Dashboard](https://github.com/gyroid-eth/orrery/blob/master/docs/dashboard.md)（機能と操作）
+- [設定](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md)（`AGENTSTACK_*` 環境変数）
 - [CONTRIBUTING.md](../CONTRIBUTING.md)（PR の出し方）

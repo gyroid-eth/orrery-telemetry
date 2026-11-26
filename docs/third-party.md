@@ -1,6 +1,6 @@
 # 第三者コンポーネント
 
-[前: トラブルシューティング](troubleshooting.md) · [README に戻る](../README.md)
+[前: トラブルシューティング](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-troubleshooting.md) · [README に戻る](../README.md)
 
 ORRERY Telemetry は identity、mail、reservation、signal の正本として、repository
 内の `packages/agentstack_mail` から構築する ORRERY Mail を同梱します。installer が

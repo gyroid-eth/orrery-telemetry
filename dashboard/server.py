@@ -5047,7 +5047,7 @@ _CLAUDE_MAIL_REMEDY = {
         "To keep Mail, update ORRERY Mail before resuming. For the Mail this project's installer "
         "deployed: in an up-to-date orrery-telemetry checkout run "
         "./scripts/install.sh --update-mail --dry-run, then ./scripts/install.sh --update-mail. "
-        "If the dry run refuses, stop and follow docs/agentstack-mail-update.md instead. "
+        "If the dry run refuses, stop and follow https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md instead. "
         "Afterwards this agent's resume should no longer say WITHOUT MAIL; a conversation already "
         "resumed without Mail must exit first. Without the update, resuming stays conversation only."
     ),

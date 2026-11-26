@@ -49,7 +49,7 @@ export ORRERY_MCP_ENABLE_MESSAGE=1
 
 DashboardのURLは実際の試験用listenerに合わせ、使用中のポートは指定しません。checkは送信せず、固定権限とDashboardのinstanceを検証します。serveは検証後に127.0.0.1だけで待ち受けます。稼働中のpolicy・contextの変更や失効は新規送信前に拒否します。
 
-Tunnelを使う場合は[既存の接続手順](README.md#secure-mcp-tunnelの設定)に従い、この試験用入口に専用Tunnelを用意します。所有するorganization/workspace、共有する利用者・グループ、runtime keyのRead/Use権限、ChatGPT接続の共有範囲を確認してください。秘密pathと固定Hostを保ち、Origin検査を解除しません。READMEのURL抽出コマンドは、その単発のPython呼出しだけ `ORRERY_MCP_ENABLE_MESSAGE=0` で実行します。稼働中freshプロセスの設定を変更する操作ではありません。Mailの実効的な本文ログ設定を確認し、秘密URLが含まれ得るTunnelログもowner-privateに保ちます。アダプターは別プロセスのログ設定を自動変更しません。
+Tunnelを使う場合は[既存の接続手順](https://github.com/gyroid-eth/orrery/blob/master/docs/chatgpt-mcp.md#secure-mcp-tunnelの設定)に従い、この試験用入口に専用Tunnelを用意します。所有するorganization/workspace、共有する利用者・グループ、runtime keyのRead/Use権限、ChatGPT接続の共有範囲を確認してください。秘密pathと固定Hostを保ち、Origin検査を解除しません。リンク先のURL抽出コマンドは、その単発のPython呼出しだけ `ORRERY_MCP_ENABLE_MESSAGE=0` で実行します。稼働中freshプロセスの設定を変更する操作ではありません。Mailの実効的な本文ログ設定を確認し、秘密URLが含まれ得るTunnelログもowner-privateに保ちます。アダプターは別プロセスのログ設定を自動変更しません。
 
 ## preview・commit・status
 

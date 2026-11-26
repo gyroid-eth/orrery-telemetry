@@ -1,6 +1,6 @@
 # Switch to an empty Mail instance (in preparation)
 
-[日本語](fresh-global-update.md) · [User-level instructions](instruction-migration.en.md)
+[日本語](fresh-global-update.md) · [User-level instructions](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md)
 
 **This guide cannot yet complete a production cutover.** Empty Mail and explicit clients, automatic children, managed harnesses, App adapters, screen APIs, PC input, R4 and ended-agent cleanup have limited fixture coverage. Private checks also cover saved settings and Mail/controller → dashboard host → Cockpit startup, refusals and owned-process shutdown. Real OS managers/Finder GUI/App/provider/login/trust/live-install acceptance, final CI and an attended cutover remain incomplete. Japanese paths on case-insensitive Macs are supported **only within the restricted profile on natively identified APFS**; characters outside it and other filesystems such as HFS still refuse with `CASE_RULES_UNKNOWN`. Windows-side WSL folders have not passed acceptance on a real machine. Check the scope below for your working paths and stop if they fall outside it. Do not run the following against an existing installation until the outstanding work is accepted and the operator has approved an attended cutover.
 
@@ -91,9 +91,9 @@ env AGENTSTACK_RUNTIME_MODE=fresh AGENTSTACK_CLIENT_CONFIG= AGENTSTACK_GLOBAL_SE
     --host 127.0.0.1 --port "$orrery_cockpit_port" --tmux-bin "$orrery_tmux"
 ```
 
-This starts an explicit backend. With prepared context/socket references explicitly selected, the installer saves the same config/I and passes them to normal services, preserving them on updates. The selected Python must already provide the matching Mail module. Cockpit script and Finder share a literal settings loader and check the same I/context digest/epoch. Set telemetry_home in Cockpit shared config for a custom installation; Finder does not inherit shell exports. Do not start duplicate backends. R4 needs the separate human opt-in in the [mobile guide](mobile.en.md#inspect-a-pane-and-send-input-from-your-phone).
+This starts an explicit backend. With prepared context/socket references explicitly selected, the installer saves the same config/I and passes them to normal services, preserving them on updates. The selected Python must already provide the matching Mail module. Cockpit script and Finder share a literal settings loader and check the same I/context digest/epoch. Set telemetry_home in Cockpit shared config for a custom installation; Finder does not inherit shell exports. Do not start duplicate backends. R4 needs the separate human opt-in in the [mobile guide](https://github.com/gyroid-eth/orrery/blob/master/docs/en/mobile.md#inspect-a-pane-and-send-input-from-your-phone).
 
-Determine the actual versions, explicit configurations/roots, service managers, and exact stop/restart commands from the installation's [install guide](install.md), [configuration](configuration.md), and registered settings. This page does not guess launchd/systemd names or shutdown commands. Stop if the endpoint or manager is unknown; do not substitute another database or port.
+Determine the actual versions, explicit configurations/roots, service managers, and exact stop/restart commands from the installation's [install guide](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md), [configuration](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md), and registered settings. This page does not guess launchd/systemd names or shutdown commands. Stop if the endpoint or manager is unknown; do not substitute another database or port.
 
 Record work, pending replies, and file ownership first. Before editing a note, reserve its path through the currently valid coordination connection. Do not keep editing after a reservation expires or communication fails. Old reservations do not authorize work after shutdown.
 
@@ -175,10 +175,10 @@ printf '%s\n' '{}' | "$orrery_python" -m agentstack_mail.fresh_client call-json 
 
   | Provider | Prepare before startup |
   |---|---|
-  | Claude Channels | Configure the existing Channels plugin and selector in the prepared Claude HOME, then point to the corresponding Channels state. [Claude Channels setup](persistent-agents.en.md#claude-channels-in-fresh-mode) |
-  | Hermes Telegram | Provision the verified TUI with the managed installer. Set the managed manifest, Telegram credential reference and allowlist, and place any needed non-secret settings in the dedicated Hermes HOME. [Hermes Telegram setup](persistent-agents.en.md#fresh-hermes-telegram-interactive) |
+  | Claude Channels | Configure the existing Channels plugin and selector in the prepared Claude HOME, then point to the corresponding Channels state. [Claude Channels setup](https://github.com/gyroid-eth/orrery/blob/master/docs/en/persistent-agents.md#claude-channels-in-fresh-mode) |
+  | Hermes Telegram | Provision the verified TUI with the managed installer. Set the managed manifest, Telegram credential reference and allowlist, and place any needed non-secret settings in the dedicated Hermes HOME. [Hermes Telegram setup](https://github.com/gyroid-eth/orrery/blob/master/docs/en/persistent-agents.md#fresh-hermes-telegram-interactive) |
 
-- **Verify** the new Mail instance and bot ID with `reconnect`, then run `agentstack-persistent inspect --profile` on each profile as described in the [persistent agent guide](persistent-agents.en.md#claude-channels-in-fresh-mode). Use the verified Python and matching installed launcher. Check that the preserved old settings and new profile are separate.
+- **Verify** the new Mail instance and bot ID with `reconnect`, then run `agentstack-persistent inspect --profile` on each profile as described in the [persistent agent guide](https://github.com/gyroid-eth/orrery/blob/master/docs/en/persistent-agents.md#claude-channels-in-fresh-mode). Use the verified Python and matching installed launcher. Check that the preserved old settings and new profile are separate.
 - **Recover** from a preparation failure by recording the result and withholding startup. If the old production setup has already stopped, follow [step 8](#8-recover-by-procedure-after-a-failure).
 
 ### Install user-level fresh instructions with the existing setup CLI
@@ -208,7 +208,7 @@ Run the existing setup's read-only plan with the fixed provider HOME as cwd. Bot
 )
 ```
 
-Check `target_path`/`resolved_home`, the selected fresh template, affected files, and `plan_id`. Planning creates no files or locks. Follow the [instruction migration consent contract](instruction-migration.en.md#consent): **hand existing-content changes to the operator's terminal for confirmation**. Creating only a new file needs no additional consent under the existing engine's contract. An agent must not add `--assume-yes` or bypass a pending confirmation through another writer.
+Check `target_path`/`resolved_home`, the selected fresh template, affected files, and `plan_id`. Planning creates no files or locks. Follow the [instruction migration consent contract](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#consent): **hand existing-content changes to the operator's terminal for confirmation**. Creating only a new file needs no additional consent under the existing engine's contract. An agent must not add `--assume-yes` or bypass a pending confirmation through another writer.
 
 Apply the verified plan ID with **the same cwd and every environment selection**. Do not paste only the returned `apply_argv` into another terminal without its environment.
 
@@ -312,7 +312,7 @@ Resume accepts **only native sessions already recorded by this new client**. It 
 ### Resolve an unfinished run, then restart normally
 
 Call the shared prepared-context command `agentstack-runtime-client resolve-ended --launch-id <current-run-UUID> --confirm-ended`
-with the same fresh environment and Python as above. Check [end kinds and refusal reasons](persistent-agents.en.md#close-an-unfinished-fresh-run).
+with the same fresh environment and Python as above. Check [end kinds and refusal reasons](https://github.com/gyroid-eth/orrery/blob/master/docs/en/persistent-agents.md#close-an-unfinished-fresh-run).
 Only after `ok:true`, separately use ordinary launch or persistent run with the same context. Preserve the old run.
 This differs from the old global `operator-json launch-resolve` contract; legacy and Desktop closure are unchanged.
 Old runs without versioned group observations, unavailable observations, live processes or a different identity/generation HOLD or refuse; do not handwrite recovery records.
@@ -469,7 +469,7 @@ Notification completion records the stdout/pane handoff operation, not read/ACK,
 ### Restore persistent bots
 
 - **Operator** uses the separate maintenance terminal to confirm which steps completed and decide whether to restore the old setup.
-- **Agent** stops each running new bot's restart source. If its launcher is still running, send SIGTERM and wait. Confirm the owned processes and poller have exited for each recorded startup entry. If termination is uncertain, report the reason and keep the old poller stopped. See [how to handle unfinished persistent runs](persistent-agents.en.md#close-an-unfinished-fresh-run). Follow the shared recovery procedure below to preserve the new setup and restore old Mail and related services, then relaunch each bot through its original manager with the preserved version and settings.
+- **Agent** stops each running new bot's restart source. If its launcher is still running, send SIGTERM and wait. Confirm the owned processes and poller have exited for each recorded startup entry. If termination is uncertain, report the reason and keep the old poller stopped. See [how to handle unfinished persistent runs](https://github.com/gyroid-eth/orrery/blob/master/docs/en/persistent-agents.md#close-an-unfinished-fresh-run). Follow the shared recovery procedure below to preserve the new setup and restore old Mail and related services, then relaunch each bot through its original manager with the preserved version and settings.
 - **Verify** exactly one poller per Telegram bot and Mail send/receive as the old registration. Recheck Telegram, Mail and Reader, comparing Reader with its state before cutover.
 - **Recover** from a failed old-bot restart by stopping its restart source and preserving the old and new records. Keep directing recovery from the separate terminal and resume when the state is confirmed.
 

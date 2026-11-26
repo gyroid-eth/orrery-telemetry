@@ -222,7 +222,7 @@ def test_an_unverified_legacy_child_is_left_untouched_and_not_sent_to_preregiste
     assert "earlier version" in result.stderr
     assert "dashboard" in result.stderr
     if failure == "mail_too_old":
-        assert "docs/agentstack-mail-update.md" in result.stderr
+        assert "https://github.com/gyroid-eth/orrery/blob/master/docs/agentstack-mail-update.md" in result.stderr
         assert not [name for name, _ in mail.calls if name == "register_agent"]
 
 
