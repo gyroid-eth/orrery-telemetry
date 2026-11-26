@@ -351,6 +351,16 @@ def test_reply_above_a_named_input_border_is_not_work():
 
 
 
+def test_claude_completion_timestamp_does_not_join_the_update_hint():
+    # Reproduce the completion and tip rows from an idle Channels pane.
+    current = (
+        "✻ Worked for 1s · done 7:15 PM\n"
+        "  new task? /clear to save 150.4k to… · ✔ Update installed · /restart to apply\n"
+    )
+    parsed = server._parse_runtime(_OLD_WORK + "\n" + current + _CLAUDE_NAMED_INPUT)
+    assert (parsed["act_state"], parsed["work_secs"], parsed["last_disp"]) == ("wait", None, "1s")
+
+
 def test_long_codex_work_with_background_terminals_and_tip_is_work():
     # Codex appends the exact background-terminal summary after the interrupt
     # hint and may show a tip line under it while work continues for minutes.
