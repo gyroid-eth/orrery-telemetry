@@ -32,7 +32,7 @@
         "prompt_count": 0
       },
       "core": {
-        "tool_count": 25,
+        "tool_count": 26,
         "resource_count": 0,
         "resource_template_count": 0,
         "prompt_count": 0
@@ -207,7 +207,7 @@
           ]
         },
         "core": {
-          "tool_count": 25,
+          "tool_count": 26,
           "resource_count": 0,
           "resource_names": [],
           "resource_template_count": 0,
@@ -237,12 +237,13 @@
             "search_messages",
             "send_message",
             "set_contact_policy",
+            "show_files",
             "summarize_thread",
             "unretire_agent",
             "whois"
           ]
         },
-        "reason": "Live publishes 40 tools, zero concrete resources, 21 resource templates, and zero prompts. Core publishes the exact v1 compatibility union while suppressing the 16 non-compatibility live tools and all 21 live resource templates; Core publishes zero concrete resources and zero prompts."
+        "reason": "Live publishes 40 tools, zero concrete resources, 21 resource templates, and zero prompts. Core publishes the exact v1 compatibility union and the direct local show_files tool. Core publishes zero concrete resources, resource templates, or prompts."
       },
       {
         "id": "isolation.namespace",

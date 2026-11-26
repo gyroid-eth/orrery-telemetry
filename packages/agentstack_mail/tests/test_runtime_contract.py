@@ -14,7 +14,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
-from agentstack_mail.contract import COMPATIBILITY_TOOLS, ISOLATION_DEFAULTS
+from agentstack_mail.contract import COMPATIBILITY_TOOLS, ISOLATION_DEFAULTS, PUBLISHED_TOOLS
 
 LEGACY_ENV = {
     "PORT": "8765",
@@ -148,7 +148,7 @@ def test_invalid_agent_name_mode_keeps_frozen_coerce_fallback(
         _require_attr(config, "clear_settings_cache")()
 
 
-def test_mcp_server_exposes_only_the_compatibility_tools() -> None:
+def test_mcp_server_exposes_only_the_published_tools() -> None:
     app = _require_module("agentstack_mail.app")
     build_mcp_server = _require_attr(app, "build_mcp_server")
 
@@ -164,8 +164,7 @@ def test_mcp_server_exposes_only_the_compatibility_tools() -> None:
         inspect_server()
     )
 
-    assert len(tool_names) == len(COMPATIBILITY_TOOLS) == 25
-    assert tool_names == COMPATIBILITY_TOOLS
+    assert tool_names == PUBLISHED_TOOLS
     assert not resources
     assert not resource_templates
     assert not prompts
@@ -193,7 +192,7 @@ def test_actual_tool_schemas_match_the_frozen_live_contract() -> None:
         return {
             name: {key: dumped[key] for key in schema_fields if key in dumped}
             for name, tool in tools.items()
-            if (
+            if name in COMPATIBILITY_TOOLS and (
                 dumped := tool.to_mcp_tool().model_dump(
                     mode="json",
                     by_alias=True,
@@ -243,7 +242,7 @@ def test_boundary_checks_the_actual_registry_after_mutation() -> None:
 
     mcp.remove_tool("whois")
 
-    assert mcp.published_tool_names == COMPATIBILITY_TOOLS
+    assert mcp.published_tool_names == PUBLISHED_TOOLS
     with pytest.raises(RuntimeError, match=r"missing=\['whois'\]"):
         mcp.assert_contract_boundary()
 

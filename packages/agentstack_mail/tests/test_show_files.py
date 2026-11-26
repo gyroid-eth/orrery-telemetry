@@ -26,7 +26,7 @@ def work(tmp_path):
     return tmp_path / 'work'
 
 
-def test_with_a_known_working_folder_paths_are_checked_with_lstat_only(work):
+def test_with_a_known_working_folder_checks_metadata_without_reading(work):
     value = show_files.result(['docs/report.md', str(work / 'figure.webp'), 'link.png', 'docs', 'gone.md'],
                               base=str(work))
     assert value['present'] == ['docs/report.md', str(work / 'figure.webp')]
@@ -36,11 +36,22 @@ def test_with_a_known_working_folder_paths_are_checked_with_lstat_only(work):
     assert 'private body' not in json.dumps(value)
 
 
-def test_outside_the_working_folder_is_not_even_looked_at(work):
-    outside = [str(work.parent / 'elsewhere.md'), '../elsewhere.md', 'docs/../../elsewhere.md']
-    value = show_files.result(outside, base=str(work))
-    assert value['files'] == [{'path': path, 'outside_working_folder': True} for path in outside]
-    assert value['present'] == []
+def test_external_files_require_an_absolute_path(work):
+    absolute = str(work.parent / 'elsewhere.md')
+    relative = ['../elsewhere.md', 'docs/../../elsewhere.md']
+    value = show_files.result([absolute, *relative], base=str(work))
+    assert value['files'][1:] == [{'path': path, 'outside_working_folder': True} for path in relative]
+    assert value['present'] == [absolute]
+
+
+def test_unreadable_regular_file_is_omitted_with_a_reason(work, monkeypatch):
+    path = str(work.parent / 'elsewhere.md')
+    original_access = os.access
+    monkeypatch.setattr(os, 'access', lambda p, mode: False if p == path else original_access(p, mode))
+    result = show_files.result([path], absolute_only=True)
+    assert result['present'] == []
+    assert result['files'][0]['exists']
+    assert result['files'][0]['reason'] == 'OS permissions do not allow reading this path.'
 
 
 def test_without_a_known_folder_relative_paths_are_left_to_the_cockpit(work, tmp_path, monkeypatch):

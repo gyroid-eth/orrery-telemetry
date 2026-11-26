@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from agentstack_mail import app, authorization, config, db
-from agentstack_mail.contract import COMPATIBILITY_TOOLS
+from agentstack_mail.contract import COMPATIBILITY_TOOLS, PUBLISHED_TOOLS
 from fastmcp import Client
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -88,8 +88,7 @@ def test_authorization_catalog_exactly_matches_the_published_contract() -> None:
 
     assert authorization.authorization_catalog_is_complete()
     assert authorization.catalog_record_shape() == EXPECTED_FIELDS
-    assert set(catalog) == COMPATIBILITY_TOOLS
-    assert len(catalog) == 25  # 24 at cutover + unretire_agent (2026-08-28)
+    assert set(catalog) == PUBLISHED_TOOLS
     # The rule text is the published claim about who may call this. It drifted
     # once already: the code was changed to trust the loopback caller while the
     # catalog still told operators a token was required.
@@ -111,13 +110,15 @@ def test_authorization_catalog_exactly_matches_the_published_contract() -> None:
         },
         "default_principal_candidate": authorization.LOCAL_SINGLE_PRINCIPAL,
         "rule_status": (
-            "current_loopback_retire_unretire_boundary_other_rules_prospective_non_binding"
+            "current_loopback_retire_unretire_show_files_boundary_other_rules_prospective_non_binding"
         ),
         "tools": authorization.catalog_as_plain_data(),
     }
 
     expected_required = _live_required_arguments()
     input_properties = _live_input_properties()
+    expected_required["show_files"] = ("paths",)
+    input_properties["show_files"] = {"paths"}
     for tool_name, record in catalog.items():
         assert set(record) == EXPECTED_FIELDS
         assert record["required_arguments"] == expected_required[tool_name]
@@ -170,10 +171,10 @@ def test_missing_or_empty_shadow_policy_denies_nothing(
 
     observations = [
         authorization.record_shadow_authorization(tool_name, policy=policy)
-        for tool_name in sorted(COMPATIBILITY_TOOLS)
+        for tool_name in sorted(PUBLISHED_TOOLS)
     ]
 
-    assert len(observations) == 25  # one per published tool
+    assert len(observations) == len(PUBLISHED_TOOLS)
     assert {item["decision"] for item in observations} == {"would_allow"}
     assert {item["reason"] for item in observations} == {"policy_empty_default_allow"}
     assert not [item for item in observations if item["decision"] == "would_deny"]

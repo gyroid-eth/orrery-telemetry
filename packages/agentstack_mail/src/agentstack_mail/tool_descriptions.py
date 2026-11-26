@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
+from .show_files import DIRECT_DESCRIPTION
+
 COMPACT_TOOL_DESCRIPTIONS = MappingProxyType(
     {
         "acknowledge_message": (
@@ -56,6 +58,7 @@ COMPACT_TOOL_DESCRIPTIONS = MappingProxyType(
             "Return service readiness (status, endpoint, database). No "
             "arguments; safe to call anytime."
         ),
+        "show_files": DIRECT_DESCRIPTION,
         "list_contacts": (
             "List an agent's contacts and their policies. Args: project_key, "
             "agent_name."

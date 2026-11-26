@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from agentstack_mail.contract import COMPATIBILITY_TOOLS, CONTRACT_VERSION
+from agentstack_mail.contract import COMPATIBILITY_TOOLS, CONTRACT_VERSION, PUBLISHED_TOOLS
 from agentstack_mail.namespace_contract import (
     NamespaceAdapter,
     NamespaceContractError,
@@ -544,7 +544,7 @@ def test_default_mcp_still_routes_by_project_and_preserves_v1_schema(
         try:
             async with Client(app.build_mcp_server()) as client:
                 tools = await client.list_tools()
-                assert {tool.name for tool in tools} == COMPATIBILITY_TOOLS
+                assert {tool.name for tool in tools} == PUBLISHED_TOOLS
                 send_schema = next(
                     tool.inputSchema for tool in tools if tool.name == "send_message"
                 )
@@ -553,6 +553,8 @@ def test_default_mcp_still_routes_by_project_and_preserves_v1_schema(
                 assert "reply_to" not in send_schema["properties"]
                 candidate_tools = load_namespace_contract()["tools"]
                 for tool in tools:
+                    if tool.name not in COMPATIBILITY_TOOLS:
+                        continue
                     properties = dict(
                         candidate_tools[tool.name]["input_schema"]["properties"]
                     )

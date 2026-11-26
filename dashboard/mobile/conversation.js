@@ -523,6 +523,7 @@ const previewMessages={
  preview_too_large:'Too large to preview on the phone.',
  preview_type_denied:'This kind of file cannot be previewed.',
  preview_path_denied:'Not previewable: outside the agent’s folders.',
+ preview_permission_denied:'OS permissions do not allow reading this file.',
  preview_changed:'The file changed while it was read. Tap again.',
  history_slow:'Taking longer than usual: the computer is busy. Tap the file again.',
 };

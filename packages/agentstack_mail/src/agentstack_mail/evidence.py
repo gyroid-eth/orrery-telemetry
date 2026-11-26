@@ -44,7 +44,7 @@ from fastmcp import Client
 
 from . import restore_acceptance
 from . import service as service_runtime
-from .contract import COMPATIBILITY_TOOLS
+from .contract import PUBLISHED_TOOLS
 
 
 HTTP_RECEIPT_NAME: Final[str] = "http-cli-transport-v1.json"
@@ -999,12 +999,12 @@ def _wait_ready(
             time.sleep(0.1)
             continue
         if (
-            set(result["tool_names"]) != COMPATIBILITY_TOOLS
-            or result["tool_count"] != len(COMPATIBILITY_TOOLS)
+            set(result["tool_names"]) != PUBLISHED_TOOLS
+            or result["tool_count"] != len(PUBLISHED_TOOLS)
         ):
             raise EvidenceError(
                 "running server did not publish the exact "
-                f"{len(COMPATIBILITY_TOOLS)}-tool boundary"
+                f"{len(PUBLISHED_TOOLS)}-tool boundary"
             )
         return {
             **result,
@@ -1760,12 +1760,12 @@ def _wait_launchd_ready(
             time.sleep(0.1)
             continue
         if (
-            set(probe["tool_names"]) != COMPATIBILITY_TOOLS
-            or probe["tool_count"] != len(COMPATIBILITY_TOOLS)
+            set(probe["tool_names"]) != PUBLISHED_TOOLS
+            or probe["tool_count"] != len(PUBLISHED_TOOLS)
         ):
             raise EvidenceError(
                 "launchd server did not publish the exact "
-                f"{len(COMPATIBILITY_TOOLS)}-tool boundary"
+                f"{len(PUBLISHED_TOOLS)}-tool boundary"
             )
         return {
             **probe,
