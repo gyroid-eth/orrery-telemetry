@@ -1,10 +1,16 @@
 """Pure terminal evidence shared by observation and explicit compact admission."""
 import re
 
-try:
+if __package__:
     from .question_screen import parse_agy_question, parse_codex_question
-except ImportError:
-    from question_screen import parse_agy_question, parse_codex_question
+else:
+    from pathlib import Path
+    from runpy import run_path
+
+    # The watcher loads this module by path in both the checkout and bin/lib.
+    questions = run_path(str(Path(__file__).resolve().with_name('question_screen.py')))
+    parse_agy_question = questions['parse_agy_question']
+    parse_codex_question = questions['parse_codex_question']
 
 _CTX_RE = re.compile(r"ctx:\s*(\d+)%\s*used")
 _CTX_CODEX_LEFT_RE = re.compile(r"Context\s+(\d+)%\s*left", re.IGNORECASE)
