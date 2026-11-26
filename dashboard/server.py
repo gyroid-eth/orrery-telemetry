@@ -48,7 +48,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 56
+API_GENERATION = 57
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -1977,7 +1977,7 @@ def lookup_agent(name: str, history_days: float | None = None, *, sessions: dict
 
 
 def _history_binding_fields(row: dict, *, now: float, claude_index=None, session_state=None,
-                            reuse_stopped: bool = False) -> dict:
+                            reuse_stopped: bool = False, include_activity: bool = False) -> dict:
     """The conversation-record binding fields of one roster row.
 
     The single place build_agents() and history_binding_row() take them from,
@@ -2014,8 +2014,28 @@ def _history_binding_fields(row: dict, *, now: float, claude_index=None, session
     if program == "dsh":
         return _dsh_history_binding(row["name"], session_created=row.get("created"))
     if program == "hermes":
-        return _hermes_history_binding(row["name"], session_created=row.get("created"))
+        return _hermes_history_binding(row["name"], session_created=row.get("created"),
+                                       include_activity=include_activity)
     return {}
+
+
+def _transcript_active_at(program: str, binding: dict, now: float) -> int:
+    """Use only the transcript attributed to this conversation."""
+    if binding.get("history_binding") != "bound":
+        return 0
+    if program == "hermes":
+        # SQLite is shared by conversations; its mtime can belong to another one.
+        stamp = binding.get("_transcript_activity")
+    else:
+        path = binding.get("transcript_path")
+        if not path:
+            return 0
+        try:
+            info = os.stat(path, follow_symlinks=False)
+        except OSError:
+            return 0
+        stamp = info.st_mtime if stat.S_ISREG(info.st_mode) else None
+    return int(stamp) if type(stamp) in (int, float) and 0 < stamp <= now else 0
 
 
 _HISTORY_BINDING_PATH = re.compile(r"/api/agents/[^/]*/history-binding")
@@ -2617,9 +2637,17 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
         )
         if row.get("program") in {"claude", "claude-code"} and claude_history_index is None:
             claude_history_index = claude_history.ReceiptIndex(SESSION_INDEX_DIR)
-        row.update(_history_binding_fields(row, now=observed_now, claude_index=claude_history_index,
-                                          session_state=sessions.get(row["name"]),
-                                          reuse_stopped=True))
+        live_tmux = row["running"] and row["surface"] == "tmux"
+        binding = _history_binding_fields(row, now=observed_now, claude_index=claude_history_index,
+                                          session_state=sessions.get(name), reuse_stopped=True,
+                                          include_activity=live_tmux)
+        if live_tmux:
+            transcript_at = _transcript_active_at(row["program"], binding, observed_now)
+            if transcript_at > row["last_active"]:
+                row["last_active"] = transcript_at
+                row["last_active_rel"] = _rel(transcript_at, int(observed_now))
+        binding.pop("_transcript_activity", None)
+        row.update(binding)
         registration = None
         if registrations is not None and project_key and row.get("project_key") == project_key:
             registered = registrations.by_project.get((project_key, name))
@@ -5597,13 +5625,14 @@ def _native_resume_launcher_ready():
         return False
 
 
-def _hermes_history_binding(session, *, session_created=None, tools_generation=None):
+def _hermes_history_binding(session, *, session_created=None, tools_generation=None, include_activity=False):
     # Fresh history remains receipt-mediated; never expose legacy provider paths.
     if FRESH_MODE:
         return hermes_history.unbound('fresh_history_provider_unavailable')
     return hermes_history.history_binding(RUNTIME_DIR, Path(HOOKS_DIR).parent, session,
                                          _resume_registration(session, {'hermes'}),
-                                         session_created=session_created, tools_generation=tools_generation)
+                                         session_created=session_created, tools_generation=tools_generation,
+                                         include_activity=include_activity)
 
 
 def _native_resume_material(session, program, *, allow_active=False):
