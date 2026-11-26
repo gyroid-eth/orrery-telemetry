@@ -86,7 +86,7 @@ supported delegated route.
 
 ### Reader
 
-With API 48 Telemetry and the matching Cockpit, managed interactive `agy` sessions are readable in the desktop and phone Reader. The existing `--configure-mcp` option adds the `orrery-reader` group to `hooks.json` and preserves the user's other groups. After setup, newly launched sessions show history from their first input. Text appears as Antigravity records it, and a finished compact appears as **Context compacted**. If a launch reports different conversation UUIDs, Reader waits for a new managed launch to establish its binding.
+Use Reader on desktop or phone to follow a managed interactive `agy` session as it works. Reader organizes the messages, tool activity, and results recorded by Antigravity. This requires Telemetry API 48 and a matching Cockpit. The existing `--configure-mcp` option adds the `orrery-reader` group to `hooks.json` and preserves the user's other groups. Sessions started after setup show work from the first input, including earlier messages you want to revisit. Text appears as Antigravity records it, and a finished compact appears as **Context compacted**. If a launch reports different conversation UUIDs, Reader waits for a new managed launch to establish its binding.
 
 Defaults:
 

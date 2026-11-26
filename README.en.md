@@ -6,13 +6,13 @@ Claude Code, Codex, DeepSeek and Local LLM agents can talk directly, divide the 
 
 ## To install both (the orrery one-liner)
 
-For your first install, start with the **cockpit in your browser**. Follow [the prerequisites for your OS](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#before-you-start), then run this line to install both the cockpit and Telemetry.
+For your first install, start with the **cockpit in your browser**. Follow [the prerequisites for your OS](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md#requirements), then run this line to install both the cockpit and Telemetry.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh | bash
 ```
 
-Review and approve the plan yourself. Check for `ORRERY's base is ready` and **Your first flight** in your browser. [Completion checks and feature setup](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#check-that-the-base-install-is-complete) · [Install with help from your agent](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install-with-agent.md)
+Review and approve the plan yourself. Check for `ORRERY's base is ready` and **Your first flight** in your browser. [Completion checks and feature setup](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md#install-or-update-with-one-line) · [Install with help from your agent](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install-with-agent.md)
 
 ![Select a Mail edge in Telemetry NETWORK to read messages between two agents](docs/img/network-mail.gif)
 
@@ -35,7 +35,7 @@ The demo uses the Telemetry form and a fictional catalog. The [cockpit guide](ht
 
 ## Install Telemetry only
 
-This repository alone gives you the part that runs behind the scenes. You need Python 3.11 or later, `git`, `tmux`, and `uv`. Follow the [OS prerequisites](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#before-you-start) for `curl`, `lsof`, and `xz`. If you use uv's official installer, add it to the current PATH. On Windows, run the steps inside WSL2 Ubuntu.
+This repository alone gives you the part that runs behind the scenes. You need Python 3.11 or later, `git`, `tmux`, and `uv`. Follow the [OS prerequisites](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md#requirements) for `curl`, `lsof`, and `xz`. If you use uv's official installer, add it to the current PATH. On Windows, run the steps inside WSL2 Ubuntu.
 
 ```bash
 git clone https://github.com/gyroid-eth/orrery-telemetry.git
@@ -76,7 +76,7 @@ Try **Your first flight → help map → Full tour** in cockpit. Learn the basic
 
 In the Telemetry header, choose `HELP MAP` (beside `SETTINGS` in NETWORK) to annotate the visible DECK / NETWORK controls. In an agent detail panel, choose the `HELP MAP` button in its action row to annotate the panel’s controls. These entries also work when Telemetry is embedded in cockpit. If the annotations do not fit, they appear as a legend; press `Esc` or choose `Close` to dismiss it.
 
-Full tour guides you through creating one child with the delegate skill (Claude Code: `/delegate`, Codex: `$delegate`), playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. DeepSeek and Local children can use the same manual three-round-trip check; verify dsh and Hermes separately ([steps](docs/getting-started.en.md#5-play-shiritori-as-an-end-to-end-check)). See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/README.en.md#quick-start) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/en/FULL_TOUR.md).
+Full tour guides you through creating one child with the delegate skill (Claude Code: `/delegate`, Codex: `$delegate`), playing three shiritori round trips over ORRERY Mail, arranging terminals, and trying Telemetry EXIT / RESUME and NETWORK / REPLAY. Follow the controls described on screen to advance. DeepSeek and Local children can use the same manual three-round-trip check; verify dsh and Hermes separately ([steps](docs/getting-started.en.md#5-play-shiritori-as-an-end-to-end-check)). See the [current quick start](https://github.com/gyroid-eth/orrery/blob/master/docs/en/install.md#install-or-update-with-one-line) and [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/en/FULL_TOUR.md).
 
 Cockpit is where you work in terminals; Telemetry is where you view the team's status and history. Start with the in-app guides, then use the [documentation index](docs/README.en.md) for detailed references.
 

@@ -78,7 +78,7 @@ When step 3 has a ✓, check in the Tailscale admin console who and which device
 
 The badge says **ON** and the setup steps are gone. **Check it yourself:** all four Status lines are green (reader, Serve, Funnel off, policy). To change the login or the address, use **Change owner or address**.
 
-### Conversations on the phone
+### Follow the work on your phone
 
 Claude and Codex records show the same **Agent steps** as the desktop Reader. Messages, Mail, and system notices separate adjacent runs of operations into different cards. Completed operations appear one at a time, with **Working…** and elapsed time during work. On completion the card folds into **Worked for … · N steps**; tap to expand it. Historical turns start collapsed. Only explicit failure is **Failed**; an operation without a recorded outcome is **Observed**. Codex inner operations appear after their completion record arrives; execution in progress is not inferred. Target summaries use one ellipsized line.
 
@@ -86,7 +86,7 @@ With the legacy dashboard and current cockpit, Claude Code, Codex CLI, dsh and H
 
 Replaced tool labels do not repeat, while files, images, Mail and unsupported tool groups stay available. An unmatched Claude result asks to load earlier requests. The phone receives only bounded tool names, existing target summaries, times, status, opaque IDs and turn markers; no new raw arguments, output, paths or cockpit reference IDs. Page and byte limits stay the same. Demo continues to work and masks targets by the same existing rules as other text. Backgrounding pauses motion and the clock; Close clears them. OS reduced motion is respected. Motion reuses the desktop adaptation of [kokonutUI AI Loading](https://kokonutui.com/) (MIT), retaining its license in source.
 
-On the phone, open the **Address on the phone** from step 2 (`https://…:9443/`) and open an agent. The first HTTPS request can take a few seconds while the certificate is issued. When the **Conversation** tab appears, conversation records reach the phone ([Read an agent's conversation history](#read-an-agents-conversation-history-on-your-phone)).
+On the phone, open the **Address on the phone** from step 2 (`https://…:9443/`) and open an agent. The first HTTPS request can take a few seconds while the certificate is issued. When the **Conversation** tab appears, you can [follow the agent’s work in Reader](#follow-an-agents-work-in-reader).
 
 
 ### In demo mode
@@ -311,7 +311,7 @@ Do not treat `enabled:false` or an error as successful activation; check the ver
 
 Tap a Graph agent or a search result name to open the same sheet. The Reader icons on Status rows, attention rows, and Mail-detail From/To entries open the same sheet. There is no separate selected-agent card below Graph. Mail-detail actions remain. Choose a pane when several exist; an unknown mapping is never guessed from the label. In legacy, only panes already handled by the PC manager on the same transport and admitted by its protection are eligible. Agent type and the displayed time period are not authorization. No other socket or global target is used as a fallback. A pane's session may be outside the current metadata project. For fresh, use the explicit I/A procedure below.
 
-The selected pane shows its last 120 lines, limited to 12 KiB of UTF-8. With Conversation enabled, Terminal fills the reading surface and aligns short output at the bottom. Long lines wrap and continuation lines retain their original indentation (limited to 40% of the screen width for deeply nested output). Divider-only lines stay on one line and are clipped to the width. The frame is removed. Limits, update timing and Shown time appear in one small row below the text. Truncation, removed control sequences and paused reading appear below only when needed. A small dot marks activity, while paused reading and failures stay visible. Only that open, foreground pane updates about every three seconds; failures back off to 6, 12 and at most 24 seconds. Removed control sequences and shortened text are marked. Images, HTML and links never execute. Full recorder/restored history is not forwarded; the separate [History opt-in](#read-an-agents-conversation-history-on-your-phone) shows only verified conversation records. **Terminal text can contain keys or private writing.** Check it before sharing the screen.
+The selected pane shows its last 120 lines, limited to 12 KiB of UTF-8. With Conversation enabled, Terminal fills the reading surface and aligns short output at the bottom. Long lines wrap and continuation lines retain their original indentation (limited to 40% of the screen width for deeply nested output). Divider-only lines stay on one line and are clipped to the width. The frame is removed. Limits, update timing and Shown time appear in one small row below the text. Truncation, removed control sequences and paused reading appear below only when needed. A small dot marks activity, while paused reading and failures stay visible. Only that open, foreground pane updates about every three seconds; failures back off to 6, 12 and at most 24 seconds. Removed control sequences and shortened text are marked. Images, HTML and links never execute. Full recorder/restored history is not forwarded; the separate [Conversation in Reader](#follow-an-agents-work-in-reader) shows only verified conversation records. **Terminal text can contain keys or private writing.** Check it before sharing the screen.
 
 Expanded terminal previews require `X-ORRERY-Mobile-Preview: 120/12288` on the loopback request. If either side is older, previews keep the 40-line/6-KiB limits; the newer reader validates text against the declared limits. Expanded responses still fit within 16 KiB of serialized JSON, shortening the tail further when quote escaping requires it. The relay sends UTF-8 without expanding non-ASCII characters into `\uXXXX`.
 
@@ -342,7 +342,11 @@ Close, pane changes and leaving the page stop polling and clear the display, dra
 
 To disable only Terminal, set the shared field to `false` or remove it, also remove any explicit `--enable-mobile-terminal` from custom backend arguments, and remove those three reader flags. Restart both processes through their existing procedures; leaving them running does not disable the feature. Viewing settings and unrelated Serve entries can remain.
 
-## Read an agent's conversation history on your phone
+<a id="read-an-agents-conversation-history-on-your-phone"></a>
+
+## Follow an agent's work in Reader
+
+Open **Conversation** to follow the agent’s work. Reader organizes messages, tool activity, and results such as tables into a view you can follow on a phone. Tool operations appear in collapsible groups, and file chips open previews. Use **Show older** to look back when needed.
 
 Speaker headings show a portrait (initials when unavailable), a small provider logo, the agent name and the time. Mail uses the same portraits and logos, preserving the sender's name first. Multiple recipients show all portraits and names when they fit, switching to overlapping portraits and a remaining-recipient count `+N` when space is short. All recipient names remain in the title and accessible label. A peer outside the roster gets only a name, or counts toward `+N` in the portrait-only row. Decorative portraits and initials stay out of selections across messages. High and urgent use a small dot before the subject. Compaction summaries remain short activity lines, separate from human messages.
 

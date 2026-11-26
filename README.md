@@ -6,13 +6,13 @@ Claude Code・Codex・DeepSeek・Local LLMのagentが直接話し、仕事を分
 
 ## 両方入れるなら（orrery の 1 行）
 
-はじめての導入は **ブラウザー版 cockpit** から始めます。[OS ごとの準備](https://github.com/gyroid-eth/orrery/blob/master/README.md#始める前に)を済ませ、次の1行で cockpit と Telemetry をまとめて入れます。
+はじめての導入は **ブラウザー版 cockpit** から始めます。[OS ごとの準備](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#動作環境)を済ませ、次の1行で cockpit と Telemetry をまとめて入れます。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gyroid-eth/orrery/master/scripts/get.sh | bash
 ```
 
-表示される計画を確認して自分で承認し、`ORRERY's base is ready` とブラウザーの **Your first flight** を確認します。[完了条件と追加機能の表](https://github.com/gyroid-eth/orrery/blob/master/README.md#共通部分の完了)・[利用中の agent と導入を進める](https://github.com/gyroid-eth/orrery/blob/master/docs/install-with-agent.md)
+表示される計画を確認して自分で承認し、`ORRERY's base is ready` とブラウザーの **Your first flight** を確認します。[完了条件と追加機能の表](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#1-行で入れる更新する)・[利用中の agent と導入を進める](https://github.com/gyroid-eth/orrery/blob/master/docs/install-with-agent.md)
 
 ![Telemetry の NETWORK で Mail の線を選んで、2体の間のメッセージを読む](docs/img/network-mail.gif)
 
@@ -35,7 +35,7 @@ provider は接続先、model はそこで使うモデル、harness は道具や
 
 ## Telemetry だけを入れる
 
-この repository だけで入る、裏で動く側です。Python 3.11 以上と `git`・`tmux`・`uv` が要ります。[OS ごとの前提](https://github.com/gyroid-eth/orrery/blob/master/README.md#始める前に)で `curl`・`lsof`・`xz` もそろえ、公式スクリプトで uv を入れた場合は現在の PATH へ反映します。Windows は WSL2 Ubuntu の中で実行します。
+この repository だけで入る、裏で動く側です。Python 3.11 以上と `git`・`tmux`・`uv` が要ります。[OS ごとの前提](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#動作環境)で `curl`・`lsof`・`xz` もそろえ、公式スクリプトで uv を入れた場合は現在の PATH へ反映します。Windows は WSL2 Ubuntu の中で実行します。
 
 ```bash
 git clone https://github.com/gyroid-eth/orrery-telemetry.git
@@ -76,7 +76,7 @@ cockpit の **Your first flight → help map → Full tour** を順に試しま�
 
 Telemetry の header の `HELP MAP`（NETWORK では `SETTINGS` の隣）を押すと、いま表示されている DECK / NETWORK の操作に注記が付きます。agent の詳細パネルでは、操作列の `HELP MAP` を押すと、そのパネルの操作に注記が付きます。cockpit 内に埋め込まれた Telemetry でも同じ操作で使えます。注記が収まらない場合は凡例で表示し、`Esc` または `Close` で閉じられます。
 
-Full tour は delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）で子を1体作り、ORRERY Mail でしりとりを3往復し、ターミナルの配置、Telemetry の EXIT / RESUME、NETWORK / REPLAY を試す案内です。画面の説明に従って操作すると進みます。DeepSeek・Local の子でも、dsh・Hermes それぞれで同じ3往復を手動で確認できます（[確認手順](docs/getting-started.md#5-しりとりで通しの確認をする)）。[現在のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)と [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md)を参照してください。
+Full tour は delegate skill（Claude Code: `/delegate`、Codex: `$delegate`）で子を1体作り、ORRERY Mail でしりとりを3往復し、ターミナルの配置、Telemetry の EXIT / RESUME、NETWORK / REPLAY を試す案内です。画面の説明に従って操作すると進みます。DeepSeek・Local の子でも、dsh・Hermes それぞれで同じ3往復を手動で確認できます（[確認手順](docs/getting-started.md#5-しりとりで通しの確認をする)）。[現在のクイックスタート](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#1-行で入れる更新する)と [Full tour](https://github.com/gyroid-eth/orrery/blob/master/docs/FULL_TOUR.md)を参照してください。
 
 ターミナルで仕事をするのは cockpit、チームの状態や履歴を見るのが Telemetry です。画面内のガイドを入口にし、詳しい参照は[目的別索引](docs/README.md)から開けます。
 

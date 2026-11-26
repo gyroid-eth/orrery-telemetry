@@ -2,7 +2,7 @@
 
 [English](README.en.md) · [README](../README.md)
 
-Claude Code・Codex・DeepSeek・Local LLMのどれからでも始められます。まず[単独導入](getting-started.md#telemetry-単独の導入と確認)か[cockpitと共通導入](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート)を選び、Claude/Codexは使うCLIへのログイン、DeepSeek/Localは[APIの初期設定](native-setup.md)へ進みます。準備後の画面操作は **Your first flight → help map → Full tour**。cockpitの`Settings → Getting started`から開けます。ここは導入・更新・困ったときに読む参照の目次です。
+Claude Code・Codex・DeepSeek・Local LLMのどれからでも始められます。まず[単独導入](getting-started.md#telemetry-単独の導入と確認)か[cockpitと共通導入](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#1-行で入れる更新する)を選び、Claude/Codexは使うCLIへのログイン、DeepSeek/Localは[APIの初期設定](native-setup.md)へ進みます。準備後の画面操作は **Your first flight → help map → Full tour**。cockpitの`Settings → Getting started`から開けます。ここは導入・更新・困ったときに読む参照の目次です。
 
 Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS` の隣）から見回せます。単独の画面でも cockpit 内の埋め込みでも、DECK / NETWORK の操作に注記します。agent の詳細パネルでは、パネル内の `HELP MAP` からパネルの操作を説明できます。
 
@@ -16,7 +16,7 @@ Telemetry 自体の操作は、header の `HELP MAP`（NETWORK では `SETTINGS`
 - [Ubuntu WSLにAPIキーを保存する](wsl-keyring.md) — 標準GUIで鍵束を準備し、APIキーを非表示入力で保存する初回手順。
 
 - [目的と provider・model・harness を選ぶ](getting-started.md#provider-model-harness) — 観測、API の model で作成、agent 同士の連携の3導線。[対応組合せと現在の制限](managed-catalog.md)で準備・OS・画面の範囲を確認する。
-- [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/README.md#クイックスタート) — 1行で両方を入れ、画面の初回ガイドから始める。
+- [ORRERY cockpit](https://github.com/gyroid-eth/orrery/blob/master/docs/install.md#1-行で入れる更新する) — 1行で両方を入れ、画面の初回ガイドから始める。
 - [利用中の agent と導入を進める](https://github.com/gyroid-eth/orrery/blob/master/docs/install-with-agent.md) — 共通導入の計画と承認。
 - [Telemetry 単独で使い始める](getting-started.md) — 対象者・用語と、単独 install、agent 起動、Mail の通し確認。
 

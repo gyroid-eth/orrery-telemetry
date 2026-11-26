@@ -83,7 +83,7 @@ test -d "$quota_runtime" && touch "$quota_runtime/antigravity-quota.enabled"
 
 ### Reader
 
-API 48 対応の Telemetry と Cockpit で、管理された対話型 `agy` の会話を Desktop とスマホの Reader から読めます。既存の `--configure-mcp` が `hooks.json` に `orrery-reader` グループを追加します。管理グループ以外の設定は保持します。設定後に起動したセッションで、最初の入力から履歴が表示されます。本文は Antigravity が記録した時点で表示し、compact の完了は **Context compacted** として表示します。同じ起動で異なる会話 UUID を検出したときは、次の管理された起動まで binding を保留します。
+管理された対話型 `agy` の作業は、デスクトップとスマホの Reader で追えます。Antigravity が記録した発言、ツール操作、結果を整理して表示します。対応する Cockpit と Telemetry API 48 が必要です。既存の `--configure-mcp` が `hooks.json` に `orrery-reader` グループを追加します。管理グループ以外の設定は保持します。設定後に起動したセッションは、最初の入力から作業を表示し、前の発言も確認できます。本文は Antigravity が記録した時点で表示し、compact の完了は **Context compacted** として表示します。同じ起動で異なる会話 UUID を検出したときは、次の管理された起動まで binding を保留します。
 
 Defaults:
 
