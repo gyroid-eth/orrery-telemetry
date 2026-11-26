@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":54}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":56}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -405,7 +405,7 @@ Claude / Claude Code・dsh・Hermes は、検証した本人の会話だけを�
 | `history_binding_reason_code` | 機械向けの固定 code。provider 固有の事情もこの値で表す |
 | `history_session_id` | provider の native session ID。Hermes の DB 読取では必須。未確認なら null |
 | `history_receipt_ts` | receipt の元時刻（ISO 8601 string）。未確認なら null。offset がなければ元の表記を保つ |
-| `history_workspace` | API 54。Antigravity の bound 行では、起動 receipt と照合した作業フォルダの絶対 path。Reader の画像を読む段で相対 path の解決に使う |
+| `history_workspace` | API 56。Antigravity の bound 行では、起動 receipt と照合した作業フォルダの絶対 path。Reader の画像を読む段で相対 path の解決に使う |
 
 cwd・時刻・最新履歴だけから所有を推測しません。binding はプロセス生存の証明ではありません。既存 Codex の field・状態と、fresh の保護された `/api/history` 経路は変更しません。
 
@@ -418,6 +418,10 @@ reason code は `binding_missing`（receipt なし）、`invalid_binding`（自�
 receipt の時刻が現在の tmux `session_created` より古ければ `stale` / `receipt_predates_session` とし、native ID・receipt 時刻だけを残して path は null にします。offset のない時刻は dashboard host の local time として比較するため、host の timezone が変わらない前提です。hook による receipt 置換は次の roster 計算で反映し、旧 path の cache には戻りません。同じ tmux の中の CLI 交換・秒単位で同時刻の再起動・receipt 時刻の欠落はこの比較で区別できず、新しい hook 完了まで最後の自己登録済み会話が見える可能性があります。退役だけでは正確な過去の会話の binding を消しません。binding は最後に自己登録した会話との対応であり、プロセス生存の証明ではありません。Codex の既存状態と fresh の保護された `/api/history` 経路は変更しません。
 
 ダッシュボードから Claude の会話だけを再開した場合も、同じ会話の自己登録 receipt と今回の tmux 起動証跡が一致すれば、Reader は `bound` の transcript を読めます。
+
+#### Codex CLI
+
+Codex の `history_binding` が `bound` のときは、照合済みの `history_session_id` を返します。再開時に新しいフックを待っている間は、その再開に使った旧 receipt と会話ログを照合して同じ ID を返します。
 
 #### dsh（DeepSeek Harness）
 
@@ -489,10 +493,10 @@ response:
 ```json
 {"ok":true,"agent":{"name":"AgentName","program":"claude-code","category":"agent","running":true,"created":1793775600,
  "history_binding":"bound","transcript_path":"/abs/path.jsonl","history_binding_reason":"","history_binding_reason_code":"bound",
- "history_session_id":"…","history_receipt_ts":"…"}}
+ "history_session_id":"…","history_receipt_ts":"…","history_workspace":null}}
 ```
 
-- 返す field は上の 11 個だけです。意味は [会話の記録の binding](#会話の記録の-bindinglegacyapi-35) と同じです
+- 返す field は上の項目だけです。API 56 から `history_workspace` が加わり、確認済みの Antigravity の作業フォルダがなければ `null` になります。各 field の意味は [会話の記録の binding](#会話の記録の-bindinglegacyapi-35) と同じです
 - live roster の行でない名前（retired・gone・warm-up・未登録）と、形式の不正な名前は 404 `{"ok":false,"error":"agent_unavailable"}` です
 - 読むだけの GET で、Host・Origin の扱いは `/api/agents` と同じです（loopback）。fresh と global では 404 `agent_unavailable` を返し、legacy の判断はしません（global では、それより前の operator admission に失敗すると、どの route も 503 です）。fresh の保護された history 経路は変わりません
 - 利用者は `api` が 36 以上のときだけ使い、`agent_unavailable` 以外の失敗（他の 404・5xx・通信の失敗）や古い dashboard では、従来の `/api/agents?scope=live` で確かめてください
@@ -719,12 +723,26 @@ API 43 から、停止した Claude の `resume_mode: conversation_only` でも�
 {"session":"SampleAgent","open":false,"tools":{"browser":{"device":"browser-device-id"},"screen":{"server":"orrery-screen","access":"operate"}}}
 ```
 
-API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。直接起動、常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。直接起動などで設定の記録がない場合の理由は `No saved launch settings; use Resume` です。
+API 54 の legacy roster は、権限を表示する行に `permission_controls` を返します。`computer_use` と `browser_use` のそれぞれに、現在の `value`（不明時は null）、根拠の `source` と `observation_reason`、操作可否の `can_change` と `change_reason`、反映方法の `action`（`restart`・`resume`・null）があります。サーバーは操作時に対象と起動設定を改めて検証します。
 
-稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と、`computer_use`（`off`、`view`、`control`）または `browser_use`（真偽値）の片方だけを指定します。この確認に成功すると `{"ok":true,"action":"validated"}` を返し、設定と Mail 登録はそのままです。
+`browser_use.mode` は `off`、`temporary`（Temporary Chrome）、`personal`（My Chrome）、または方式が不明な場合の null です。`browser_use.options` は起動時に選べる方式を返し、操作できない行では空になります。
+
+API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。
+
+API 54 では、生成された dsh と Hermes も親の有無にかかわらず同じリクエストを利用できます。プロバイダーが記録した本人の会話を照合し、専用プロファイルを引き継いで、再起動後に会話 ID と端末の入力待ちを確認します。
+
+macOS の管理起動による Antigravity CLI も、親の有無にかかわらず同じリクエストを利用できます。保存済み workspace と会話を照合し、選択した MCP 設定と個別の画面操作権限で起動して、新しい端末の会話 ID と入力待ちを確認します。委任されたセッションに適用できるのは、起動時に生成された workspace MCP 設定です。
+
+API 55 は、道具の選択を省略して生成された Codex CLI の保存済み MCP プロファイルを引き継ぎます。親なしで直接起動した Claude Code、Codex CLI、Antigravity CLI は、所有者と元の会話を確認できれば管理起動に移行できます。一覧の `permission_managed_launch:true` に対し、利用者が確認した後、事前確認と再開の両方で `permission` 内に `adopt:true` を付けます。元の所有者・作業ディレクトリ・会話を引き継ぎ、端末に単一の待機シェルだけが残った場合はその端末を置き換えます。dsh／Hermes の権限付き再開には、対応する起動記録と専用プロファイルが必要です。
+
+Claude Channels で起動したエージェントと、登録済みの常駐エージェントは権限変更の対象外です。運用者が管理するその他の常駐は、ダッシュボードの環境変数 `AGENTSTACK_PERMISSION_RESIDENT_AGENTS` に正確なエージェント名をカンマで区切って指定すると、停止中でも対象外になります。権限欄と書き込みリクエストの応答に理由を返します。
+
+生成済みで稼働中の Claude Code は、端末に明示選択の起動マーカーがないことを確認してから、権限付きの終了時に既定を記録します。
+
+稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と変更欄を一つ指定します。`computer_use` は `off`、`view`、`control`、API 54 の `browser_mode` は `off`、`temporary`、`personal` です。従来のクライアントは引き続き真偽値の `browser_use` を指定できます。この確認に成功すると、起動設定や Mail 登録を変更せずに `{"ok":true,"action":"validated"}` を返します。
 
 ```json
-{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_use":true}}
+{"session":"SampleAgent","open":false,"check_only":true,"permission":{"history_session_id":"01234567-1234-1234-1234-012345678901","browser_mode":"temporary"}}
 ```
 
 次に `POST /api/exit` へ同じ `session` と `history_session_id` を渡します。両方のリクエストで、対象の会話、Mail 登録、保存された起動経路を照合します。Cockpit は停止を待ち、同じ `/api/jump` を `check_only` を省いて送ります。サーバーは会話・登録を再検証して、対象の tmux セッションと稼働中の lease がないことを確認します。`open:false` は端末ウィンドウを開かずに再開します。

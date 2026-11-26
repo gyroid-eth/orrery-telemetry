@@ -164,6 +164,19 @@ def binding(runtime, name, registration, session=None):
         return unbound("receipt_unavailable")
 
 
+def resume_workspace(runtime, name, registration, conversation, *, session=None):
+    index = _index(runtime, name)
+    launch = _read(index)
+    receipt = binding(runtime, name, registration, session)
+    if (receipt.get("history_binding") != "bound" or receipt.get("history_session_id") != conversation
+            or _read(index) != launch):
+        raise ValueError("Antigravity's original workspace and conversation could not be verified")
+    cwd = Path(launch["workspace"])
+    if not cwd.is_absolute() or cwd.resolve(strict=True) != cwd or not cwd.is_dir():
+        raise ValueError("Antigravity's original workspace is unavailable")
+    return cwd
+
+
 def configure(path, mode):
     """Modify the single owned hook group in the existing provider config."""
     command = shlex.join([sys.executable, str(Path(__file__).resolve()), "hook"])
