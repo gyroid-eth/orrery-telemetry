@@ -154,8 +154,9 @@ The dashboard checks launch requirements before registering with ORRERY Mail.
 - The launcher requires `agy`, `tmux`, the selected Python, the adapter hook,
   and the Gemini provider helpers.
 - `AGENTSTACK_GEMINI_MODELS`, when explicitly set, is the restrictive model
-  allow-list. Otherwise, the picker combines the bundled `gemini-3.8-flash-{high,medium,low}`
-  candidates with valid Gemini IDs from the installed `agy models` CLI. This
+  allow-list. Otherwise, the picker uses the valid Gemini IDs returned by
+  the installed `agy models` CLI. If discovery has no usable result, the
+  bundled `gemini-3.8-flash-{high,medium,low}` list is the fallback. This
   read may contact the CLI's model service; ORRERY reads no CLI credentials.
   Discovery uses the same binary lookup as spawn preflight, including `~/.local/bin`
   when the Dashboard's service PATH omits it. If only `gemini-3.8-flash` appears,
@@ -168,7 +169,7 @@ The dashboard checks launch requirements before registering with ORRERY Mail.
   explicit allow-list that reuses a Claude/Codex ID disables the Antigravity tab.
 
 The model card displays each Gemini family once (for example, `gemini-3.8-flash`
-and `gemini-4-argon`). The original `gemini-3.8-flash-high` remains the default;
+and `gemini-4-argon`). `gemini-3.8-flash-high` remains the default when available;
 only efforts present in the current model list are offered for each family.
 Before registration, Dashboard resolves the selected effort to the corresponding CLI model:
 `low` → `gemini-3.8-flash-low`, `medium` → `gemini-3.8-flash-medium`, and
@@ -177,12 +178,13 @@ use that same resolved id alongside the explicit `--effort`. A custom model
 allow-list must include the matching variant; otherwise the request is rejected
 before registration. Without a custom allow-list, a formal `gemini-*` ID is
 validated by the CLI instead of being refused simply because discovery omitted it.
-Model IDs without an effort suffix are passed unchanged. Spawn and `dry_run`
+Model IDs without an effort suffix are passed unchanged. Orchestrator models
+use a fixed reasoning budget and launch with just their model ID. Spawn and `dry_run`
 do not run `agy models`; discovery is used only for the picker.
 
 Engine and isolation rules:
 
-- **Effort is explicit.** The Dashboard selects no effort for Antigravity, keeps
+- **Adjustable effort is explicit.** The Dashboard selects no effort for Antigravity, keeps
   `SPAWN` disabled until an available effort is chosen (`low`, `medium`, `high`,
   or `xhigh` where the catalog lists that variant), and the server
   rejects a request without one (`effort required for provider gemini`). The

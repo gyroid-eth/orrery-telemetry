@@ -1759,14 +1759,30 @@ def test_gemini_unqualified_custom_model_is_preserved(gemini_env, monkeypatch):
     assert result["model"] == "custom-model"
 
 
-@pytest.mark.parametrize("model", ["custom-model", "gemini-pro-orchestrator"])
-def test_gemini_unsuffixed_model_rejects_xhigh_before_registration(gemini_env, monkeypatch, model):
+def test_gemini_unsuffixed_model_rejects_xhigh_before_registration(gemini_env, monkeypatch):
     # The catalog offers xhigh only for families with a -xhigh variant.
-    monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", model)
-    assert server.do_spawn(_gemini_payload(gemini_env, model=model, effort="xhigh")) == {
+    monkeypatch.setenv("AGENTSTACK_GEMINI_MODELS", "custom-model")
+    assert server.do_spawn(_gemini_payload(gemini_env, model="custom-model", effort="xhigh")) == {
         "ok": False, "error": "effort not allowed for provider gemini: xhigh"}
     assert not gemini_env.launches.mcp_calls
     assert not gemini_env.launches.launched
+
+
+@pytest.mark.parametrize("model", [
+    "gemini-pro-orchestrator", "gemini-pro-orchestrator-argon", "gemini-pro-orchestrator-neon",
+])
+def test_gemini_orchestrator_launches_without_adjustable_effort(gemini_env, model):
+    assert gemini_runtime._catalog_item([model])["model_efforts"] == {model: []}
+    payload = _gemini_payload(gemini_env, model=model)
+    assert server.do_spawn({**payload, "effort":"high"}) == {
+        "ok": False, "error": f"effort is fixed for Gemini model: {model}"}
+    assert not gemini_env.launches.launched
+    payload.pop("effort")
+    launched = server.do_spawn(payload)
+    assert launched["ok"] and launched["model"] == model
+    [(argv, kwargs)] = gemini_env.launches.launched
+    assert argv[argv.index("--model") + 1] == model and "--effort" not in argv
+    assert kwargs["env"]["AGENTSTACK_GEMINI_EFFORT"] == ""
 
 
 def test_claude_configuration_error_and_missing_default_are_visible_and_block_launch():

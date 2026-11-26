@@ -38867,6 +38867,10 @@ function spawnProviderStandalone(caps){
 function spawnProviderAcceptsResources(caps){
   return !spawnProviderStandalone(caps)&&!!(caps.resources_required||caps.resources);
 }
+function spawnProviderHasFixedEffort(provider,modelId=spmSelectedModel){
+  const levels=provider?.modelEfforts?.[modelId];
+  return Array.isArray(levels)&&levels.length===0;
+}
 function spawnProviderDisplayModelLabel(provider,modelId){
   const id=String(modelId||'').trim();
   const efforts=provider&&Array.isArray(provider.efforts)?provider.efforts:[];
@@ -38905,7 +38909,7 @@ function spawnProviderRequirementsMissing(){
   if(caps.resources_required&&spawnProviderAcceptsResources(caps)&&
      !(input&&input.value.split(',').some(item=>item.trim())))
     return 'resources are required for this provider';
-  if(caps.effort_required&&(!spmEffortExplicit||!spmSelectedEffort))
+  if(caps.effort_required&&!spawnProviderHasFixedEffort(provider)&&(!spmEffortExplicit||!spmSelectedEffort))
     return 'select an effort for this provider';
   return '';
 }
@@ -39181,7 +39185,7 @@ function spawnEffectiveEffort(provider){
 function renderSpawnEfforts(provider){
   const info=spawnEffortInfo(provider),levels=spawnModelEfforts(provider);
   if(!levels.includes(spmSelectedEffort)){spmSelectedEffort='';spmEffortExplicit=false;}
-  SPM('spm-effort-row').hidden=false;
+  SPM('spm-effort-row').hidden=spawnProviderHasFixedEffort(provider);
   SPM('spm-effort-hint').hidden=true;
   EffortSlider.mount(SPM('spm-efforts'),{levels,value:spmEffortExplicit?spmSelectedEffort:null,onChange:value=>{
     spmSelectedEffort=value||'';spmEffortExplicit=value!==null;
@@ -39442,7 +39446,7 @@ async function submitSpawn(){
   if(!payload.model){setSpawnStat('model is required','err');return;}
   const missing=spawnProviderRequirementsMissing();
   if(missing){setSpawnStat(missing,'err');return;}
-  if(provider&&provider.capabilities&&provider.capabilities.effort_required&&!payload.effort){
+  if(provider&&provider.capabilities&&provider.capabilities.effort_required&&!spawnProviderHasFixedEffort(provider,payload.model)&&!payload.effort){
     setSpawnStat('effort is required for this provider','err');return;
   }
   spmBusy=true;

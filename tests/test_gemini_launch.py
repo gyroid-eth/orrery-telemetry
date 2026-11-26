@@ -144,8 +144,7 @@ def test_dashboard_discovers_models_at_standard_user_cli_path(tmp_path, monkeypa
     base = SimpleNamespace(_SPAWN_MODELS=(), _codex_models=lambda: ())
     models, error = gemini_provider_runtime._gemini_models(base)
     assert error == ''
-    assert models == ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
-                      'gemini-4-neon-high', 'gemini-4-argon-low']
+    assert models == ['gemini-4-neon-high', 'gemini-4-argon-low']
 
 
 def test_delegated_child_uses_worktree_stream_input_and_preregistered_identity() -> None:

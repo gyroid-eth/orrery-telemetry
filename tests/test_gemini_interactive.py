@@ -39,6 +39,16 @@ def managed(tmp_path, monkeypatch, request):
     return runtime, cwd, state
 
 
+def test_orchestrator_command_omits_the_effort_option(managed, monkeypatch, tmp_path):
+    _, cwd, state = managed
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    plan = {**state["gemini_launch"], "model": "gemini-pro-orchestrator-neon", "effort": ""}
+    for entry in [{"prompt": "Fixture prompt"}, {"conversation": SID}]:
+        args = agy.command(plan, cwd, **entry)
+        assert args[args.index("--model") + 1] == plan["model"]
+        assert "--effort" not in args
+
+
 def test_one_workspace_is_trusted_without_changing_global_settings(managed, monkeypatch, tmp_path):
     _, cwd, state = managed
     settings = tmp_path / ".gemini/antigravity-cli/settings.json"
