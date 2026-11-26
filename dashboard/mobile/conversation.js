@@ -50,7 +50,9 @@ SOFTWARE.
   }
   const doingWork=context=>context?.running===true&&context.act_state==='work';
   function collect(events,provider,{working=false,native=true,activeCalls=new Set()}={}){
-    const enabled=native&&['Claude','Codex'].includes(provider)&&events.some(e=>e.step||e.step_turn||e.step_boundary);
+    const recorded=native&&['dsh','Hermes','Antigravity'].includes(provider);
+    const paired=provider==='Claude'||recorded;
+    const enabled=recorded||native&&['Claude','Codex'].includes(provider)&&events.some(e=>e.step||e.step_turn||e.step_boundary);
     const pending=new Set();
     if(!enabled&&!working)return {groups:[],consumed:new Set(),pending};
     const groups=[],consumed=new Set(),calls=new Map(),results=new Map(),completions=new Map();
@@ -102,10 +104,10 @@ SOFTWARE.
       if(provider==='Codex'&&event.kind==='tool'&&key(event.tool_call_id)&&!step&&!event.step_wrapper)
         codexCalls.set(event.tool_call_id,event);
       if(step&&key(step.id)){
-        if(step.phase==='call'&&provider==='Claude'){
+        if(step.phase==='call'&&paired){
           const owner=active();owner.anchor??=event.id;
           calls.set(step.id,{step,event,owner});
-        }else if(step.phase==='result'&&provider==='Claude'){
+        }else if(step.phase==='result'&&paired){
           consumed.add(event.id);
           results.set(step.id,{step,event,owner:calls.has(step.id)?null:active()});
         }else if(step.phase==='complete'&&provider==='Codex'){
@@ -122,7 +124,18 @@ SOFTWARE.
             completions.set(completionKey,completion);
           }
           completion.owner.steps.set(completion.stepId,{...step,id:completion.stepId,eventId:completion.eventId});
+        }else if(recorded&&step.phase==='complete'){
+          const owner=active(),id='record:'+event.id;owner.anchor??=event.id;
+          owner.steps.set(id,{...step,id,eventId:event.id});
+          consumed.add(event.id);
         }
+      }else if(recorded&&event.kind==='tool'&&!event.step_boundary&&!event.step_wrapper){
+        const owner=active(),id='record:'+event.id;owner.anchor??=event.id;
+        owner.steps.set(id,{id,tool:event.text,status:'observed',started:event.ts,eventId:event.id});
+        consumed.add(event.id);
+      }else if(recorded&&(event.kind==='tool_result'||event.step_wrapper===true)){
+        // An unlinked result has no operation identity or reliable verdict.
+        consumed.add(event.id);
       }
       // A tool can also emit a visible Mail card. Assign the step first.
       if(separator)cut(event);
@@ -133,11 +146,12 @@ SOFTWARE.
         consumed.add(call.event.id);
         call.owner.steps.set(id,{...call.step,...result.step,phase:'complete',
           eventId:call.event.id,resultId:result.event.id});
-      }else if((working&&call.owner===current)||activeCalls.has(id)){
+      }else if(recorded||working&&call.owner===current||activeCalls.has(id)){
         // Keep an already displayed request in its original run when an idle
         // observation arrives before the matching result.
-        pending.add(id);consumed.add(call.event.id);
-        call.owner.steps.set(id,{...call.step,status:working?'running':'observed',eventId:call.event.id});
+        if(!recorded||call.owner===current)pending.add(id);
+        consumed.add(call.event.id);
+        call.owner.steps.set(id,{...call.step,status:working&&(!recorded||call.owner===current)?'running':'observed',eventId:call.event.id});
       }
     }
     for(const [id,result] of results)if(!calls.has(id)){
@@ -400,7 +414,7 @@ SOFTWARE.
     function sync({events,provider,mode,rows,context,isVisible}){
       current=context||{};visible=isVisible;
       workingModel=doingWork(current);
-      model=collect(events,provider,{working:workingModel,native:!['snapshot','fresh_tail'].includes(mode),activeCalls:model.pending});
+      model=collect(events,provider,{working:workingModel,native:mode!=='fresh_tail'&&(mode!=='snapshot'||provider==='Hermes'),activeCalls:model.pending});
       const wanted=new Set(model.groups.map(g=>g.id)),byId=new Map(rows.map(r=>[r.dataset.id,r]));
       for(const [id,card] of cards)if(!wanted.has(id)){
         if(card.node.contains(root.document.activeElement))onFocusLost();
@@ -523,6 +537,7 @@ const previewMessages={
  preview_too_large:'Too large to preview on the phone.',
  preview_type_denied:'This kind of file cannot be previewed.',
  preview_path_denied:'Not previewable: outside the agent’s folders.',
+ preview_permission_denied:'OS permissions do not allow reading this file.',
  preview_changed:'The file changed while it was read. Tap again.',
  history_slow:'Taking longer than usual: the computer is busy. Tap the file again.',
 };
@@ -1348,7 +1363,7 @@ async function poll(){
    // a slow answer is only a delay and leaves it open.
    if(v.error!=='history_slow'){recordConfirmed=false;lastRecordPoll=null;recordVersion++;dismissReferenceSelection();window.OrreryMobileTerminal?.refreshReference?.();closePreview();stepView?.closeDetails();}showError(v);if(v.error==='history_changed')reset();}
   else{
-   recordConfirmed=true;provider=({claude:'Claude',codex:'Codex',antigravity:'Antigravity'})[v.provider]||'';
+   recordConfirmed=true;provider=({claude:'Claude',codex:'Codex',dsh:'dsh',hermes:'Hermes',antigravity:'Antigravity'})[v.provider]||'';
    failures=0;slow(false);if(!events.length&&v.omitted===true)list.insertBefore(gap(),list.querySelector(':scope > .conversation-pending'));
    const replySince=lastRecordPoll===null?null:Math.max(lastRecordPoll,started-2*POLL)-POLL;
    append(v.events,replySince);lastRecordPoll=started;

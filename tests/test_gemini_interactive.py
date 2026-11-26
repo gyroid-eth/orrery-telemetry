@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from dashboard import server
+from dashboard import mobile_projection, server
 from hooks import child_resume, gemini_interactive as agy, screen_state
 
 
@@ -19,7 +19,8 @@ REGISTRATION = {"agent_id": 52, "agent_name": NAME, "project_key": PROJECT, "pro
 
 
 @pytest.fixture
-def managed(tmp_path, monkeypatch):
+def managed(tmp_path, monkeypatch, request):
+    standalone = getattr(request, "param", False)
     cwd = (tmp_path / "test workspace").resolve()
     cwd.mkdir()
     history = cwd.parent / "history.py"
@@ -32,8 +33,8 @@ def managed(tmp_path, monkeypatch):
     source.write_text("fixture-credential")
     source.chmod(0o600)
     child_resume._atomic_json(Path(str(source) + ".binding.json"), REGISTRATION)
-    agy.prepare(runtime, NAME, PROJECT, "FixtureParent", source=source, cwd=cwd,
-                binary=sys.executable, model="gemini-fixture", effort="high")
+    agy.prepare(runtime, NAME, PROJECT, "" if standalone else "FixtureParent", source=source, cwd=cwd,
+                binary=sys.executable, model="gemini-fixture", effort="high", standalone=standalone)
     state = child_resume._load_state(runtime / "child-agents" / f"{NAME}.json")
     return runtime, cwd, state
 
@@ -188,13 +189,17 @@ def test_guard_protects_installation_and_runtime_and_allows_the_managed_worktree
     assert checked[-1] == "check-file-reservation.sh"
 
 
+@pytest.mark.parametrize("managed", [False, True], indirect=True, ids=["delegated", "standalone"])
 def test_roster_status_is_bound_to_this_tmux_generation(managed, monkeypatch, capsys):
-    runtime, _, _ = managed
+    runtime, _, state = managed
     monkeypatch.setenv("AGENTSTACK_AGY_HISTORY_LAUNCH", "fixture")
     monkeypatch.setenv("AGENTSTACK_GEMINI_TMUX_IDENTITY", IDENTITY)
     agy.status(runtime, NAME, {"agent_state": "idle", "cycle_mode": "auto", "model": {
         "id": "gemini-current", "display_name": "Gemini", "effort": "medium"},
-        "email": "unrelated-fixture"})
+        "email": "unrelated-fixture", "context_window": {
+            "context_window_size": 1048576, "used_percentage": 14.24,
+            "current_usage": {"input_tokens": 140000}, "total_input_tokens": 800000,
+        }})
     assert capsys.readouterr().out.strip() == "auto · Gemini · medium"
     assert agy.read_status(runtime, NAME, IDENTITY)["activity"] == "wait"
     assert agy.read_status(runtime, NAME, IDENTITY + "0") == {}
@@ -203,9 +208,36 @@ def test_roster_status_is_bound_to_this_tmux_generation(managed, monkeypatch, ca
     session = {"session_id": "$8", "created": 1000, "tmux_pid": 123}
     observed = server._agent_card_fields(row, session, {}, REGISTRATION, ())
     assert (observed["model_id"], observed["effort"], observed["act_state"]) == ("gemini-current", "medium", "wait")
-    session["created"] += 1
-    observed = server._agent_card_fields(row, session, {}, REGISTRATION, ())
-    assert (observed["model_id"], observed["effort"], observed["act_state"]) == ("gemini-fixture", "high", None)
+    assert observed["parent_state"] == ("child" if agy.launch_parent(state) else "top")
+    assert (observed["ctx_used"], observed["ctx_window"], observed["ctx_window_tokens"]) == (14, "1048576", 1048576)
+    assert mobile_projection.project_agent({**row, **observed})["ctx_used"] == 14
+
+    for changed_row, changed_session, registration in (
+        (row, {**session, "created": 1001}, REGISTRATION),
+        ({**row, "running": False}, session, REGISTRATION),
+        ({**row, "ctx_used": 91, "ctx_window": "128K"}, session, None),
+    ):
+        hidden = server._agent_card_fields(changed_row, changed_session, {}, registration, ())
+        assert (hidden["ctx_used"], hidden["ctx_window"], hidden["ctx_window_tokens"]) == (None, None, None)
+
+    agy.status(runtime, NAME, {"model": {"id": "gemini-current"}})
+    cleared = server._agent_card_fields(row, session, {}, REGISTRATION, ())
+    assert cleared["ctx_used"] is None and cleared["ctx_window_tokens"] is None
+
+
+@pytest.mark.parametrize(("size", "usage", "used", "expected"), [
+    (0, {}, 50, {}),
+    (1048576, None, 0, {"ctx_window_tokens": 1048576}),
+    (1048576, {}, True, {"ctx_window_tokens": 1048576}),
+    (1048576, {}, float("nan"), {"ctx_window_tokens": 1048576}),
+    (1048576, {}, 101, {"ctx_window_tokens": 1048576}),
+    (1048576, {}, 0, {"ctx_window_tokens": 1048576, "ctx_used": 0}),
+    (1048576, {}, 100, {"ctx_window_tokens": 1048576, "ctx_used": 100}),
+])
+def test_status_context_uses_observed_numbers(size, usage, used, expected):
+    assert agy._status_context({
+        "context_window_size": size, "current_usage": usage, "used_percentage": used,
+    }) == expected
 
 
 @pytest.mark.parametrize(("selection", "computer", "browser"), [

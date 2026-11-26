@@ -217,7 +217,8 @@ def test_an_oversized_cockpit_answer_is_refused_before_reading(monkeypatch):
 
 
 @pytest.mark.parametrize('error', ['preview_path_denied', 'preview_too_large', 'preview_type_denied',
-                                   'preview_changed', 'history_unconfirmed', 'something /Users/x', ['preview_changed']])
+                                   'preview_changed', 'preview_permission_denied', 'history_unconfirmed',
+                                   'something /Users/x', ['preview_changed']])
 def test_cockpit_refusals_reach_the_phone_as_fixed_codes(error):
     with fake_cockpit(lambda ref: (400, {'ok': False, 'error': error, 'path': SECRET})) as port:
         client = history.HistoryClient(port)
@@ -313,6 +314,9 @@ def test_phone_explains_expired_and_refused_previews():
       await chip(root).onclick();await settle();
       assert.equal(root.all().filter(e=>e.className==='conversation-preview').length,1,'one preview at a time');
       assert.ok(panel(root).textContent.includes('outside the agent’s folders'));assert.ok(!panel(root).textContent.includes('private'));
+      answer={body:{ok:false,error:'preview_permission_denied'}};
+      await chip(root).onclick();await settle();
+      assert.ok(panel(root).textContent.includes('OS permissions do not allow reading this file'));
       C.unmount();
     ''')
 

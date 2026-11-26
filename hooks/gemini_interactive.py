@@ -411,6 +411,19 @@ def run(runtime, name, task_file=None, conversation=None):
                            env=env, check=False)
 
 
+def _status_context(window):
+    if not isinstance(window, dict):
+        return {}
+    size = window.get("context_window_size")
+    if type(size) is not int or size <= 0:
+        return {}
+    context = {"ctx_window_tokens": size}
+    used = window.get("used_percentage")
+    if isinstance(window.get("current_usage"), dict) and type(used) in (int, float) and 0 <= used <= 100:
+        context["ctx_used"] = int(used + 0.5)
+    return context
+
+
 def status(runtime, name, payload):
     if not os.environ.get("AGENTSTACK_AGY_HISTORY_LAUNCH"):
         return
@@ -425,7 +438,8 @@ def status(runtime, name, payload):
     record = {"tmux": identity,
               "activity": ACTIVITY.get(payload.get("agent_state")),
               "model_id": str(model.get("id") or "")[:128], "effort": str(effort)[:20],
-              "conversation": old.get("conversation")}
+              "conversation": old.get("conversation"),
+              **_status_context(payload.get("context_window"))}
     sid, transcript = payload.get("conversation_id"), payload.get("transcript_path")
     if sid and sid != old.get("conversation") and transcript and Path(transcript).is_file():
         # A resumed conversation can paint its status before it invokes the model.

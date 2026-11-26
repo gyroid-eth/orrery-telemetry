@@ -5,7 +5,7 @@
     "reason": "policy_empty_default_allow"
   },
   "default_principal_candidate": "local-single-principal",
-  "rule_status": "current_loopback_retire_unretire_boundary_other_rules_prospective_non_binding",
+  "rule_status": "current_loopback_retire_unretire_show_files_boundary_other_rules_prospective_non_binding",
   "tools": {
     "acknowledge_message": {
       "action": "acknowledge_received_message",
@@ -195,6 +195,14 @@
       "required_arguments": ["project_key", "agent_name", "policy"],
       "resource": "project:{project_key}/agent:{agent_name}/contact-policy",
       "subject": "agent:{agent_name}"
+    },
+    "show_files": {
+      "action": "check_local_file_metadata",
+      "authorization_rule": "loopback local caller may check metadata for absolute paths",
+      "current_credential_arguments": [],
+      "required_arguments": ["paths"],
+      "resource": "local:files:{paths}",
+      "subject": "local-single-principal"
     },
     "summarize_thread": {
       "action": "summarize_project_thread",

@@ -26,7 +26,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT/demo" "$OUT/assets" "$OUT/portraits_64"
 
 cp "$HERE/demo_api.js" "$HERE/demo_tour.js" "$OUT/demo/"
-cp "$DASH/network_node.js" "$DASH/network_core.js" "$DASH/theme_core.js" "$DASH/theme_controller.js" "$DASH/theme_light.css" "$OUT/"
+cp "$DASH/local_model_makers.js" "$DASH/network_node.js" "$DASH/network_core.js" "$DASH/theme_core.js" "$DASH/theme_controller.js" "$DASH/theme_light.css" "$OUT/"
 cp "$DASH/help_map.js" "$DASH/help_map.css" "$OUT/"
 cp "$DASH/tour_cue.js" "$DASH/tour_cue.css" "$OUT/"
 cp "$DASH/mobile/conversation_markdown.js" "$DASH/mail_markdown.css" "$OUT/"

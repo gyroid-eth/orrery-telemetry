@@ -21,6 +21,10 @@ contracts, plus what the surface has gained since the cutover (see
 `post_cutover_published` in the same fixture). Permission deny entries, negative instructions, and Codex
 Bridge-local operations do not become source-extraction roots.
 
+The default loopback MCP server also publishes `show_files` for file preview
+chips. The same fixture records it under `direct_local_published`. See
+[direct Mail connections](api.en.md#show-files-over-a-direct-mail-connection).
+
 The implementation train was:
 
 1. freeze provenance, live tool schemas, and the caller-derived tool contract;
@@ -53,7 +57,7 @@ the client-visible key.
 The core train copies the live data/archive/tool-body seam into the renamed
 package and publishes exactly the versioned tools named by the contract
 through a fail-closed
-FastMCP subclass. MCP resources and the 16 non-compatibility tools are not
+FastMCP subclass. MCP resources and non-compatibility upstream tools are not
 published. Their bodies remain internal only until the differential train can
 prove that pruning them does not break macro or storage dependencies.
 

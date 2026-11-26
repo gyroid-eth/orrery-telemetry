@@ -185,7 +185,7 @@ class NotificationSettings:
     enabled: bool
     signals_dir: str  # Directory for signal files
     include_metadata: bool  # Include message metadata in signal file
-    # Include a 400-char body snippet in the signal so notification watchers
+    # Include up to 2000 characters of the body so notification watchers
     # can deliver short messages without a fetch_inbox round trip. On by
     # default so a notification normally contains enough context to act.
     include_body: bool

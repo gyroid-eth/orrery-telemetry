@@ -205,11 +205,13 @@ print(msg.get("from") or "unknown")
 print((msg.get("subject") or "(no subject)")[:80])
 print(msg.get("importance") or "normal")
 print(int(st.st_mtime))
-# A short body is included by newer mail servers. Keep it on one line before
-# passing it to tmux: an embedded newline would submit an incomplete prompt.
-snippet = (msg.get("body_snippet") or "").replace("\r", " ").replace("\n", " ⏎ ")
-print(snippet[:500])
-print("1" if msg.get("body_truncated") else "0")
+# Use the same source-character limit as the server and proxy. Flatten after
+# measuring so the visible line-break markers cannot clip a complete body.
+body = msg.get("body_snippet")
+body = body if isinstance(body, str) else ""
+body_limit = 2000
+print(body[:body_limit].replace("\r", " ").replace("\n", " ⏎ "))
+print("1" if msg.get("body_truncated") or len(body) > body_limit else "0")
 print(f"{st.st_dev}:{st.st_ino}:{st.st_mtime_ns}:{st.st_size}")
 PY
 }

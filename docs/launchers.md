@@ -161,7 +161,7 @@ pre-registered child へ親 token は渡しません。dashboard spawn は child
 
 launcher が強制終了され、`child-agents/.<name>.registration-pending.json` が残った場合、この undo record も owner credential を含む mode `0600` の private material です。起動ごとの `generation` (nonce) を照合し、旧 launcher の cleanup は新しい試行の material を操作しません。`generation` は undo record の同名 field だけを取り出し、credential を含む全体の内容を表示しないでください。対象の tmux / CLI が動いていないことを operator が確認してから、`python3 ~/.agentstack/hooks/child_resume.py finish-registration --runtime-dir <runtime> --agent-name <name> --generation <generation> --rollback` で起動前の canonical material を復元できます。起動中には実行しません。明示 purge / 期限切れ purge は、この undo record も対象にします。
 
-`/delegate` の既定経路は `--pre-registered --embed-task --task-file <path>` です。親が mode `0600` の一時ファイルへタスク全文を書き、launcher が child 名、親名、spawn 時刻、project key、完了時の `send_message` 指示とともに Claude / Codex の最初の prompt へ埋め込みます。登録・再登録・`fetch_inbox` の起動儀式は不要です。この prompt が唯一の正本なので、同じ child へ task mail を別送してはいけません。`--task-file` は位置引数の task より優先し、backtick や `$()` を shell に解釈させず渡すための境界でもあります。
+`/delegate` の既定経路は `--pre-registered --embed-task --task-file <path>` です。親が mode `0600` の一時ファイルへタスク全文を書き、launcher が child 名、親名、spawn 時刻、project key、完了時の `send_message` 指示とともに Claude / Codex の最初の prompt へ埋め込みます。登録・再登録・`fetch_inbox` の起動儀式は不要です。後から届いた通知に本文の続きがある場合や本文がない場合は、必要に応じて `fetch_inbox` で読みます。この prompt が唯一の正本なので、同じ child へ task mail を別送してはいけません。`--task-file` は位置引数の task より優先し、backtick や `$()` を shell に解釈させず渡すための境界でもあります。
 
 `CHILD_REGISTRATION_TOKEN` は歴史的な変数名ですが、top-level identity の再認証でも使われます。
 

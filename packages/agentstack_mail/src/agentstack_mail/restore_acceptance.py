@@ -32,7 +32,7 @@ from urllib.parse import quote
 from fastmcp import Client
 
 from . import migration
-from .contract import COMPATIBILITY_TOOLS
+from .contract import PUBLISHED_TOOLS
 
 
 SCHEMA_VERSION: Final[int] = 1
@@ -822,17 +822,17 @@ def _wait_read_only_ready(
             observation = asyncio.run(_read_only_mcp_probe(url))
             health = observation["health"]
             if (
-                set(observation["tool_names"]) != COMPATIBILITY_TOOLS
+                set(observation["tool_names"]) != PUBLISHED_TOOLS
                 # Count comes from the contract, not a literal. The set and the
                 # number are the same claim, and writing the number twice means
                 # one copy can be right while the other is stale — which is how
                 # publishing a tool turned a green gate red in a place nobody
                 # was looking (2026-08-28).
-                or observation["tool_count"] != len(COMPATIBILITY_TOOLS)
+                or observation["tool_count"] != len(PUBLISHED_TOOLS)
             ):
                 raise RestoreAcceptanceError(
                     "candidate server did not publish the exact "
-                    f"{len(COMPATIBILITY_TOOLS)}-tool boundary"
+                    f"{len(PUBLISHED_TOOLS)}-tool boundary"
                 )
             if health.get("status") != "ok":
                 raise RestoreAcceptanceError("candidate health status is not ok")

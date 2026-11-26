@@ -120,7 +120,7 @@ def test_dark_default_and_explicit_light_persist_across_reload(phone):
 
     js("document.querySelector('#mobile-theme').click()")
     assert js("getComputedStyle(document.documentElement).colorScheme") == 'light'
-    assert js("document.querySelector('meta[name=theme-color]').content") == '#f5efe1'
+    assert js("document.querySelector('meta[name=theme-color]').content") == '#f8f6f1'
     assert js("document.querySelector('.mobile-brand img').getAttribute('src')") == '/assets/orbit-light.svg'
     origin = js('performance.timeOrigin')
     client.call('Page.reload', ignoreCache=True)
@@ -131,6 +131,22 @@ def test_dark_default_and_explicit_light_persist_across_reload(phone):
     js("document.querySelector('#mobile-theme').click()")
     assert js("getComputedStyle(document.documentElement).colorScheme") == 'dark'
     assert js("document.querySelector('.mobile-brand img').getAttribute('src')") == '/assets/orbit.svg'
+
+
+def test_light_phone_composer_keeps_paper_fill_when_input_is_ready(phone):
+    _, js, wait, _ = phone
+    wait("document.querySelector('#terminal-review')?.disabled")
+    appearance = """(()=>{const style=getComputedStyle(document.querySelector('#terminal-review'));
+        return [style.backgroundColor,style.borderColor,style.color];})()"""
+    dark_idle = js(appearance)
+    js("document.querySelector('#mobile-theme').click()")
+    assert js(appearance) == ['rgb(253, 252, 248)', 'rgb(131, 129, 121)', 'rgb(97, 94, 85)']
+    js("""const field=document.querySelector('#terminal-text');
+        field.value='Review the release notes';field.dispatchEvent(new Event('input'));""")
+    wait("document.querySelector('#terminal-review')?.disabled===false")
+    assert js(appearance) == ['rgb(253, 252, 248)', 'rgb(172, 117, 0)', 'rgb(137, 92, 0)']
+    js("field.value='';field.dispatchEvent(new Event('input'));document.querySelector('#mobile-theme').click()")
+    assert js(appearance) == dark_idle
 
 
 def test_workspace_keeps_the_same_reader_and_private_draft_across_layouts(phone):
@@ -458,7 +474,7 @@ def test_model_picker_search_and_local_connections_preserve_exact_launch_selecti
 
 
 @pytest.mark.parametrize('phone', [(390, 844), (820, 1180), (1180, 820)], indirect=True)
-def test_file_picker_adds_a_document_to_existing_input_review(phone):
+def test_file_picker_adds_a_binary_file_to_existing_input_review(phone):
     client, js, wait, state = phone
     state['files'] = True
     js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
@@ -481,7 +497,7 @@ def test_file_picker_adds_a_document_to_existing_input_review(phone):
     def choose_file():
         js("""(() => {
             const input=document.getElementById('terminal-file-image'), selection=new DataTransfer();
-            selection.items.add(new File(['# Example\\n'],'Notes <v2>.MD',{type:'text/markdown'}));
+            selection.items.add(new File([new Uint8Array([1,0,255])],'Screen recording 1.02.MOV',{type:'video/quicktime'}));
             input.files=selection.files; input.dispatchEvent(new Event('change'));
         })()""")
 
@@ -496,22 +512,22 @@ def test_file_picker_adds_a_document_to_existing_input_review(phone):
     if js('document.hidden'):
         assert not any(op=='file' and payload.get('file') for op,payload in state['calls'])
         js("""delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));""")
-    wait("document.querySelector('.reader-attachment-label')?.textContent === 'Notes <v2>.MD'")
+    wait("document.querySelector('.reader-attachment-label')?.textContent === 'Screen recording 1.02.MOV'")
     wait("document.querySelector('#terminal-review')?.disabled === false")
     uploads = [payload for op,payload in state['calls'] if op=='file' and payload.get('file')]
     assert [payload['file'] for payload in uploads] == [
-        {'format':'md','data':'IyBFeGFtcGxlCg=='},
+        {'format':'mov','data':'AQD/'},
     ]
     if js('innerWidth') > 720:
         assert uploads[0]['choice'] == 'resumed-choice'
     assert not any(op=='prepare' or op=='commit' for op,_ in state['calls'])
     js("document.querySelector('#terminal-review').click()")
-    wait("document.querySelector('.reader-review .reader-attachment-label')?.textContent === 'Notes <v2>.MD'")
-    assert state['draft'] == "[file: '/workspace/.orrery-input-files/"+'b'*32+".md']"
+    wait("document.querySelector('.reader-review .reader-attachment-label')?.textContent === 'Screen recording 1.02.MOV'")
+    assert state['draft'] == "[file: '/workspace/.orrery-input-files/"+'b'*32+".mov']"
     assert not any(op=='commit' for op,_ in state['calls'])
     js("Array.from(document.querySelectorAll('.reader-review button')).find(b=>b.textContent==='Edit').click()")
-    wait("!!document.querySelector('button[aria-label=\"Remove Notes <v2>.MD\"]')")
-    js("document.querySelector('button[aria-label=\"Remove Notes <v2>.MD\"]').click()")
+    wait("!!document.querySelector('button[aria-label=\"Remove Screen recording 1.02.MOV\"]')")
+    js("document.querySelector('button[aria-label=\"Remove Screen recording 1.02.MOV\"]').click()")
     assert js("!document.querySelector('.reader-file-mark') && document.querySelector('#terminal-review').disabled")
 
     if js('innerWidth') > 720:

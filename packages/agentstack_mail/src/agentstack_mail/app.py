@@ -35,6 +35,7 @@ import uuid
 
 import anyio
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from git import Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from sqlalchemy import asc as _sa_asc, bindparam, delete as _sa_delete, desc as _sa_desc, func, or_ as _sa_or, select as _sa_select, text, update as _sa_update
@@ -43,6 +44,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import rich_logger
+from .show_files import result as show_files_result
 from .authorization import (
     AUTHORIZATION_CATALOG,
     assert_authorization_catalog_boundary,
@@ -5007,6 +5009,13 @@ def build_mcp_server() -> FastMCP:
         name=SERVICE_IDENTITY["display_name"], instructions=instructions, lifespan=lifespan
     )
 
+    @mcp.tool(name="show_files")
+    def show_files(paths: list[str]) -> dict[str, Any]:
+        try:
+            return show_files_result(paths, absolute_only=True)
+        except ValueError as error:
+            raise ToolError(str(error)) from None
+
     async def _ctx_info_safe(ctx: Context, message: str) -> None:
         try:
             await ctx.info(message)
@@ -5246,7 +5255,8 @@ def build_mcp_server() -> FastMCP:
                 # Flag-gated: the frozen differential behavior writes
                 # metadata-only signals.
                 if settings.notifications.include_body:
-                    snippet_limit = 400
+                    # Match the proxy notification formatter and the legacy watcher.
+                    snippet_limit = 2000
                     message_meta["body_snippet"] = (body_md or "")[:snippet_limit]
                     message_meta["body_truncated"] = len(body_md or "") > snippet_limit
                 # Signal to/cc recipients (not bcc - blind copies shouldn't trigger visible signals)

@@ -20,7 +20,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from pydantic import ValidationError
 
-from .contract import COMPATIBILITY_TOOLS
+from .contract import PUBLISHED_TOOLS
 from .tool_descriptions import COMPACT_TOOL_DESCRIPTIONS
 
 _EXPECTED_UVICORN_VERSION = "0.52.1"
@@ -245,7 +245,7 @@ class CompatibilityFastMCP(FastMCP):
         **kwargs: Any,
     ) -> Any:
         self._agentstack_declared_tools.add(tool_name)
-        if tool_name not in COMPATIBILITY_TOOLS:
+        if tool_name not in PUBLISHED_TOOLS:
             return function
         self._agentstack_published_tools.add(tool_name)
         # Publish the compact description instead of the upstream-derived
@@ -279,7 +279,7 @@ class CompatibilityFastMCP(FastMCP):
         The decorator bookkeeping is useful for provenance, but it is not an
         enforcement boundary: FastMCP can add or remove tools after decoration.
         Inspect the pinned FastMCP registry itself so post-registration filters
-        and direct base-class registration cannot bypass the exact-24 contract.
+        and direct base-class registration cannot bypass the published contract.
         """
 
         manager = getattr(self, "_tool_manager", None)
@@ -291,10 +291,10 @@ class CompatibilityFastMCP(FastMCP):
             )
 
         actual = frozenset(registry)
-        missing = COMPATIBILITY_TOOLS - actual
-        extra = actual - COMPATIBILITY_TOOLS
-        recorded_missing = COMPATIBILITY_TOOLS - self._agentstack_published_tools
-        recorded_extra = self._agentstack_published_tools - COMPATIBILITY_TOOLS
+        missing = PUBLISHED_TOOLS - actual
+        extra = actual - PUBLISHED_TOOLS
+        recorded_missing = PUBLISHED_TOOLS - self._agentstack_published_tools
+        recorded_extra = self._agentstack_published_tools - PUBLISHED_TOOLS
         if missing or extra or recorded_missing or recorded_extra:
             raise RuntimeError(
                 "ORRERY Mail tool boundary mismatch: "

@@ -111,7 +111,13 @@
         else draft.delete(agent.name);
         setCount();
       };
-      row.append(OrreryMobileProfile.face(agent.name), node('span', 'name', agent.name), mark);
+      row.append(OrreryMobileProfile.face(agent.name), node('span', 'name', agent.name));
+      const meter = OrreryMobileProfile.contextMeter(agent);
+      if (meter) {
+        mark.setAttribute('aria-description', meter.title);
+        row.append(meter);
+      }
+      row.append(mark);
       roster.append(row);
     }
     if (!roster.children.length) roster.append(node('p', 'empty', 'No matching agents'));

@@ -824,7 +824,7 @@ from sqlalchemy import text
 from fastmcp import Client
 from agentstack_mail import storage_origin_candidate,storage_origin_core,storage_origin_directory
 from agentstack_mail import config,db,app
-from agentstack_mail.contract import COMPATIBILITY_TOOLS
+from agentstack_mail.contract import PUBLISHED_TOOLS
 async def main():
     assert not any(t.startswith('b1_') for t in storage_origin_directory.metadata.tables if t in __import__('sqlmodel').SQLModel.metadata.tables)
     await db.ensure_schema()
@@ -833,7 +833,7 @@ async def main():
         assert not any(t.startswith('b1_') for t in names)
     async with Client(app.build_mcp_server()) as c:
         tools=await c.list_tools()
-        assert {t.name for t in tools}==COMPATIBILITY_TOOLS
+        assert {t.name for t in tools}==PUBLISHED_TOOLS
         for t in tools:
             assert 'auth' not in t.inputSchema.get('properties',{})
         result=await c.call_tool('consume_notification',{},raise_on_error=False)

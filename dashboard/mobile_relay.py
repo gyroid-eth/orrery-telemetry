@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit, urlencode
 
 try:
     from dashboard import legacy_http_admission as admission
+    from dashboard.local_model_makers import LOCAL_MAKER_ASSETS
     from dashboard.mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
     from dashboard import mobile_input
     from dashboard import mobile_history
@@ -28,6 +29,7 @@ try:
     from dashboard import mobile_spawn
 except ModuleNotFoundError:
     import legacy_http_admission as admission
+    from local_model_makers import LOCAL_MAKER_ASSETS
     from mobile_projection import SnapshotStore, MobileMailStore, WINDOWS, NAME, EVENT_KEY, png_image
     import mobile_input
     import mobile_history
@@ -233,6 +235,7 @@ def static_assets(root=HERE):
         '/reader_send_motion.js': (root/'mobile/reader_send_motion.js', 'text/javascript; charset=utf-8'),
         '/reader_send_motion.css': (root/'mobile/reader_send_motion.css', 'text/css; charset=utf-8'),
         '/network_core.js': (root/'network_core.js', 'text/javascript; charset=utf-8'),
+        '/local_model_makers.js': (root/'local_model_makers.js', 'text/javascript; charset=utf-8'),
         '/network_node.js': (root/'network_node.js', 'text/javascript; charset=utf-8'),
     }
     for icon in ('orbit-192.png','orbit-512.png','orbit-maskable-512.png','apple-touch-icon.png'):
@@ -240,8 +243,8 @@ def static_assets(root=HERE):
     for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600',
                  'ibm-plex-sans','ibm-plex-sans-jp-400'):
         fixed['/fonts/'+font+'.woff2']=(root/'mobile/fonts'/(font+'.woff2'),'font/woff2')
-    for logo in ('orbit','orbit-light','anthropic','openai','google','qwen','glm'):
-        fixed['/assets/'+logo+'.svg']=(root/'assets'/(logo+'.svg'),'image/svg+xml')
+    for logo in ('orbit.svg','orbit-light.svg','anthropic.svg','openai.svg','google.svg',*LOCAL_MAKER_ASSETS):
+        fixed['/assets/'+logo]=(root/'assets'/logo,'image/svg+xml')
     # Byte-identical canonical icon, bundled for the manual mobile reader even
     # when ordinary dashboard DeepSeek presentation is not opted in.
     fixed['/assets/deepseek.svg']=(root/'mobile/assets/deepseek.svg','image/svg+xml')
@@ -510,8 +513,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._admitted(write=True):
             self._send(403,{'error':'input_request_denied'});return
         try:
-            payload=self._request_json(mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES),
-                                       20 if operation in mobile_input.ATTACHMENT_JSON_LIMITS else 5)
+            timeout={'file':60,'image':20}.get(operation,5)
+            payload=self._request_json(mobile_input.ATTACHMENT_JSON_LIMITS.get(operation,mobile_input.MAX_JSON_BYTES),timeout)
             if not mobile_input.request_fields(operation,payload):raise ValueError('input_json_invalid')
         except (ValueError,OSError):
             self._send(400,{'error':'input_request_invalid'});return

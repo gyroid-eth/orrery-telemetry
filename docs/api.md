@@ -189,6 +189,12 @@ API 17 は global dashboard の返信表示と次の認可済み読取 route を
 
 API 12の配布物では、同梱 ORRERY Mail の MCP `health_check` が `server_instance_id` を返します。これは管理 socket の inspect と同じ永続 UUID で、秘密や認証の代わりにはなりません。常駐 daemon は両方の transport の UUID と確認済みの connection pin を照合し、field の無い旧 build や不一致では停止します。既存の `status` / `environment` / `http_host` / `http_port` は維持します。これは dashboard の新しい HTTP route ではありません。[専用 binding と通知](daemon-agents.md)を参照してください。
 
+### Mail に直接つないでファイルを表示する
+
+loopback の ORRERY Mail に直接つないだセッションは、MCP の `tools/list` で `show_files` を確認できます。`paths` に絶対パスを1〜8個渡します。相対パスは理由付きで拒否します。応答の `files` はファイルの有無・種類・サイズを示し、`present` には OS の権限で読み取れる通常ファイルのパスが入ります。読み取り権限がないパスには `reason` が付きます。
+
+cockpit とスマホは記録された `show_files` の絶対パスについて、作業フォルダーの外にあるテキストや画像も preview できます。プレビューは OS の権限・ファイルの種類・サイズ・シンボリックリンクを検査します。束縛済み proxy での相対パスの扱いは [Codex App のツール契約](codex-app.md#agent-の利用手順)を参照してください。
+
 ## GET `/api/quotas` — 任意のDeepSeek残高（API 21）
 
 dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える。
@@ -1034,4 +1040,4 @@ prepareは1行4KiB UTF-8を改変せず束縛します。pending最大16件、�
 
 新しい cockpit が付けた Markdown 画像参照は、event の任意の `markdown_images: [{target, ref}]` で返ります。1 event に最大8件で、`target` は発言か記録された Mail 本文に現れる画像パスの表記、`ref` は reader が発行した32桁hexです。画像も既存の preview を使います。cockpit は画像専用の読取で記録と binding を再確認し、解決済みの path を no-follow で開いて種類と大きさの上限を確認します。作業フォルダ外の対応画像も対象です。
 
-Historyがオンの間だけ`GET /view/conversation/preview?name=<NAME>&ref=<id>`があります。`files`の要素のうち、cockpitが付けた形の正しい参照を持つものだけに`ref`（このreaderが発行した32桁hex。名前とcockpitの参照ごとに1つで、そのpageを返すたびに延びる。1024件/600秒）が付きます。queryは`name`と`ref`に加えて、画像の縮小表示用に`thumbnail=1`を受け付けます。別の名前に発行した`ref`・期限切れは上流を呼ばずに410 `preview_expired`、その他は400です。readerはOriginなしの固定loopback `GET /telemetry/conversation/preview?ref=<cockpitの参照>&mobile=1`を送り、縮小表示には`thumbnail=1`も付けます。旧版が`invalid_query`を返した場合は参照だけで再取得します。記録・binding・root・canonical path・種類・大きさ・画素数の確認はcockpitが毎回行います。名前では断らず、textも伏せません。上流JSONは約5.4 MiB・15秒までで、Content-Lengthがこれを超えると読まずに`preview_too_large`です。スマホへは`{ok, kind:"text", label, text, truncated, notice}`（textはUTF-8で先頭32 KiB）か`{ok, kind:"image", label, width, height, data, notice}`を返します。画像はIHDR・IDAT・IENDのchunkだけでCRCが正しく、IHDRの幅と高さがcockpitの値と一致し、1辺8192 px・8 Mpx・4 MiB以内のPNGだけで、dataはその標準base64です。失敗は固定codeの`{ok:false, error}`（`preview_too_large`・`preview_type_denied`・`preview_path_denied`・`preview_changed`・`history_*`、それ以外は`preview_unavailable`）で、cockpitのcode以外の文字列は渡しません。cockpitの`reference_expired`は410、`record_too_large`（参照を持つ記録が1 MiBを超える）は`preview_too_large`です。Content-Lengthと長さが違う上流の本文は拒みます。
+Historyがオンの間だけ`GET /view/conversation/preview?name=<NAME>&ref=<id>`があります。`files`の要素のうち、cockpitが付けた形の正しい参照を持つものだけに`ref`（このreaderが発行した32桁hex。名前とcockpitの参照ごとに1つで、そのpageを返すたびに延びる。1024件/600秒）が付きます。queryは`name`と`ref`に加えて、画像の縮小表示用に`thumbnail=1`を受け付けます。別の名前に発行した`ref`・期限切れは上流を呼ばずに410 `preview_expired`、その他は400です。readerはOriginなしの固定loopback `GET /telemetry/conversation/preview?ref=<cockpitの参照>&mobile=1`を送り、縮小表示には`thumbnail=1`も付けます。旧版が`invalid_query`を返した場合は参照だけで再取得します。記録・binding・root・canonical path・種類・大きさ・画素数の確認はcockpitが毎回行います。名前では断らず、textも伏せません。上流JSONは約5.4 MiB・15秒までで、Content-Lengthがこれを超えると読まずに`preview_too_large`です。スマホへは`{ok, kind:"text", label, text, truncated, notice}`（textはUTF-8で先頭32 KiB）か`{ok, kind:"image", label, width, height, data, notice}`を返します。画像はIHDR・IDAT・IENDのchunkだけでCRCが正しく、IHDRの幅と高さがcockpitの値と一致し、1辺8192 px・8 Mpx・4 MiB以内のPNGだけで、dataはその標準base64です。失敗は固定codeの`{ok:false, error}`（`preview_too_large`・`preview_type_denied`・`preview_path_denied`・`preview_permission_denied`・`preview_changed`・`history_*`、それ以外は`preview_unavailable`）で、cockpitのcode以外の文字列は渡しません。cockpitの`reference_expired`は410、`record_too_large`（参照を持つ記録が1 MiBを超える）は`preview_too_large`です。Content-Lengthと長さが違う上流の本文は拒みます。

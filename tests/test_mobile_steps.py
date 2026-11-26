@@ -39,7 +39,8 @@ def collect(events, provider):
     if not node:
         pytest.skip('node is unavailable')
     code = (ROOT/'dashboard/mobile/conversation.js').read_text().split('/* Opt-in, read-only conversation history.')[0]
-    script = code + '\nconst m=OrreryMobileSteps.collect(' + json.dumps(events) + ',' + json.dumps(provider.title()) + ");console.log(JSON.stringify({groups:m.groups,consumed:[...m.consumed]}));"
+    label = provider if provider == 'dsh' else provider.title()
+    script = code + '\nconst m=OrreryMobileSteps.collect(' + json.dumps(events) + ',' + json.dumps(label) + ");console.log(JSON.stringify({groups:m.groups,consumed:[...m.consumed]}));"
     result = subprocess.run([node, '-'], input=script, text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
@@ -56,6 +57,31 @@ def test_native_projected_sequence_pairs_and_keeps_unknown_tools(provider):
     assert model['groups'][0]['steps'][1]['status'] == ('failed' if provider == 'claude' else 'observed')
     assert ('wrapper' in model['consumed']) == (provider == 'codex')
     assert model['groups'][0]['closed'] == (provider == 'codex')
+
+
+@pytest.mark.parametrize('provider', ['dsh', 'hermes', 'antigravity'])
+def test_idle_native_runs_show_steps_and_preserve_file_chip(provider):
+    result = raw('result', 'tool_result', arguments={'paths': ['/fixture/result-only.png']})
+    request = raw('call', step=dict(id='a'*32, phase='call', tool='Read', detail='notes.md', started=STAMP))
+    if provider == 'antigravity':
+        request['step'].update(phase='complete', status='observed')
+        result['text'] = 'unpaired result text'
+    else:
+        result['step'] = dict(id='a'*32, phase='result', status='done', ended=STAMP)
+    shown = raw('shown', references=[dict(label='comparison.png', kind='image', id='x'*32)])
+    shown['text'] = 'mcp__orrery_mail__show_files'
+    before = [raw('prompt', 'text', 'user'), request, result, shown, raw('reply', 'text')]
+    projected, _, _, _ = history.project_page(dict(ok=True, provider=provider, events=before),
+                                             issue=lambda ref: 'y'*32)
+    assert 'result-only' not in json.dumps(projected)
+    chip = next(e for e in projected if e['id']=='shown')
+    assert chip['shown'] and chip['files'] == [dict(label='comparison.png', kind='image', ref='y'*32)]
+    grouped = collect(projected,provider)
+    group, = grouped['groups']
+    assert [step['eventId'] for step in group['steps']] == ['call', 'shown']
+    assert [step['status'] for step in group['steps']] == [
+        'observed' if provider == 'antigravity' else 'done', 'observed']
+    assert set(grouped['consumed']) == {'call', 'result', 'shown'}
 
 
 @pytest.mark.parametrize('provider', ['claude', 'codex'])

@@ -113,7 +113,7 @@ def product_copy(target):
     for name in ('dsh','hermes'):
         shutil.copytree(ROOT/'integrations'/name,target/'integrations'/name,dirs_exist_ok=True)
     (target/'dashboard').mkdir(exist_ok=True)
-    for name in ('harness_activity.py','harness_context.py'):
+    for name in ('harness_activity.py','harness_context.py','question_screen.py'):
         shutil.copy2(ROOT/'dashboard'/name,target/'dashboard'/name)
 
 
@@ -139,7 +139,7 @@ def fixture(program,tmp,parent_id):
         for name in ('bin','hooks','templates','codex'):
             shutil.copytree(ROOT/name,product/name,dirs_exist_ok=True)
         (product/'dashboard').mkdir(exist_ok=True)
-        for name in ('harness_activity.py','harness_context.py'):
+        for name in ('harness_activity.py','harness_context.py','question_screen.py'):
             shutil.copy2(ROOT/'dashboard'/name,product/'dashboard'/name)
         managed=tmp/'managed';source=managed/'source';ca.source(source);ca.ca.apply(product,source)
         (source/'hermes_cli').mkdir()

@@ -4,6 +4,8 @@ import runpy
 
 import pytest
 
+from _installed_client_payload import copy_client_library
+
 API = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'dashboard/terminal_state.py'))
 
 # 2026-11-10 Codex 0.163.0 capture: only the private cwd is substituted.
@@ -15,6 +17,20 @@ CODEX_TAIL = '''  Worked for 37s • 13:58
   GPT-6.1-Sol default · /fixture/work
   ? for shortcuts                                     ⚠ 3 warnings · f2 to view
 '''
+
+
+def test_installed_watcher_loads_codex_question_parser(tmp_path):
+    copy_client_library(tmp_path)
+    runtime = runpy.run_path(str(tmp_path / 'bin/lib/runtime_tmux.py'))
+    question = '''  Question 1/1 (1 unanswered)
+  Which report should we use?
+  › 1. Summary            Use the short report.
+    2. None of the above  Optionally, add details in notes (tab)
+  tab to add notes | enter to submit answer | esc to interrupt'''
+    terminal = runtime['module_api']('terminal_state')
+    assert terminal['activity'](question) == 'question'
+    assert terminal['compact_refusal'](runtime['compact_readiness'](question, 'codex')) == 'TMUX_TARGET_NOT_IDLE'
+    assert runtime['compact_readiness'](CODEX_TAIL, 'codex')['state'] == 'idle'
 
 
 @pytest.mark.parametrize('styled', [False, True])

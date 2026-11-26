@@ -119,7 +119,27 @@ function paintPermissions(box){
  box.replaceChildren(...elements);
  box.hidden=!marks.length;
 }
-window.OrreryMobileProfile={forName:readerProfile,paintPermissions,face(name,model){const e=face(readerProfile(name,model)||{name},1);e.setAttribute('aria-hidden','true');return e;}};
+function contextRemaining(agent){
+ const used=agent.ctx_used;
+ return agent.running&&OrreryMobileIdentity.roster()&&Number.isFinite(used)&&used>=0&&used<=100
+  ? Math.round(100-used) : null;
+}
+function contextMeter(agent){
+ const remaining=contextRemaining(agent);
+ if(remaining===null)return null;
+ const meter=node('span','agent-context-meter');
+ meter.setAttribute('role','meter');
+ meter.setAttribute('aria-label','Context remaining');
+ meter.setAttribute('aria-valuenow',remaining);
+ meter.title='Context remaining: '+remaining+'%';
+ const fill=node('span');
+ fill.style.width=remaining+'%';
+ if(remaining<20)meter.classList.add('is-low');
+ else if(remaining<50)meter.classList.add('is-warm');
+ meter.append(fill);
+ return meter;
+}
+window.OrreryMobileProfile={forName:readerProfile,paintPermissions,contextMeter,face(name,model){const e=face(readerProfile(name,model)||{name},1);e.setAttribute('aria-hidden','true');return e;}};
 function person(name){const a=snapshot.agents.find(x=>x.name===name)||{name,provider:'',model:'',locality:null};const e=node('div','person');e.append(face(a),node('span','name',name));return e;}
 function syncView(){
  const graphPanel=$('#graph-panel'),wasHidden=graphPanel.hidden;
@@ -278,7 +298,7 @@ function renderGraphCounts(data,observed,fresh){
   group.details.classList.toggle('has-attention',attention.length>0);
   group.trigger.title=label+': '+(observed?(fresh?'':'last known ')+active.length+note:'unavailable');
   group.trigger.setAttribute('aria-label',group.trigger.title);
-  const signature=JSON.stringify([observed,agents.map(a=>[a.name,a.provider,a.model,a.locality,a.act_state])]);
+  const signature=JSON.stringify([observed,agents.map(a=>[a.name,a.provider,a.model,a.locality,a.act_state,contextRemaining(a)])]);
   if(group.signature===signature)continue;
   group.signature=signature;
   const focus=group.menu.contains(document.activeElement)?document.activeElement.dataset.name:'';
@@ -287,6 +307,11 @@ function renderGraphCounts(data,observed,fresh){
    const button=node('button','graph-status-agent');button.type='button';button.dataset.name=a.name;
    const portrait=face(a);portrait.setAttribute('aria-hidden','true');
    button.append(portrait,node('span','graph-status-name',a.name));
+   const meter=contextMeter(a);
+   if(meter){
+    button.setAttribute('aria-description',meter.title);
+    button.append(meter);
+   }
    if(needsReview(a)){
     button.title=attentionReasons[a.act_state];
     button.setAttribute('aria-label',a.name+' · '+button.title);
@@ -725,7 +750,7 @@ function refreshReference(){
 }
 const MAX_ATTACHMENTS=10;
 const imageTypes=['image/jpeg','image/png','image/webp'], imageExtensions=['jpg','jpeg','png','webp'];
-const fileFormats=['pdf','txt','md','csv','json'];
+const fileLimit=50;
 let attachmentAccess={image:false,file:false},attachmentProbe='',attachmentController=null,attachmentProbeController=null,attachments=[],pendingAttachmentSelection=null;
 let paused=false,checkingView=false,reviewUntil=0,startupReady=false;
 const viewKey='orrery-mobile-view-v1';
@@ -972,6 +997,7 @@ function refreshOutput(){
  const terminalMeta=q('.reader-terminal-meta');if(terminalMeta)terminalMeta.textContent=limits?'Latest '+(limits.max_lines||120)+' lines · up to '+((limits.max_bytes||12288)/1024)+' KiB'+(delayed?'':' · every 3s')+(shown?' · '+age.textContent:''):'Waiting for a verified terminal snapshot.';
  const dot=q('.reader-state');if(tab==='terminal'&&dot){dot.dataset.state=previewOK&&!delayed?'work':'unknown';dot.title=delayed?'Terminal preview delayed':previewOK?'Terminal updating every 3s':'Waiting for terminal preview';dot.setAttribute('aria-label',dot.title);}
  const review=q('#terminal-review');if(review)review.disabled=phase!=='editing'||!previewOK||!!attachmentController||!inputValid();
+ refreshQuestion();
  const confirm=q('.terminal-confirm');if(confirm)confirm.disabled=!previewOK;
  refreshReference();
  refreshAttachmentControls();
@@ -1076,7 +1102,51 @@ const inputText=(draft=draftText())=>{
  const heading=r.agent+' · '+r.role+(r.ts?' · '+r.ts:'');
  return 'Reference: '+heading+' | Recorded message: '+r.eventId+' | Quote: '+JSON.stringify(r.text)+' | Reply: '+draft;
 };
-const inputValid=()=>validText(draftText())&&validText(inputText())&&referenceCurrent(replyReference);
+const otherChoice=question=>question?.mode==='other'?0:question?.choices.find(choice=>choice.other)?.id;
+const inputValid=()=>preview?.question
+ ?preview.question.draft_empty&&otherChoice(preview.question)!==undefined&&!attachments.length&&!replyReference&&validText(text)
+ :validText(draftText())&&validText(inputText())&&referenceCurrent(replyReference);
+
+let questionSelection={token:null,choices:new Set()};
+function refreshQuestion(){
+ const host=q('.reader-question');if(!host)return;
+ const question=previewOK?preview?.question:null;
+ if(question?.token!==questionSelection.token){
+  questionSelection={token:question?.token,choices:new Set((question?.choices||[]).filter(item=>item.checked).map(item=>item.id))};
+ }
+ const signature=JSON.stringify([question?.token,phase,[...questionSelection.choices]]);
+ if(host.dataset.question===signature)return;
+ host.dataset.question=signature;host.replaceChildren();host.hidden=!question||phase!=='editing';
+ if(host.hidden)return;
+ host.append(make('strong','','Waiting for your answer'),make('p','reader-question-prompt',question.body));
+ if(question.mode==='other'){
+  host.append(make('p','',question.draft_empty?'Write your answer in the message field.':'The terminal already contains an answer draft.'));
+  return;
+ }
+ const choices=make('div','reader-question-choices');
+ for(const choice of question.choices){
+  const select=()=>{
+   if(question.multiple){
+    const checked=questionSelection.choices.delete(choice.id);
+    if(!checked)questionSelection.choices.add(choice.id);
+    refreshQuestion();
+    if(!choice.other||checked)q('.reader-question-choice[data-choice="'+choice.id+'"]')?.focus({preventScroll:true});
+    else q('#terminal-text')?.focus({preventScroll:true});
+   }else if(choice.other)q('#terminal-text')?.focus({preventScroll:true});
+   else reviewInput(choice.id);
+  };
+  const button=action(choice.label,'reader-question-choice',select);button.dataset.choice=choice.id;
+  if(choice.description)button.title=choice.description;
+  if(question.multiple)button.setAttribute('aria-pressed',String(questionSelection.choices.has(choice.id)));
+  choices.append(button);
+ }
+ if(question.multiple){
+  const confirm=action('Review choices','reader-question-submit',()=>reviewInput([...questionSelection.choices].sort((a,b)=>a-b)));
+  confirm.disabled=!questionSelection.choices.size||questionSelection.choices.has(otherChoice(question));
+  choices.append(confirm);
+ }
+ host.append(choices);
+}
 function inputErrorNote(){
  const note=make('p','terminal-input-error');note.id='terminal-input-error';note.setAttribute('role','status');
  note.refresh=()=>{note.textContent=referenceError()||inputError(inputText());note.hidden=!note.textContent;};note.refresh();return note;
@@ -1131,9 +1201,11 @@ function renderAttachments(panel,removable){
  panel.append(list);
 }
 function attachmentType(file,source){
- const extension=/\.([a-z]+)$/i.exec(file.name)?.[1].toLowerCase();
+ const dot=file.name.lastIndexOf('.');
+ const suffix=dot>0?file.name.slice(dot+1).toLowerCase():'';
+ const extension=/^[a-z0-9]{1,32}$/.test(suffix)?suffix:'';
  if(attachmentAccess.image&&(imageTypes.includes(file.type)||!file.type&&imageExtensions.includes(extension)))return {kind:'image'};
- if(source==='file'&&attachmentAccess.file&&fileFormats.includes(extension))return {kind:'file',format:extension};
+ if(source==='file'&&attachmentAccess.file)return {kind:'file',format:extension};
  return null;
 }
 function flushAttachmentSelection(){
@@ -1160,10 +1232,10 @@ async function uploadAttachments(files,source){
   message='Attach up to '+MAX_ATTACHMENTS+(includesFiles?' items':' images')+' per input.';render();return;
  }
  for(const {file,type} of typed){
-  if(!type){message=source==='file'&&attachmentAccess.file?'Choose a JPEG, PNG, WebP, PDF, TXT, MD, CSV or JSON file.':'Choose a JPEG, PNG or WebP image.';render();return;}
-  const limit=type.kind==='image'?10:5;
-  if(file.size>limit*1024*1024){message=(type.kind==='image'?'Choose an image up to ':'Choose a document up to ')+limit+' MiB.';render();return;}
-  if(type.kind==='file'&&!file.size){message='Choose a document that is not empty.';render();return;}
+  if(!type){message='Choose a JPEG, PNG or WebP image.';render();return;}
+  const limit=type.kind==='image'?10:fileLimit;
+  if(file.size>limit*1024*1024){message=file.name+' exceeds '+limit+' MiB.';render();return;}
+  if(!file.size){message=file.name+' is empty.';render();return;}
  }
  if(phase!=='editing'){cancelIntent();phase='editing';}
  const g=generation,t=target,controller=new AbortController();attachmentController=controller;
@@ -1177,7 +1249,7 @@ async function uploadAttachments(files,source){
    if(g!==generation||controller.signal.aborted)return;
    const result=await request(kind,{epoch:capability.epoch,choice:t.choice,revision:t.revision,
     ...(file.name&&{label:file.name.slice(0,256)}),
-    [kind]:kind==='image'?data:{format:type.format,data}},controller,30000);
+    [kind]:kind==='image'?data:{format:type.format,data}},controller,kind==='image'?30000:90000);
    if(g!==generation||!sheet.open||document.hidden)return;
    if(result.enabled!==true||result.target?.choice!==t.choice||result.target?.revision!==t.revision||
     !sameTarget(result.target)||typeof result.path!=='string'||!result.path.startsWith('/'))throw Error('unavailable');
@@ -1193,29 +1265,38 @@ async function uploadAttachments(files,source){
     image_too_large:'Choose an image up to 10 MiB.',image_pixels_too_large:'Choose an image up to 24 megapixels.',
     image_format_unsupported:'Choose a static JPEG, PNG or WebP image.',
     image_text_too_large:'The image paths and text exceed 4096 bytes. Shorten the text or remove an image.',
-    file_folder_full:'This workspace already has 50 documents. Remove older files before attaching another.',
-    file_too_large:'Choose a document up to 5 MiB.',file_empty:'Choose a document that is not empty.',
-    file_format_unsupported:'Choose a PDF or UTF-8 TXT, MD, CSV or JSON file.',
+    file_folder_full:'This workspace already has 50 files. Remove older files before attaching another.',
+    file_too_large:'Choose a file up to '+fileLimit+' MiB.',file_empty:'Choose a file that is not empty.',
+    file_format_unsupported:'This Cockpit version cannot save the file. Update Cockpit and try again.',
     file_text_too_large:'The attachment paths and text exceed 4096 bytes. Shorten the text or remove an attachment.',
    };
    const noun=includesFiles?' attachment(s)':' image(s)';
-   const failed=kind==='image'?'Image':'Document';
+   const failed=kind==='image'?'Image':'File';
    message=(attachments.length?attachments.length+noun+' attached. ':'')+(reasons[error.message]||failed+' could not be saved. No input was sent. Choose the file again.');
   }
  }finally{if(g===generation&&attachmentController===controller){attachmentController=null;render();}}
 }
-async function reviewInput(){
- if(phase!=='editing'||attachmentController||!target||!choice||!previewOK||!inputValid())return;
+async function reviewInput(option){
+ const question=preview?.question;
+ const requested=Array.isArray(option)?option:[option];
+ const selected=question?.choices.filter(item=>requested.includes(item.id)&&!item.other)||[];
+ if(phase!=='editing'||attachmentController||!target||!choice||!previewOK||(!selected.length&&!inputValid()))return;
+ if(question&&(attachments.length||replyReference))return;
+ const other=otherChoice(question);
+ let chosen=selected.length?(question.multiple?selected.map(item=>item.id):selected[0].id):other;
+ if(question?.multiple&&other!==0&&!selected.length)chosen=[...new Set([...questionSelection.choices,other])].sort((a,b)=>a-b);
+ const answer=question?{token:question.token,choice:chosen}:null;
  composer=false;
  clearTimeout(pollTimer);previewController?.abort();previewController=null;
- const g=generation,t=target,draft=inputText(),reference=replyReference,controller=new AbortController();operationController=controller;phase='preparing';render();
+ const g=generation,t=target,draft=question?(selected.length?selected.map(item=>item.label).join(' · '):text):inputText(),reference=replyReference,controller=new AbortController();operationController=controller;phase='preparing';render();
  let reconnect=false;
  try{
-  const data=await request('prepare',{epoch:capability.epoch,choice:t.choice,revision:t.revision,text:draft},controller);
+  const data=await request('prepare',{epoch:capability.epoch,choice:t.choice,revision:t.revision,text:draft,
+   ...(answer?{question:answer}:{})},controller);
   if(g!==generation||!sheet.open||document.hidden)return;
   if(data.state!=='prepared'||data.text!==draft||data.expires_in!==30||data.target?.revision!==t.revision||data.target?.choice!==t.choice||data.target?.name!==name||!sameTarget(data.target))throw Error('unavailable');
   if(!referenceCurrent(reference))throw Error('reference_changed');
-  preparedReference=reference;prepared=Object.freeze({...data,target:Object.freeze({...data.target})});reviewUntil=Date.now()+data.expires_in*1000;receipt=null;phase='review';message='';render();
+  preparedReference=reference;prepared=Object.freeze({...data,question:Boolean(answer),target:Object.freeze({...data.target})});reviewUntil=Date.now()+data.expires_in*1000;receipt=null;phase='review';message='';render();
   const identity=prepared;expiryTimer=setTimeout(()=>{if(prepared!==identity||document.hidden)return;cancelIntent();phase='editing';message='Confirmation expired. Review again.';render();},data.expires_in*1000);
  }catch(_){if(g===generation&&sheet.open){prepared=null;phase='editing';message='Could not review input. Try again.';reconnect=true;render();}}
  finally{if(g===generation){operationController=null;if(reconnect)poll(true);else schedulePoll();}}
@@ -1228,10 +1309,10 @@ async function send(){
  const origin=box&&{top:box.top,right:box.right,width:box.width};
  const display={text:inputText(text.replace(/[\r\n]+$/u,'')),attachments:attachments.map(({kind,label,file})=>({kind,label,file}))};
  const p={epoch:prepared.epoch,intent:prepared.intent,confirmation:prepared.confirmation,target:prepared.target,
-  text:prepared.text,origin,at:Date.now(),display,pending:null};
+  text:prepared.text,origin,at:Date.now(),display,pending:null,question:prepared.question};
  prepared=null;preparedReference=replyReference=null;receipt=p;text='';clearAttachments();clearTimeout(expiryTimer);clearTimeout(pollTimer);previewController?.abort();previewController=null;
  const g=generation,controller=new AbortController();operationController=controller;phase='sending';message='';render();
- if(history&&tab==='conversation')p.pending=conversation()?.beginPending(p.text,origin,p.display);
+ if(history&&tab==='conversation'&&!p.question)p.pending=conversation()?.beginPending(p.text,origin,p.display);
  try{
   const result=await request('commit',{epoch:p.epoch,intent:p.intent,confirmation:p.confirmation},controller,7000);
   if(g!==generation||!sheet.open||document.hidden)return;
@@ -1250,7 +1331,7 @@ function showSendReceipt(p){
   // The verified record remains authoritative. The local copy only shows
   // this send while terminal confirmation and the matching record arrive.
   if(p.pending)reader?.finishPending(p.pending,accepted);
-  else if(accepted)reader?.addPending(p.text,p.origin,p.display,p.at);
+  else if(accepted&&!p.question)reader?.addPending(p.text,p.origin,p.display,p.at);
   if(accepted)window.OrreryReaderReplyMotion?.acknowledge(q('.reader-bar h2'));
  }
  if(phase!=='unknown')p.display=null;
@@ -1390,6 +1471,7 @@ function readerInputBar(){
  };
  panel.refreshDestination();
  panel.append(destination);
+ const questionHost=make('section','reader-question');questionHost.hidden=true;questionHost.setAttribute('aria-label','Question');panel.append(questionHost);
  if(replyReference&&phase!=='review'){
   const r=replyReference.value,card=make('section','reader-reference-card');card.setAttribute('aria-label','Reply reference');
   const at=new Date(r.ts),clock=Number.isFinite(at.getTime())?at.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'';
@@ -1399,10 +1481,11 @@ function readerInputBar(){
   card.append(label,quote,remove);panel.append(card);
  }
  if(phase==='review'){
-  panel.append(make('h3','',prepared.target.name+' — send this input?'),make('p','reader-not-sent','Not sent yet'),make('pre','terminal-exact',prepared.text));
+  panel.append(make('h3','',prepared.question?'Answer this question?':prepared.target.name+' — send this input?'),
+   make('p','reader-not-sent','Not sent yet'),make('pre','terminal-exact',prepared.text));
   renderAttachments(panel,false);
   const enter=make('div','terminal-enter');enter.append(make('span','','After this text'),make('kbd','','Enter ↵'));
-  panel.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
+  if(!prepared.question)panel.append(enter,make('p','terminal-help','Sends once to this pane. It may be a shell. Existing terminal input may be combined with it.'));
   const actions=make('div','terminal-actions'),confirm=action('Send once','terminal-primary terminal-confirm',send);
   if(sendFeedback)confirm.classList.add('reader-send-confirm');
   actions.append(action('Edit','',()=>{cancelIntent();phase='editing';composer=true;render();queueMicrotask(()=>q('#terminal-text')?.focus({preventScroll:true}));}),confirm);panel.append(actions);
@@ -1423,14 +1506,15 @@ function readerInputBar(){
   renderAttachments(panel,true);attachmentPicker(panel,row,available);row.append(field,review);panel.append(label,row,count,error);
  }
  sheet.append(panel);
+ refreshQuestion();
  if(receiptBox)sendFeedback?.show(receiptBox,phase);
  layoutInputBar(panel);
  if(typeof ResizeObserver!=='undefined'){inputObserver=new ResizeObserver(()=>layoutInputBar(panel));inputObserver.observe(panel);}
 }
 function readerReceipt(host){
  const accepted=phase==='accepted',unknown=phase==='unknown',sending=phase==='sending',box=make('div','reader-receipt '+phase);box.setAttribute('role','status');
- box.append(make('strong','',accepted?'Received by terminal':unknown?'Outcome unknown':sending?'Sending once…':'Input not sent'));
- box.append(make('small','',accepted?'Input and Enter received. Completion is not confirmed.':unknown?'Some input may have arrived. No automatic retry.':sending?'Waiting for the terminal receipt.':'Input refused or confirmation expired.'));
+ box.append(make('strong','',accepted?(receipt?.question?'Answer sent':'Received by terminal'):unknown?'Outcome unknown':sending?'Sending once…':'Input not sent'));
+ box.append(make('small','',accepted?(receipt?.question?'The terminal accepted the answer keys.':'Input and Enter received. Completion is not confirmed.'):unknown?'Some input may have arrived. No automatic retry.':sending?'Waiting for the terminal receipt.':'Input refused or confirmation expired.'));
  if(unknown)box.append(action('Check receipt','',status));
  host.append(box);return box;
 }
@@ -1510,6 +1594,7 @@ function render({restoreFocus=true}={}){
   if(readTop!==null&&pre){terminalText(pre,readOutput);pre._preview=readPreview;pre._scrollView=readView;pre.scrollTop=readTop;}
   readerInputBar();if(!reading)scroll.append(make('p','terminal-message',message));refreshOutput();return;
  }
+ const questionHost=make('section','reader-question');questionHost.hidden=true;questionHost.setAttribute('aria-label','Question');scroll.append(questionHost);
  if(['editing','preparing'].includes(phase)){
   const label=make('label','terminal-compose-label','Your input');label.htmlFor='terminal-text';const field=make('textarea','terminal-text');field.id='terminal-text';field.rows=2;field.value=text;field.placeholder='Write one line…';field.autocomplete='off';field.spellcheck=false;field.disabled=phase==='preparing';
   const count=make('span','',new TextEncoder().encode(inputText()).length+' / 4096 bytes'),meta=make('div','terminal-input-meta');meta.append(make('span','','One line + Enter'),count);

@@ -12,7 +12,7 @@ from agentstack_mail.authorization import (
     assert_authorization_catalog_boundary,
     catalog_as_plain_data,
 )
-from agentstack_mail.contract import COMPATIBILITY_TOOLS
+from agentstack_mail.contract import COMPATIBILITY_TOOLS, PUBLISHED_TOOLS
 from agentstack_mail.namespace_contract import SCOPE_ARGUMENTS, load_namespace_contract
 
 
@@ -56,11 +56,11 @@ async def verify() -> None:
         )
         actual[name] = {key: dumped[key] for key in schema_fields if key in dumped}
 
-    if set(tools) != COMPATIBILITY_TOOLS or len(tools) != len(COMPATIBILITY_TOOLS):
+    if set(tools) != PUBLISHED_TOOLS:
         raise SystemExit(
             "installed wheel tool boundary mismatch: "
-            f"missing={sorted(COMPATIBILITY_TOOLS - set(tools))}, "
-            f"extra={sorted(set(tools) - COMPATIBILITY_TOOLS)}"
+            f"missing={sorted(PUBLISHED_TOOLS - set(tools))}, "
+            f"extra={sorted(set(tools) - PUBLISHED_TOOLS)}"
         )
     if resources:
         raise SystemExit("installed wheel must publish zero concrete MCP resources")
@@ -75,7 +75,7 @@ async def verify() -> None:
         or set(candidate["tools"]) != COMPATIBILITY_TOOLS
     ):
         raise SystemExit("installed wheel candidate namespace contract mismatch")
-    for name in tools:
+    for name in COMPATIBILITY_TOOLS:
         properties = dict(candidate["tools"][name]["input_schema"]["properties"])
         if name == "send_message":
             properties.pop("reply_to")
@@ -95,7 +95,7 @@ async def verify() -> None:
     if (recovery_guard != {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": None}
             or "existing_agent_id" in registration_schema.get("required", [])):
         raise SystemExit("installed wheel existing-owner authentication schema mismatch")
-    if actual != expected:
+    if {name: actual[name] for name in COMPATIBILITY_TOOLS} != expected:
         mismatched = sorted(
             name for name in expected if actual.get(name) != expected[name]
         )

@@ -71,6 +71,7 @@ if __name__ == '__main__':
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
     from dashboard import codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
+    from dashboard.local_model_makers import LOCAL_MAKER_ASSETS
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import codex_models
     import mail_signals
@@ -82,6 +83,7 @@ except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import harness_activity
     import dsh_history
     import hermes_history
+    from local_model_makers import LOCAL_MAKER_ASSETS
 
 try:
     from dashboard.providers.codex_app import CodexAppRuntimeProvider
@@ -216,8 +218,8 @@ BIND_HOST = _env_text("AGENTSTACK_BIND_HOST", "127.0.0.1")
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
 THEME_ASSETS = {
-    **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","mail_flow.css","network_node.js","network_core.js","runtime_node.js","operator_session.js","mail_controller.js","operation_controller.js")},
-    **{"/assets/"+name+".svg": (os.path.join(HERE,"assets",name+".svg"), "image/svg+xml") for name in ("anthropic","openai","google","deepseek","qwen","glm","orbit","orbit-light")},
+    **{"/"+name:(os.path.join(HERE,name),"text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8") for name in ("global_ui.js","global_ui.css","mail_flow.js","mail_flow.css","local_model_makers.js","network_node.js","network_core.js","runtime_node.js","operator_session.js","mail_controller.js","operation_controller.js")},
+    **{"/assets/"+name: (os.path.join(HERE,"assets",name), "image/svg+xml") for name in ("anthropic.svg","openai.svg","google.svg","orbit.svg","orbit-light.svg",*LOCAL_MAKER_ASSETS)},
     "/theme_core.js": (os.path.join(HERE, "theme_core.js"), "text/javascript; charset=utf-8"),
     "/theme_controller.js": (
         os.path.join(HERE, "theme_controller.js"),
@@ -2223,6 +2225,10 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                 except (OSError, RuntimeError, ValueError, KeyError):
                     reason = "Antigravity's saved launch settings are unavailable"
             reason = resident_reason or reason
+            size = status.get("ctx_window_tokens")
+            size = size if type(size) is int and size > 0 else None
+            used = status.get("ctx_used")
+            used = used if size is not None and type(used) is int and 0 <= used <= 100 else None
             return {"cwd": agent_card.absolute_cwd(plan.get("cwd")),
                     "model_id": agent_card.native_model_id(status.get("model_id")) or plan.get("model"),
                     "effort": status.get("effort") or plan.get("effort"),
@@ -2233,7 +2239,8 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                     "harness_kind": "antigravity", **_card_antigravity_permissions(
                         plan, screen_launch if row.get("running") else None, registration["project_key"], identity,
                         selection=selection),
-                    "ctx_window_tokens": None}
+                    "ctx_window": str(size) if size is not None else None,
+                    "ctx_window_tokens": size, "ctx_used": used}
     kind = agent_card.HARNESS_KIND.get(program)
     cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
     candidate_parent = agent_card.parent_name(session.get("parent_agent"), name) if kind else None
@@ -2413,6 +2420,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
         **({"permission_managed_launch": True} if adoption and not permission_reason else {}),
         "cwd": cwd, "model_id": model, "effort": effort, "harness_kind": kind,
         "ctx_window_tokens": harness_context.window_tokens(row.get("ctx_window")) if kind else None,
+        **({"ctx_used": None, "ctx_window": None, "ctx_window_tokens": None} if kind == "antigravity" else {}),
         "computer_use": computer, "browser_use": browser, **observed,
         "parent_state": parent_state, "parent_agent": parent,
     }

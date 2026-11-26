@@ -83,7 +83,7 @@ ERRORS = frozenset({
     'history_changed', 'history_unavailable', 'dashboard_unavailable', 'claude_next_phase',
     'record_too_large', 'invalid_cursor', 'invalid_agent', 'history_slow',
     'preview_unavailable', 'preview_too_large', 'preview_type_denied', 'preview_path_denied',
-    'preview_changed',
+    'preview_changed', 'preview_permission_denied',
 }) | DIFF_ERRORS | DETAIL_ERRORS
 
 
@@ -198,7 +198,7 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
         return None
     kind, role = raw.get('kind'), raw.get('role')
     step = project_step(raw.get('step'))
-    # Pair Claude results without ever relaying their output body.
+    # Pair native results without ever relaying their output body.
     if kind == 'tool_result':
         if not step or step['phase'] != 'result' or role != 'assistant':
             return None
@@ -221,7 +221,7 @@ def project_event(raw, text_limit=MAX_TEXT, mail_limit=MAX_MAIL_BODY, issue=None
               'ts': _label(raw.get('ts'), 40), 'truncated': cut or raw.get('truncated') is True}
     if kind == 'text' and role == 'assistant' and raw.get('variant') == 'update':
         result['variant'] = 'update'
-    if step and kind == 'tool':
+    if step and (kind == 'tool' or kind == 'mail' and role == 'assistant' and step['phase'] in ('call', 'complete')):
         result['step'] = step
         if issue_diff and role == 'assistant' and (raw['kind'], step['phase']) in {
             ('tool_result', 'result'), ('tool', 'complete'),
@@ -321,7 +321,7 @@ def project_page(raw, issue=None, issue_diff=None, *, issue_detail=None):
         # These results have no call ID. Keep the same fixed label as Desktop
         # without relaying arguments, output, or a guessed success verdict.
         items = [dict(id=x.get('id'), ts=x.get('ts'), cursor_before=x.get('cursor_before'),
-                      kind='tool', role='assistant', text='Tool result')
+                      kind='tool', role='assistant', text='Tool result', step_wrapper=True)
                  if isinstance(x, dict) and x.get('kind') == 'tool_result'
                  and x.get('role') == 'assistant' else x for x in items]
     if provider not in ('claude', 'codex'):

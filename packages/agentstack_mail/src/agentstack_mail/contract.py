@@ -72,6 +72,11 @@ COMPATIBILITY_TOOLS = (
     RUNTIME_REQUIRED_TOOLS | MODEL_COMPATIBILITY_TOOLS | POST_CUTOVER_PUBLISHED_TOOLS
 )
 
+# Local presentation tools also available over direct loopback HTTP. They
+# have no predecessor Mail operation or candidate namespace dispatch.
+DIRECT_LOCAL_TOOLS = frozenset({"show_files"})
+PUBLISHED_TOOLS = COMPATIBILITY_TOOLS | DIRECT_LOCAL_TOOLS
+
 LOCAL_ONLY_TOOLS = frozenset(
     {
         "bootstrap",
@@ -79,7 +84,6 @@ LOCAL_ONLY_TOOLS = frozenset(
         "renew_reservations",
         "release_reservations",
         "runtime_status",
-        "show_files",
     }
 )
 

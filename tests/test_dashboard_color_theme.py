@@ -33,15 +33,15 @@ process.stdout.write(JSON.stringify({vars:theme.cssVariables,report:core.contras
 """
     )
     assert result["vars"] == {
-        "--bg": "#f5efe1",
-        "--panel": "#e8dfcd",
-        "--panel-2": "#ddd2bc",
-        "--elev": "#d1c3a9",
-        "--ink": "#010100",
-        "--ink-dim": "#3a3528",
-        "--ink-faint": "#545148",
-        "--amber": "#704a00",
-        "--amber-deep": "#704a00",
+        "--bg": "#f8f6f1",
+        "--panel": "#fdfcf8",
+        "--panel-2": "#f1eee7",
+        "--elev": "#f1eee7",
+        "--ink": "#25231f",
+        "--ink-dim": "#615e55",
+        "--ink-faint": "#615e55",
+        "--amber": "#895c00",
+        "--amber-deep": "#895c00",
         "--amber-glow": "transparent",
         "--ln-local": "#005c50",
         "--ln-remote": "#673f8d",
@@ -49,28 +49,33 @@ process.stdout.write(JSON.stringify({vars:theme.cssVariables,report:core.contras
         "--alert": "#a6060e",
         "--cyan": "#005a65",
         "--accent-control": "#005a65",
-        "--void": "#f5efe1",
-        "--bone": "#010100",
-        "--bone-dim": "#3a3528",
-        "--line": "rgb(1 1 0 / 0.16)",
-        "--line-soft": "rgb(1 1 0 / 0.08)",
-        "--hair": "rgb(1 1 0 / 0.16)",
-        "--hair-2": "rgb(1 1 0 / 0.08)",
+        "--void": "#f8f6f1",
+        "--bone": "#25231f",
+        "--bone-dim": "#615e55",
+        "--line": "rgb(37 35 31 / 0.26)",
+        "--line-soft": "rgb(37 35 31 / 0.16)",
+        "--hair": "rgb(37 35 31 / 0.26)",
+        "--hair-2": "rgb(37 35 31 / 0.16)",
         "--glow-a": "none",
         "--glow-c": "none",
-        "--theme-border-control": "#5f5c52",
-        "--theme-surface-terminal": "#fdf7ea",
-        "--theme-shadow-low": "rgb(1 1 0 / 0.12)",
-        "--theme-shadow-high": "rgb(1 1 0 / 0.08)",
-        "--theme-ink-rgb": "1 1 0",
-        "--theme-accent-rgb": "112 74 0",
+        "--theme-border-control": "#838179",
+        "--theme-surface-terminal": "#fdfcf8",
+        "--theme-focus-ring": "#895c00",
+        "--theme-accent-edge": "#ac7500",
+        "--theme-accent-fill": "#f2b65a",
+        "--theme-status-alert": "#a6060e",
+        "--theme-status-question": "#005a65",
+        "--theme-shadow-low": "rgb(37 35 31 / 0.12)",
+        "--theme-shadow-high": "rgb(37 35 31 / 0.08)",
+        "--theme-ink-rgb": "37 35 31",
+        "--theme-accent-rgb": "137 92 0"
     }
     for role, measurement in result["report"].items():
         assert measurement["ratio"] >= measurement["target"], role
     assert min(
         measurement["ratio"]
         for role, measurement in result["report"].items()
-        if role != "control"
+        if role not in {"control", "accentEdge"}
     ) >= 4.5
     assert result["report"]["control"]["ratio"] >= 3
 
@@ -136,7 +141,8 @@ listeners.message({source:parentWindow,origin:location.origin,data:{
 }});
 const afterDark={count:values.size,theme:root.dataset.colorTheme,
   preference:root.dataset.colorThemePreference};
-process.stdout.write(JSON.stringify({normalized,afterWrong,afterOrigin,afterLight,afterDark,sent}));
+const expectedCount=Object.keys(core.deriveWarmPaperLightTheme().cssVariables).length;
+process.stdout.write(JSON.stringify({normalized,afterWrong,afterOrigin,afterLight,afterDark,sent,expectedCount}));
 """
     )
     assert result["normalized"] == {
@@ -147,10 +153,10 @@ process.stdout.write(JSON.stringify({normalized,afterWrong,afterOrigin,afterLigh
     assert result["afterWrong"] == {"count": 0}
     assert result["afterOrigin"] == {"count": 0}
     assert result["afterLight"] == {
-        "count": 31,
+        "count": result["expectedCount"],
         "theme": "light",
         "preference": "light",
-        "bg": "#f5efe1",
+        "bg": "#f8f6f1",
     }
     assert result["afterDark"] == {"count": 0, "preference": "dark"}
     assert result["sent"][0]["data"] == {

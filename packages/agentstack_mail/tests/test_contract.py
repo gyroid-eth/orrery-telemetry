@@ -4,12 +4,14 @@ from pathlib import Path
 from agentstack_mail.contract import (
     COMPATIBILITY_TOOLS,
     CONTRACT_VERSION,
+    DIRECT_LOCAL_TOOLS,
     ISOLATION_DEFAULTS,
     LEGACY_COLLISION_VALUES,
     LOCAL_ONLY_TOOLS,
     MODEL_COMPATIBILITY_TOOLS,
     NON_COMPATIBILITY_UPSTREAM_TOOLS,
     POST_CUTOVER_PUBLISHED_TOOLS,
+    PUBLISHED_TOOLS,
     POLICY_EXCLUDED_UPSTREAM_TOOLS,
     RUNTIME_REQUIRED_TOOLS,
     SERVICE_IDENTITY,
@@ -70,6 +72,9 @@ def test_compatibility_surface_matches_caller_audit() -> None:
     assert set(fixture["model_compatibility"]) == MODEL_COMPATIBILITY_TOOLS
     assert set(fixture["compatibility_union"]) == COMPATIBILITY_TOOLS
     assert set(fixture["local_only_not_upstream"]) == LOCAL_ONLY_TOOLS
+    assert set(fixture["direct_local_published"]) == DIRECT_LOCAL_TOOLS == {"show_files"}
+    assert PUBLISHED_TOOLS == COMPATIBILITY_TOOLS | DIRECT_LOCAL_TOOLS
+    assert not DIRECT_LOCAL_TOOLS & LOCAL_ONLY_TOOLS
     assert (
         set(fixture["non_compatibility_upstream"])
         == NON_COMPATIBILITY_UPSTREAM_TOOLS

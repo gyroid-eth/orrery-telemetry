@@ -7,6 +7,54 @@ import pytest
 from mobile_reader_browser import AREA, MAIL_MARKDOWN, assert_mail_markdown, phone  # noqa: F401
 
 
+def test_mobile_lists_update_an_antigravity_context_meter(phone):
+    _, js, wait, state = phone
+    agent = state["snapshot"]["agents"][0]
+    agent.update(provider="google", model="gemini-4-argon", ctx_used=None)
+    refresh = "document.dispatchEvent(new Event('visibilitychange'))"
+    js("OrreryMobileTerminal.close();OrreryMobileGraph.show();" + refresh)
+    working = "document.querySelector('#graph-working-agents [data-name=SampleAgent]')"
+    wait(working + "!==null")
+    wait("OrreryMobileGraph.agents()[0]?.provider==='google'")
+    js("document.querySelector('[data-agent-status=work] summary').click()")
+    meter = working + "?.querySelector('.agent-context-meter')"
+    assert js(meter + "===null")
+
+    agent["ctx_used"] = 14
+    js(refresh)
+    wait(meter + "?.getAttribute('aria-valuenow')==='86'")
+    assert js(meter + ".firstElementChild.style.width") == "86%"
+
+    js("OrreryMobileWorkspace.readerEntry('SampleAgent',null).click()")
+    picker = "document.querySelector('.workspace-agent-choice .agent-context-meter')"
+    wait(picker + "?.getAttribute('aria-valuenow')==='86'")
+    assert js(picker + ".getBoundingClientRect().width") > 0
+
+    agent["ctx_used"] = 100
+    js(refresh)
+    wait(picker + "?.getAttribute('aria-valuenow')==='0'")
+    state["snapshot"]["sources"]["agents"] = dict(status="stale", observed_at=time.time() - 45, age_seconds=45)
+    js(refresh)
+    wait(picker + "===null && " + meter + "===null")
+
+
+def test_local_inkling_uses_thinking_machines_logo_in_reader(phone):
+    _, js, wait, state = phone
+    state['snapshot']['agents'][0].update(provider='local', locality='local', model='inkling-2-mini')
+    js("document.dispatchEvent(new Event('visibilitychange'))")
+    wait("OrreryMobileProfile.forName('SampleAgent')?.model === 'inkling-2-mini'")
+    js("OrreryMobileTerminal.close();OrreryMobileTerminal.open('SampleAgent')")
+    wait("document.querySelector('.conversation-avatar .provider-logo[data-provider=thinking-machines]') !== null")
+    assert js("""(async()=>{
+        const logo=document.querySelector('.conversation-avatar .provider-logo[data-provider=thinking-machines]');
+        const source=logo.getAttribute('href');
+        const image=new Image();
+        image.src=source;
+        await image.decode();
+        return source;
+    })()""") == '/assets/thinking-machines.svg'
+
+
 def test_reader_unknown_permissions_disclose_reasons_without_resizing_header(phone):
     _, js, wait, state = phone
     height = js("document.querySelector('.reader-bar').offsetHeight")
@@ -173,13 +221,16 @@ def test_open_mail_thread_tracks_sender_and_body_end(phone,theme):
     wait("threadCard.querySelector('.conversation-mail-thread').getClientRects().length===0")
 
 
-def test_light_reader_provider_seat_uses_paper_tokens(phone):
-    _,js,wait,_=phone
-    from pathlib import Path
-    js((Path(__file__).resolve().parents[1]/'dashboard/theme_core.js').read_text())
-    js("document.documentElement.dataset.colorTheme='light';Object.entries(AgentStackColorThemeCore.deriveWarmPaperLightTheme().cssVariables).forEach(([k,v])=>document.documentElement.style.setProperty(k,v))")
-    wait("document.querySelector('.conversation-avatar .provider-seat')!==null")
-    assert js("""(()=>{const seat=getComputedStyle(document.querySelector('.conversation-avatar .provider-seat')),probe=document.createElement('span');probe.style.background='var(--panel)';probe.style.border='1px solid var(--hair)';document.body.append(probe);const expected=getComputedStyle(probe),matches=seat.fill===expected.backgroundColor&&seat.stroke===expected.borderTopColor;probe.remove();return matches})()""")
+def test_light_reader_provider_badge_uses_original_artwork_on_ink(phone):
+    _, js, wait, _ = phone
+    js("document.querySelector('#mobile-theme').click()")
+    wait("document.querySelector('.conversation-avatar .provider-logo')!==null")
+    assert js("""(()=>{
+        const badge=document.querySelector('.conversation-avatar .provider-badge:has(.provider-logo)');
+        const seat=getComputedStyle(badge.querySelector('.provider-seat'));
+        const logo=getComputedStyle(badge.querySelector('.provider-logo'));
+        return [seat.fill,seat.stroke,logo.filter];
+    })()""") == ['rgb(37, 35, 31)', 'rgb(131, 129, 121)', 'none']
 
 
 def test_open_long_mail_refresh_and_poll_keep_reader_position(phone):

@@ -97,6 +97,10 @@ def test_owner_and_outer_authority_accept_originless_get_and_assets(reader):
     assert directives['script-src'] == directives['connect-src'] == "'self'"
     status,_,body=request(port,'/network_node.js')
     assert status==200 and b'OrreryNetworkNode' in body
+    status,_,body=request(port,'/local_model_makers.js')
+    assert status==200 and b'Thinking Machines Lab' in body
+    status,headers,body=request(port,'/assets/thinking-machines.svg')
+    assert status==200 and headers['Content-Type']=='image/svg+xml' and b'<svg ' in body
     status,_,css=request(port,'/network.css')
     assert status==200 and b'--serif:' in css and b'--ln-local:' in css
     for font in ('fraunces-normal','fraunces-italic','ibm-plex-mono-400','ibm-plex-mono-500','ibm-plex-mono-600',
@@ -133,7 +137,7 @@ def test_mobile_default_is_one_day_and_fine_window_is_allowlisted(reader):
 def test_every_fixed_logo_is_authenticated_svg_and_matches_canonical_bytes(reader):
     from pathlib import Path
     port,store=reader;root=Path(__file__).resolve().parents[1]
-    for logo in ('orbit','anthropic','openai','google','deepseek','qwen','glm'):
+    for logo in ('orbit','anthropic','openai','google','deepseek','qwen','glm','thinking-machines'):
         path='/assets/'+logo+'.svg'
         source=(root/'integrations/dsh/assets/deepseek.svg' if logo=='deepseek'
                 else root/'dashboard/assets'/(logo+'.svg'))
@@ -523,7 +527,7 @@ def test_input_client_checks_adapter_contract_and_never_retries_lost_commit(case
         assert calls[0][2]['owner']=='owner@example.test' and calls[0][2]['reader_epoch']==client.reader_epoch
 
 
-@pytest.mark.parametrize('case',['probe','upload','wrong_format','wrong_directory','wrong_choice','supplied_path'])
+@pytest.mark.parametrize('case',['probe','upload','extensionless','wrong_format','wrong_directory','wrong_choice','supplied_path'])
 def test_file_transport_checks_format_and_verified_attachment_response(monkeypatch,case):
     from dashboard import mobile_input as mobile
 
@@ -533,6 +537,9 @@ def test_file_transport_checks_format_and_verified_attachment_response(monkeypat
     target=dict(name='FixtureCurie',pane_label='Main',choice=proof['choice'],revision=proof['revision'])
     response=dict(contract=mobile.CONTRACT,epoch=proof['epoch'],target=target,enabled=True)
     path='/workspace/.orrery-input-files/'+'d'*32+'.md'
+    if case=='extensionless':
+        upload['format']=''
+        path=path.removesuffix('.md')
     if case!='probe':response['path']=path
     if case=='wrong_format':response['path']=path.removesuffix('.md')+'.pdf'
     if case=='wrong_directory':response['path']=path.replace('input-files','input-images')
@@ -546,7 +553,7 @@ def test_file_transport_checks_format_and_verified_attachment_response(monkeypat
 
     monkeypatch.setattr(client,'_post',post)
     args=dict(proof,file=None if case=='probe' else upload)
-    if case in {'probe','upload'}:
+    if case in {'probe','upload','extensionless'}:
         assert client.call('file',args)==response
         assert calls[0][1]['reader_epoch']==client.reader_epoch
     else:
@@ -567,13 +574,13 @@ def test_document_request_uses_the_opt_in_owner_and_attachment_limit():
                         input_enabled=True,phone_policy_reviewed=True)
     server=relay.make_server(config,store=Store(),input_client=Input(),test_port=0)
     scope=dict(epoch='a'*32,choice='b'*64,revision='c'*64)
-    document=dict(format='txt',data='YWFh'*5000)
+    document=dict(format='mov',data='YWFh'*5000)
     controlled=json.dumps(dict(scope,file=document)).encode()
     assert len(controlled)>mobile.MAX_JSON_BYTES
     with serving(server) as port:
         headers={'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test',
                  'Origin':'https://viewer.example.ts.net:9443','Content-Type':'application/json'}
-        for body,expected in [(controlled,200),(json.dumps(dict(scope,file=dict(document,format='html'))).encode(),400)]:
+        for body,expected in [(controlled,200),(json.dumps(dict(scope,file=dict(document,format='../mov'))).encode(),400)]:
             con=http.client.HTTPConnection('127.0.0.1',port,timeout=3)
             try:
                 con.request('POST','/view/terminal/file',body=body,headers=headers)
