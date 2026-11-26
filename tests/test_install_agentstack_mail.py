@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -622,7 +623,7 @@ def test_default_installer_owns_serves_updates_and_removes_gemini(tmp_path):
             text=True, capture_output=True, timeout=120,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        return result.stdout
+        return result
 
     def assert_owned_payload():
         receipt = json.loads((install / "install-state.json").read_text())
@@ -630,18 +631,37 @@ def test_default_installer_owns_serves_updates_and_removes_gemini(tmp_path):
         for relative in payload:
             assert (install / relative).read_bytes() == (ROOT / relative).read_bytes()
 
-    def catalog():
-        with urllib.request.urlopen(f"http://127.0.0.1:{dashboard_port}/api/spawn-names", timeout=5) as response:
-            return {provider["id"]: provider for provider in json.load(response)["providers"]}
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def catalog(install_result):
+        url = f"http://127.0.0.1:{dashboard_port}/api/spawn-names"
+        deadline = time.monotonic() + 15
+        last_error = None
+        while (remaining := deadline - time.monotonic()) > 0:
+            try:
+                with opener.open(url, timeout=min(5, remaining)) as response:
+                    return {provider["id"]: provider for provider in json.load(response)["providers"]}
+            except urllib.error.HTTPError:
+                raise  # An HTTP response is already a result for this assertion.
+            except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+                last_error = exc
+                time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+        log_path = install / "runtime/dashboard.log"
+        log = log_path.read_text(encoding="utf-8", errors="replace")[-4000:] if log_path.is_file() else "(no dashboard log)"
+        raise AssertionError(
+            f"No response from {url}\n"
+            f"{install_result.stdout}{install_result.stderr}\nDashboard log:\n{log}"
+        ) from last_error
 
     try:
-        dry_run = invoke(INSTALLER, "--dry-run")
+        dry_run = invoke(INSTALLER, "--dry-run").stdout
         assert "install Gemini integration files and record ownership" in dry_run
         assert not install.exists()
 
-        assert "agy is not installed/on PATH" in invoke(INSTALLER)
+        result = invoke(INSTALLER)
+        assert "agy is not installed/on PATH" in result.stdout
         assert_owned_payload()
-        assert {"claude", "codex", "gemini"} <= catalog().keys()
+        assert {"claude", "codex", "gemini"} <= catalog(result).keys()
         assert mcp_config.read_bytes() == original_config
 
         cli_bin = home / ".local/bin"
@@ -649,9 +669,9 @@ def test_default_installer_owns_serves_updates_and_removes_gemini(tmp_path):
         model = "gemini-4-hydrogen-high"
         _write_command(cli_bin, "agy", f"#!/bin/sh\n[ \"$1\" = models ] || exit 2\nprintf '{model}\\tFixture model\\n'\n")
         (install / "bin/agentstack-gemini-stream").write_text("# previous release\n")
-        invoke(INSTALLER)
+        result = invoke(INSTALLER)
         assert_owned_payload()
-        gemini = catalog()["gemini"]
+        gemini = catalog(result)["gemini"]
         assert gemini["label"] == "Antigravity"
         assert model in gemini["models"]
         assert gemini["capabilities"]["standalone"] == (sys.platform == "darwin")
