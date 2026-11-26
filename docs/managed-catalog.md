@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | `claude` / Claude Code の既存経路 | Claude Code（`claude-code`） | CLI のログインと既存 model catalog を使う。新しい汎用 Anthropic API 接続の設定ではない |
 | `codex` / Codex CLI の既存経路 | Codex CLI（`codex-cli`） | CLI のログイン・利用権限と版に応じた model catalog を使う |
+| `gemini` / Google Antigravity | Antigravity CLI（`agy`） | サインイン済みのアカウントとカタログの model 候補を使う。[Gemini の導入ガイド](antigravity.md) |
 | `deepseek` / 設定済み DeepSeek backend | `dsh` | 固定 DeepSeek adapter と資格の参照、設定済みの正式 model ID が必要 |
 | `deepseek` / 設定済み DeepSeek backend | `hermes` | 明示 profile と資格の参照が必要。公式 DeepSeek の対象 `/anthropic` route は thinking を保持する `/v1` Chat Completions に投影する |
 | `strata` / 画面では Local | `dsh` | 既存 adapter に合う API と資格の参照、設定済みの正式 model ID が必要。任意の Local server を保証しない |
@@ -17,7 +18,7 @@
 
 API を使う4組の実機での確認範囲は現在 macOS の legacy mode です。Ubuntu WSL の追加の静的経路は次節に記載します。同じ backend の `models`（未指定なら `model` 1件）にある正式 ID を主・補助 model の候補とし、選んだ model × harness ごとに利用可否を検査します。別 provider の資格や未設定の model を推測して補いません。
 
-[Codex App Bridge](codex-app.md) と [Antigravity / Gemini](antigravity.md) は別の任意統合です。この表から dsh / Hermes との追加の組合せを保証したり、未対応の API を `claude` / `codex` として使えたりするわけではありません。
+[Codex App Bridge](codex-app.md) は Desktop 向けの任意統合です。対応する provider と harness の組合せは上の表を参照してください。
 
 runtime の任意導入は `install.sh --enable-dsh --dsh-node /absolute/node` / `--enable-hermes` で選びます。[導入と削除](install.md)を参照してください。
 

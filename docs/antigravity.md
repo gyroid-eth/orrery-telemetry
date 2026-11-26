@@ -19,7 +19,7 @@ agy models
 
 標準のバイナリ配置は `~/.local/bin/agy` です。
 
-## Install the optional provider payload
+## Gemini を使うための設定
 
 ORRERY Telemetry の checkout で、まず導入先とコピー予定を確認します。
 
@@ -46,8 +46,8 @@ scripts/install-gemini-provider.sh --configure-mcp
 ~/.agentstack/dashboard/agentctl.sh restart
 ```
 
-optional installer は provider のファイルだけをコピーします。必要な core が古い場合は
-core を更新してから再実行します。
+このスクリプトは Gemini の連携に必要なファイルをコピーします。core の更新を
+求められた場合は、更新してから再実行します。
 
 ## Usage left に利用枠を表示
 
@@ -131,7 +131,7 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 ## Dashboard NEW AGENT
 
-[追加 provider を導入](#install-the-optional-provider-payload)して Dashboard を再起動すると、**NEW AGENT** に Antigravity が出ます。
+[Gemini の設定](#gemini-を使うための設定)を済ませて Dashboard を再起動すると、**NEW AGENT** に Antigravity が出ます。
 macOS でカタログが親なし起動に対応している場合（API 50 以降）は、親を選ばず、
 指定したフォルダで対話型 agent を起動できます。Git を使っていないフォルダも選べます。
 最初の task は CLI に一度だけ渡り、Mail、Reader、履歴からの Resume を使えます。
@@ -198,13 +198,10 @@ task Mail を作りません。Linux／WSL の委任は終了時に自動で親�
 macOS の対話型 agent は、起動後に Mail から追加の依頼を受け取れます。
 `/api/spawn-status` と `dashboard/logs/spawn.log` は `provider=gemini` を記録します。
 
-The core Dashboard modal interprets the provider `capabilities` contract. The
-optional payload only adds the Antigravity catalog item and its `/api/spawn`
-branch; it does not rewrite the page while serving it. If the core page lacks
-the capability marker or resources control, the Antigravity tab is omitted and
-Antigravity spawn requests fail closed; the reason is written to the Dashboard
-log. Claude and Codex are unaffected, including when the extension itself
-cannot be loaded.
+Dashboard の起動画面は、provider が返す `capabilities` に従います。Gemini の連携は
+Antigravity のカタログ項目と `/api/spawn` の起動処理を登録し、共通の画面を使います。
+共通の画面に capability のマーカーや Resources 欄がない場合は Antigravity のタブを
+表示せず、起動を拒否した理由を Dashboard のログに記録します。
 
 ## Dashboard controls
 
@@ -289,9 +286,8 @@ boundary against another process running as that user.
 
 ## Design boundary
 
-The provider adds `program=antigravity` / `agy` to the core's shared
-process-tree liveness. The provider extension ships with the optional installer.
-The core installer leaves an already-installed extension in place.
+共通のプロセスツリーの稼働判定は `program=antigravity` / `agy` に対応します。
+Gemini の連携ファイルは `scripts/install-gemini-provider.sh` で導入し、core の更新時にも保持されます。
 
 - Top-level `agy` exits to its interactive shell, which remains attachable as `finished`.
 - A delegated launcher reports the result, releases reservations, soft-retires the identity,
