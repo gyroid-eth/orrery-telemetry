@@ -365,9 +365,11 @@ def generate(document):
         if not isinstance(enabled, list):
             raise ValueError('inherited_mcp_conflict')
         screen = selection.get('managed_screen')
+        browser = selection.get('managed_browser')
         if ((selection.get('inherit') is False and any(name != PLUGIN for name in enabled))
-                or (screen and any(name not in (PLUGIN, 'orrery-telegram', 'orrery-web-search')
-                                   for name in enabled))):
+                or ((screen or selection.get('browser_mode') is not None)
+                    and any(name not in (PLUGIN, 'orrery-telegram', 'orrery-web-search')
+                            for name in enabled))):
             # Portable plugins can append MCP servers after config is loaded.
             # No plugin import/preflight or silent expansion of the selection.
             raise ValueError('inherited_mcp_conflict')
@@ -379,16 +381,32 @@ def generate(document):
         inherited = existing.get('mcp_servers', {})
         if not isinstance(inherited, dict) or any(not isinstance(value, dict) for value in inherited.values()):
             raise ValueError('invalid_mcp_config')
+        browser_projection = state / 'managed-browser.json'
+        previous = {}
+        if browser and browser_projection.is_file():
+            previous = read(browser_projection)
+        elif browser and (state / 'overlay/config.yaml').is_file():
+            # Existing children already have a generated overlay, but may
+            # predate the browser-specific ownership record.
+            previous = read(state / 'overlay/config.yaml').get('mcp_servers', {})
         for name, definition in mcp.items():
             if name == 'orrery-screen' and screen:
                 # A resume rotates the generated binding. The new private
                 # definition replaces this one server in the child's HOME.
                 continue
-            if name in inherited and _effective_mcp(inherited[name], definition) != definition:
-                state.mkdir(parents=True, exist_ok=True, mode=0o700)
-                with (state / 'config-generation.log').open('a', encoding='utf-8') as handle:
-                    handle.write(json.dumps({'event': 'inherited_mcp_conflict', 'mcp_server': name}) + '\n')
-                raise ValueError('inherited_mcp_conflict')
+            if name not in inherited:
+                continue
+            if name == browser:
+                old_definition = {**inherited[name], 'enabled': True}
+                # A previously projected definition can have been disabled.
+                if old_definition == definition or old_definition == previous.get(name):
+                    continue
+            elif _effective_mcp(inherited[name], definition) == definition:
+                continue
+            state.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with (state / 'config-generation.log').open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps({'event': 'inherited_mcp_conflict', 'mcp_server': name}) + '\n')
+            raise ValueError('inherited_mcp_conflict')
         raw_mcp = dict(mcp)
         # Like the standard launcher's strict MCP config, expose only product
         # Mail and explicitly selected servers. Retain disabled definitions for reselection.
@@ -483,6 +501,8 @@ def generate(document):
         spec.loader.exec_module(defaults)
         defaults.settle_unanswered(profile, state)
         defaults.project_mcp(profile, raw_mcp)
+        if browser:
+            _save(browser_projection, {browser: mcp[browser]})
         if search:
             # native の dotenv 入口は secrets だけ raw config から読む。
             # 非秘密の helper 参照をここにも写す（overlay のみでは起動時に読まれない）。

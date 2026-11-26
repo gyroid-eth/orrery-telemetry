@@ -977,12 +977,31 @@ def native_resume_input(runtime_dir: Path, state: dict[str, Any]) -> dict[str, A
             or document.get('backend_kind', kind) != kind
             or document.get('project_key') != state.get('project_key')
             or document.get('state_dir') != str(directory)
-            or document.get('runtime_dir') != str(runtime_dir)):
+            or document.get('runtime_dir') != str(runtime_dir)
+            or document.get('resume_session_id', session_id) != session_id):
         raise ResumeStateError('identity_mismatch', 'Native input belongs to another child')
     cwd = document.get('cwd')
     if not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():
         raise ResumeStateError('cwd_missing', 'Native working directory is unavailable')
     return {**document, 'backend_kind': kind, 'resume_session_id': session_id}
+
+
+def native_tools_selection(runtime_dir: Path, state: dict, document: dict) -> dict:
+    """Read the staged/committed selection for this exact native launch."""
+    record = tools_record_path(runtime_dir, state['agent_name'])
+    if not os.path.lexists(record):
+        selection = document.get('tools', {'base': 'default', 'tools': {}})
+        if not isinstance(selection, dict):
+            raise ResumeStateError('config_unrestorable', 'The saved native tools selection is invalid')
+        return selection
+    saved = json.loads(_read_private(record, 'native tools selection', 4096))
+    if (not isinstance(saved, dict) or saved.get('version') != 1
+            or saved.get('agent_id') != state['agent_id']
+            or saved.get('state_dir') != document['state_dir']
+            or saved.get('history_session_id') != document['resume_session_id']
+            or not isinstance(saved.get('selection'), dict)):
+        raise ResumeStateError('identity_mismatch', 'The native tools selection belongs to a different launch')
+    return saved['selection']
 
 
 def inspect_retained(
@@ -1742,7 +1761,7 @@ def _child_tools():
 
 
 def tools_record_path(runtime_dir: Path, agent_name: str) -> Path:
-    """The Codex child's base/tools selection, written by spawn_child.sh."""
+    """The persistent base/tools selection for this generated agent."""
     state_path = _paths(runtime_dir, agent_name)[0]
     return state_path.with_name(f"{agent_name}.tools.json")
 

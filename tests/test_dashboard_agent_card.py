@@ -351,6 +351,7 @@ def test_card_uses_native_metadata_only_for_the_bound_launch(tmp_path, monkeypat
     assert card == {"cwd": str(tmp_path), "model_id": "local-model-v2", "effort": "high",
                     "harness_kind": "dsh", "ctx_window_tokens": 1000000, "computer_use": None,
                     "browser_use": True, "browser_use_source": "launch",
+                    "permission_resume_supported": True, "permission_resume_reason": "",
                     "parent_state": "child", "parent_agent": "Parent"}
     mismatched = server._agent_card_fields(dict(row, history_session_id="other"), {}, {}, registration, ())
     assert mismatched["model_id"] is mismatched["browser_use"] is mismatched["parent_agent"] is None

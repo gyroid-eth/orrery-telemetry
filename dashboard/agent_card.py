@@ -121,12 +121,16 @@ def tool_permissions(spec, servers, *, chrome=False, isolated=False):
     tools = (spec or {}).get("tools", {})
     screen = tools.get("screen", {})
     computer = {"read": "view", "operate": "control"}.get(screen.get("access"))
+    if computer is None and "orrery-screen" in tools.get("mcp", ()):
+        computer = "off"
     cua = servers.get("cua-driver")
     if screen.get("server") != "cua-driver" and _cua_control(cua):
         computer = "control"
     mode = tools.get("browser_mode")
     browser = None
-    if mode in ("off", "temporary", "personal"):
+    if tools.get("browser_off") is True:
+        browser = False
+    elif mode in ("off", "temporary", "personal"):
         browser = mode != "off"
     elif chrome or "browser" in tools or _browser_enabled(servers.get("chrome-devtools")):
         browser = True

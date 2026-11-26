@@ -136,6 +136,104 @@ def test_native_missing_id_is_unavailable_before_mail_or_tmux(tmp_path, monkeypa
     assert server._do_resume_native('FirstAgent', 'dsh')['resume_capability'] == 'no_history'
 
 
+@pytest.mark.parametrize(('harness', 'interrupt'), [('dsh', 'Escape'), ('hermes', 'C-c')])
+def test_guarded_native_exit_waits_for_idle_before_submitting_exit(monkeypatch, harness, interrupt):
+    name = 'FirstAgent'
+    fixtures = Path(__file__).with_name('fixtures') / 'native_activity'
+    panes = iter((fixtures / f'{harness}-{state}.txt').read_text() for state in ('work', 'idle'))
+    monkeypatch.setattr(server, 'lookup_agent', lambda *a, **kw: {
+        'category': 'agent', 'program': harness, 'attached': False})
+    monkeypatch.setattr(server, '_tmux', lambda args: next(panes) if args[0] == 'capture-pane' else f'{name}|17|19')
+    calls = []
+
+    def tmux(args, **kwargs):
+        if args[0] == 'send-keys':
+            calls.append(args[1:])
+        return subprocess.CompletedProcess(args, 0, stdout='bash', stderr='')
+
+    monkeypatch.setattr(server, '_tmux_run', tmux)
+    monkeypatch.setattr(server.time, 'sleep', lambda _: None)
+    sessions = {name: {'session_id': '$41', 'created': 17, 'server_pid': 19}}
+    result = server._do_exit(name, sessions=sessions, verified_program=harness)
+    assert result['actions'] == ['interrupted', 'exit-sent']
+    assert calls == [['-t', '$41', interrupt], ['-t', '$41', '-l', '/exit'], ['-t', '$41', 'C-m']]
+
+
+def test_hermes_permission_resume_confirms_loaded_id_in_its_new_terminal(monkeypatch):
+    idle = (Path(__file__).with_name('fixtures') / 'native_activity/hermes-idle.txt').read_text()
+    name, sid, identity = 'FirstAgent', 'owned-session', '$41|17|19'
+    calls = []
+
+    def history(*args, **kwargs):
+        calls.append(kwargs)
+        return {'history_binding': 'bound', 'history_session_id': sid}
+
+    monkeypatch.setattr(server, '_hermes_history_binding', history)
+    monkeypatch.setattr(server, '_tmux', lambda args: (
+        '↻ セッションを再開しました owned-session\n' + idle if args[0] == 'capture-pane' else f'{name}|{identity}'))
+    assert server._await_native_permission_resume(name, 'hermes', sid, identity, 'generation')
+    assert calls == [{'session_created': 17, 'tools_generation': 'generation'}]
+
+
+@pytest.mark.parametrize('harness', ['dsh', 'hermes'])
+@pytest.mark.parametrize('parent', [None, 'FixtureParent'])
+@pytest.mark.parametrize('launch_ok', [True, False])
+def test_permission_restart_keeps_native_conversation_and_parent(tmp_path, monkeypatch, harness, parent, launch_ok):
+    name, session_id = 'FirstAgent', 'owned-session'
+    runtime, state, document, _ = child(tmp_path, name, harness, session_id)
+    directory = Path(state['harness_state_dir'])
+    selection = {'base': 'default', 'tools': {'browser_mode': 'personal'}}
+    if parent:
+        state['parent_agent'] = parent
+    document.update(parent_agent=parent, tools=selection)
+    resume._atomic_json(directory / 'input.json', document)
+    state_path = runtime / 'child-agents' / (name + '.json')
+    resume._atomic_json(state_path, {**state, 'retired_at': None, 'resume_expires_at': None})
+    monkeypatch.setattr(server, 'RUNTIME_DIR', str(runtime))
+    monkeypatch.setattr(server, '_child_resume_module', lambda: resume)
+    monkeypatch.setattr(server, '_agent_program', lambda _: harness)
+    monkeypatch.setattr(server, '_resume_registration', lambda *args: state)
+    monkeypatch.setattr(server, '_native_resume_launcher_ready', lambda: True)
+    monkeypatch.setattr(server, '_mcp_tool_parameters', lambda _: {'existing_agent_id'})
+    monkeypatch.setattr(server, '_persistent_profiles', lambda: {})
+    live = {'session_id': '$41', 'created': 17, 'server_pid': 19}
+    monkeypatch.setattr(server, 'tmux_state', lambda: {name: live})
+    monkeypatch.setattr(server, '_child_session_live', lambda *args: True)
+    history = lambda *args, **kw: {'history_binding': 'bound', 'history_session_id': session_id}
+    monkeypatch.setattr(server, f'_{harness}_history_binding', history)
+    permission = {'history_session_id': session_id, 'browser_mode': 'off'}
+    record = resume.tools_record_path(runtime, name)
+    assert not server.do_jump(name, permission={**permission, 'history_session_id': 'different'},
+                              check_only=True)['ok']
+    assert server.do_jump(name, permission=permission, check_only=True)['action'] == 'validated'
+    assert not record.exists()
+    monkeypatch.setattr(server, '_do_exit', lambda *a, **kw: {'ok': kw['verified_program'] == harness})
+    assert server.do_exit(name, history_session_id=session_id)['ok']
+
+    resume._atomic_json(state_path, state)
+    monkeypatch.setattr(server, '_child_session_live', lambda *args: False)
+    monkeypatch.setattr(server, '_resume_capability', lambda *args, **kw: 'ready')
+    calls = []
+
+    def resume_native(name, program, *, expected_history_session_id, **_):
+        retained = resume._load_state(state_path)
+        saved = resume.native_resume_input(runtime, retained)
+        assert expected_history_session_id == saved['resume_session_id'] == session_id
+        assert saved['parent_agent'] == retained.get('parent_agent') == parent
+        assert saved['tools'] == selection
+        changed = resume.native_tools_selection(runtime, retained, saved)
+        assert changed == {'base': 'default', 'tools': {'browser_mode': 'off'}}
+        calls.append(expected_history_session_id)
+        return {'ok': launch_ok, 'action': 'resumed' if launch_ok else 'failed'}
+
+    monkeypatch.setattr(server, '_do_resume_native', resume_native)
+    answer = server.do_jump(name, open_terminal=False, permission=permission)
+    assert answer['ok'] is launch_ok
+    assert calls == [session_id]
+    assert record.exists() is launch_ok
+    assert not resume._tools_journal(state_path).exists()
+
+
 def prepared_native(tmp_path, monkeypatch, harness='dsh'):
     runtime, state, document, _ = child(tmp_path, 'FirstAgent', harness, 'owned-session')
     directory = Path(state['harness_state_dir'])

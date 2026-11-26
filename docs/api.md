@@ -718,6 +718,8 @@ API 54 の legacy roster は、権限を表示する行に `permission_controls`
 
 API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。直接起動、常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。直接起動などで設定の記録がない場合の理由は `No saved launch settings; use Resume` です。
 
+API 54 では、生成された dsh と Hermes も親の有無にかかわらず同じリクエストを利用できます。プロバイダーが記録した本人の会話を照合し、専用プロファイルを引き継いで、再起動後に会話 ID と端末の入力待ちを確認します。
+
 稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と変更欄を一つ指定します。`computer_use` は `off`、`view`、`control`、API 54 の `browser_mode` は `off`、`temporary`、`personal` です。従来のクライアントは引き続き真偽値の `browser_use` を指定できます。この確認に成功すると、起動設定や Mail 登録を変更せずに `{"ok":true,"action":"validated"}` を返します。
 
 ```json

@@ -715,6 +715,8 @@ In API 54, legacy roster rows with permission information include `permission_co
 
 API 45 accepts `permission` on a legacy `/api/jump` for a stopped, retained Claude or Codex CLI child with a saved tool selection. API 46 also supports agents spawned without a parent when they meet the same conditions. Direct launches, persistent agents, Codex App, conversation-only resumes, and fresh and global modes are ineligible. Legacy roster rows report `permission_resume_supported` and a short English `permission_resume_reason`. A direct launch or other agent with no saved settings reports `No saved launch settings; use Resume`.
 
+In API 54, generated dsh and Hermes agents can use the same permission request with or without a parent. The server requires the provider's bound native conversation, retains the agent's private profile, and confirms the same conversation and an idle terminal prompt after restart.
+
 Before stopping a running agent, add `check_only:true` to the request. Use the roster's bound `history_session_id` and exactly one change. `computer_use` accepts `off`, `view` or `control`. Starting in API 54, `browser_mode` accepts `off`, `temporary` or `personal`. Existing clients can still send the boolean `browser_use`. A successful check returns `{"ok":true,"action":"validated"}` without changing the saved selection or Mail registration.
 
 ```json
