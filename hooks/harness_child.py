@@ -45,7 +45,7 @@ def save(path, value):
     child_resume._atomic_json(Path(path), value)
 
 
-def prepare_dsh_history(document, state):
+def prepare_dsh_history(document, state, *, publish=True):
     """Issue a non-secret launch expectation; old callbacks cannot claim a resume."""
     if (document.get('program') != 'dsh' or 'fresh_client_dir' in document
             or os.environ.get('AGENTSTACK_RUNTIME_MODE') in ('fresh', 'global')
@@ -59,7 +59,8 @@ def prepare_dsh_history(document, state):
         launch_id=uuid.uuid4().hex, state_dir=document['state_dir'],
         native_home=str(runtime / 'native/dsh' / name))
     document['history_binding'] = expectation
-    save(runtime / 'dsh-history' / (name + '.json'), expectation)
+    if publish:
+        save(runtime / 'dsh-history' / (name + '.json'), expectation)
 
 
 def config_generator(root, harness):
@@ -263,9 +264,10 @@ def personal_skill_home(program):
     return (None, 'unreadable_skill: ' + problem) if problem else (str(home), None)
 
 
-def generate_plan(document, runner):
+def generate_plan(document, runner, *, tools=None):
     """One generator path for initial launch and exact-ID resume."""
     state_dir = Path(document['state_dir'])
+    tools = document['tools'] if tools is None else tools
     # Re-evaluate against authenticated Mail, never the previous merged output.
     # Keep the source in saved input for dynamic prelaunch regeneration as well.
     document.setdefault('mcp_base_config', document['mcp_config'])
@@ -276,11 +278,11 @@ def generate_plan(document, runner):
     managed_screen = None
     if 'project_key' in document:
         generation = document.setdefault('screen_generation', uuid.uuid4().hex)
-        managed_screen = child_tools.screen_definition(document['tools'], document['runtime_dir'],
+        managed_screen = child_tools.screen_definition(tools, document['runtime_dir'],
             document['project_key'], document['agent_name'], generation)
-    elif child_tools.screen_mode(document['tools']) is not None:
+    elif child_tools.screen_mode(tools) is not None:
         raise child_tools.ToolsError('orrery-screen requires the standard child launcher')
-    document['mcp_selection'] = child_tools.native_plan(document['tools'], cwd=document['cwd'],
+    document['mcp_selection'] = child_tools.native_plan(tools, cwd=document['cwd'],
         managed_screen=managed_screen,
         claude_json=os.environ.get('AGENTSTACK_CLAUDE_JSON',str(Path.home()/'.claude.json')),
         codex_config=child_tools.native_codex_config())
@@ -318,6 +320,7 @@ def prepare_resume(runtime_dir, name, project_key=None):
     if not state.get('resume_in_progress_at'):
         raise ValueError('native_resume_not_prepared')
     document = child_resume.native_resume_input(runtime, state)
+    tools = child_resume.native_tools_selection(runtime, state, document)
     runner = selection(document['manifest_file'], document['program'], document['backend_id'],
                        document['model'], document.get('effort'),
                        document.get('url_index'), document.get('server_url'), document.get('url_key'))
@@ -367,8 +370,8 @@ def prepare_resume(runtime_dir, name, project_key=None):
                     prompt_file=str(prompt), instructions_file=str(write_instructions(state_dir,state['project_key'])),
                     screen_generation=uuid.uuid4().hex,
                     resume_attempt_at=state['resume_in_progress_at'])
-    prepare_dsh_history(document, state)
-    generate_plan(document, runner)
+    prepare_dsh_history(document, state, publish=False)
+    generate_plan(document, runner, tools=tools)
     (state_dir / 'native-exit.status').unlink(missing_ok=True)
     return state_dir
 
@@ -385,9 +388,12 @@ def resume_command(runtime_dir, name, project_key=None):
             or source.get('resume_attempt_at') != state['resume_in_progress_at']
             or source.get('resume_session_id') != document['resume_session_id']):
         raise ValueError('native_resume_not_prepared')
-    invocation = command(document['state_dir'], name)
+    invocation = command(document['state_dir'], name,
+                         tools=child_resume.native_tools_selection(runtime, state, document))
     child_resume.prepare_active_state(runtime, name, project_key=state['project_key'],
                                      program=state['program'])
+    if document.get('history_binding'):
+        save(runtime / 'dsh-history' / (name + '.json'), document['history_binding'])
     return invocation
 
 
@@ -474,13 +480,14 @@ def dynamic_prelaunch(source):
     return None
 
 
-def command(state_dir, name):
+def command(state_dir, name, *, tools=None):
     import shlex
     source = read(Path(state_dir) / 'input.json')
     if source['agent_name'] != name:
         raise ValueError('native_identity_mismatch')
     runner = dynamic_prelaunch(source)
-    if runner is not None:generate_plan(source, runner)
+    if runner is not None:
+        generate_plan(source, runner, tools=tools)
     plan = read(Path(state_dir) / 'launch.json')
     validate_plan(plan, source['cwd'])
     invocation = shlex.join(['env', *[k+'='+v for k,v in plan.get('env', {}).items()], *plan['argv']])

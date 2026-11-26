@@ -14,6 +14,7 @@ import fcntl
 import json
 import os
 import re
+import runpy
 import secrets
 import tempfile
 import time
@@ -151,13 +152,21 @@ def _verified_resume_receipt(
         and receipt.get("project_key") == registration["project_key"]
         and receipt.get("registered_by") == registration["agent_name"]
         and receipt.get("session_id") == resume_session_id
-        and provenance_matches
     )
+    if (identity_matches and not provenance_matches and launch_origin == "child"
+            and receipt.get("launch_origin") == "standalone" and receipt.get("codex_mcp_profile") is None
+            and os.environ.get("AGENTSTACK_TOOLS_CHANGE_GENERATION")):
+        try:
+            retained = runpy.run_path(str(Path(__file__).with_name("child_resume.py")))
+            provenance_matches = retained["verified_codex_permission_adoption"](
+                runtime_dir, registration, resume_session_id, codex_mcp_profile)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
     launch_id = receipt.get("launch_id")
     receipt_id = receipt.get("receipt_id")
     transcript_path = receipt.get("transcript_path")
     if not (
-        identity_matches
+        identity_matches and provenance_matches
         and isinstance(launch_id, str)
         and bool(launch_id)
         and isinstance(receipt_id, str)
