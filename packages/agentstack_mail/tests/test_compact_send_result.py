@@ -8,7 +8,7 @@ Two independent behaviors, both measured on 2026-08-13:
   product default; an explicit false retains the compatibility shape.
 - Notification signals carried no body, so every recipient paid a fetch_inbox
   round trip even for a one-word message — the dominant share of
-  notification→reply latency. Signals now carry a 400-character snippet.
+  notification→reply latency. Signals carry up to 2000 body characters.
 """
 
 from __future__ import annotations
@@ -205,8 +205,9 @@ def test_grace_window_still_clears_signals_older_than_the_window(
     assert not _signal_files(tmp_path), "aged signals are leftovers and must clear"
 
 
-def test_signal_truncates_a_long_body_and_says_so(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("length", [2000, 2001])
+def test_signal_reports_the_2000_character_body_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, length: int
 ) -> None:
     _configure(
         monkeypatch,
@@ -214,7 +215,7 @@ def test_signal_truncates_a_long_body_and_says_so(
         AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED="true",
         AGENTSTACK_MAIL_NOTIFICATIONS_INCLUDE_BODY="true",
     )
-    asyncio.run(_send(tmp_path, "y" * 1000))
+    asyncio.run(_send(tmp_path, "文" * length))
     message = _read_signal(tmp_path)["message"]
-    assert message["body_snippet"] == "y" * 400
-    assert message["body_truncated"] is True
+    assert message["body_snippet"] == "文" * 2000
+    assert message["body_truncated"] is (length > 2000)

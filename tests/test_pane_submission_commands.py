@@ -16,15 +16,17 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('interleaving', [
     'left-in-editor', 'manual-enter', 'cleared', 'changed-draft', 'changed-inner-space',
 ])
-def test_watcher_restarts_after_pasting_a_wrapped_hermes_notice(monkeypatch, interleaving):
+@pytest.mark.parametrize('body_length', [264, 2000])
+def test_watcher_restarts_after_pasting_a_wrapped_hermes_notice(monkeypatch, interleaving, body_length):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
     monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
     now = itertools.count()
     monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(
         monotonic=lambda: next(now) * .1, sleep=lambda seconds: None))
+    body = ('Several words wrapped in the Hermes editor. ' * 50)[:body_length]
     text = ('ORRERY Mail notification: message from FixtureSender [normal]: Ready. '
-            'Body preview: ' + 'Several words wrapped in the Hermes editor. ' * 6 +
+            'Body preview: ' + body +
             'Fetch inbox to read the rest.')
     draft = ''
     effects = []
@@ -84,6 +86,52 @@ def test_watcher_restarts_after_pasting_a_wrapped_hermes_notice(monkeypatch, int
     else:
         assert outcome == 'refused' and reasons == ['editor_not_empty']
     assert effects == expected
+
+
+@pytest.mark.parametrize('width', [56, 100])
+def test_watcher_confirms_a_wrapped_hermes_paste_card(width):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    notice = 'ORRERY Mail notification: message from FixtureSender [normal]: ' + 'あ' * 2000
+    card = '❯ [Pasted text #1: 1 lines → /private/tmp/fixture-hermes-home/pastes/paste_1_140243.txt]'
+    rows = ['☤ fixture · -- · 4s', '─' * width]
+    rows.extend(card[offset:offset + width] for offset in range(0, len(card), width))
+    cursor_row = len(rows) - 1
+    cursor_col = len(rows[-1])
+    metadata = f'/tmp/fixture.sock\t100\t%1\t200\t{cursor_row}\t0\t{cursor_col}\t1\tzsh'
+    view = submission['frame'](metadata, rows, '%1')
+    assert view.hermes
+    assert submission['ready'](view, notice)
+    assert not submission['ready'](view, notice + '\nA second line')
+
+
+def test_watcher_confirms_a_long_dsh_notice_from_its_visible_end():
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    body = ('Several words wrapped in the dsh editor. ' * 60)[:2000]
+    text = ('ORRERY Mail notification: message from FixtureSender [normal]: Ready. '
+            'Body (complete; no inbox fetch needed): ' + body)
+    visible = textwrap.wrap(text, 52)[-5:]
+    border = '─' * 56
+    rows = [border, '⌸ ❯ ' + visible[0], *visible[1:], border]
+    metadata = '/tmp/fixture.sock\t100\t%1\t200\t5\t0\t46\t1\tdsh'
+    view = submission['frame'](metadata, rows, '%1')
+    assert view.dsh_clipped and len(view.draft) < len(text)
+    assert submission['ready'](view, text)
+    assert not submission['ready'](view, text + ' Different ending.')
+
+
+@pytest.mark.parametrize(('visible_chars', 'accepted'), [(11, False), (20, True)])
+def test_watcher_confirms_a_wide_character_suffix_in_dsh_welcome(visible_chars, accepted):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    body = ('日本語の通知本文と折り返しを確かめます。' * 100)[:2000]
+    notice = 'ORRERY Mail notification: message from FixtureSender [normal]: ' + body
+    border = '─' * 56
+    rows = [border, '│ ❯ ' + body[-visible_chars:] + '  │', border]
+    cursor_col = 4 + 2 * visible_chars
+    metadata = f'/tmp/fixture.sock\t100\t%1\t200\t1\t0\t{cursor_col}\t1\tdsh'
+    view = submission['frame'](metadata, rows, '%1')
+    assert view.dsh_clipped
+    assert submission['ready'](view, notice) is accepted
+    assert not submission['ready'](view, notice + ' Different ending.')
 
 
 @pytest.mark.parametrize('editor,editor_text,selection,accepted', [

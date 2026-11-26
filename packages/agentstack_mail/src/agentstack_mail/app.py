@@ -5246,7 +5246,8 @@ def build_mcp_server() -> FastMCP:
                 # Flag-gated: the frozen differential behavior writes
                 # metadata-only signals.
                 if settings.notifications.include_body:
-                    snippet_limit = 400
+                    # Match the proxy notification formatter and the legacy watcher.
+                    snippet_limit = 2000
                     message_meta["body_snippet"] = (body_md or "")[:snippet_limit]
                     message_meta["body_truncated"] = len(body_md or "") > snippet_limit
                 # Signal to/cc recipients (not bcc - blind copies shouldn't trigger visible signals)

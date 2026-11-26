@@ -2984,7 +2984,7 @@ build_embedded_task_prompt() {
     local spawned_at="$3"
     local project_key="$4"
     local task_text="$5"
-    printf 'あなたは %s（親: %s）。この起動は --embed-task mode です。ORRERY Mail への登録は親が完了済み・儀式不要です。ensure_project・register_agent・fetch_inbox は実行しないでください。現在時刻: %s。project_key は %s。以下のタスクが正本です。直ちに開始し、完了したら ORRERY Mail の send_message（Claude Code の SendMessage ではない）で %s に報告してください:\n\n%s' \
+    printf 'あなたは %s（親: %s）。この起動は --embed-task mode です。ORRERY Mail への登録は親が完了済み・儀式不要です。ensure_project・register_agent は実行しないでください。起動時の確認として fetch_inbox を実行する必要はありません。後から届く ORRERY Mail の通知が途中で切れているか本文を含まず、本文を読む必要がある場合は fetch_inbox を使ってください。現在時刻: %s。project_key は %s。以下のタスクが正本です。直ちに開始し、完了したら ORRERY Mail の send_message（Claude Code の SendMessage ではない）で %s に報告してください:\n\n%s' \
         "$child_name" "$parent_name" "$spawned_at" "$project_key" \
         "$parent_name" "$task_text"
 }
