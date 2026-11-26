@@ -119,7 +119,27 @@ function paintPermissions(box){
  box.replaceChildren(...elements);
  box.hidden=!marks.length;
 }
-window.OrreryMobileProfile={forName:readerProfile,paintPermissions,face(name,model){const e=face(readerProfile(name,model)||{name},1);e.setAttribute('aria-hidden','true');return e;}};
+function contextRemaining(agent){
+ const used=agent.ctx_used;
+ return agent.running&&OrreryMobileIdentity.roster()&&Number.isFinite(used)&&used>=0&&used<=100
+  ? Math.round(100-used) : null;
+}
+function contextMeter(agent){
+ const remaining=contextRemaining(agent);
+ if(remaining===null)return null;
+ const meter=node('span','agent-context-meter');
+ meter.setAttribute('role','meter');
+ meter.setAttribute('aria-label','Context remaining');
+ meter.setAttribute('aria-valuenow',remaining);
+ meter.title='Context remaining: '+remaining+'%';
+ const fill=node('span');
+ fill.style.width=remaining+'%';
+ if(remaining<20)meter.classList.add('is-low');
+ else if(remaining<50)meter.classList.add('is-warm');
+ meter.append(fill);
+ return meter;
+}
+window.OrreryMobileProfile={forName:readerProfile,paintPermissions,contextMeter,face(name,model){const e=face(readerProfile(name,model)||{name},1);e.setAttribute('aria-hidden','true');return e;}};
 function person(name){const a=snapshot.agents.find(x=>x.name===name)||{name,provider:'',model:'',locality:null};const e=node('div','person');e.append(face(a),node('span','name',name));return e;}
 function syncView(){
  const graphPanel=$('#graph-panel'),wasHidden=graphPanel.hidden;
@@ -278,7 +298,7 @@ function renderGraphCounts(data,observed,fresh){
   group.details.classList.toggle('has-attention',attention.length>0);
   group.trigger.title=label+': '+(observed?(fresh?'':'last known ')+active.length+note:'unavailable');
   group.trigger.setAttribute('aria-label',group.trigger.title);
-  const signature=JSON.stringify([observed,agents.map(a=>[a.name,a.provider,a.model,a.locality,a.act_state])]);
+  const signature=JSON.stringify([observed,agents.map(a=>[a.name,a.provider,a.model,a.locality,a.act_state,contextRemaining(a)])]);
   if(group.signature===signature)continue;
   group.signature=signature;
   const focus=group.menu.contains(document.activeElement)?document.activeElement.dataset.name:'';
@@ -287,6 +307,11 @@ function renderGraphCounts(data,observed,fresh){
    const button=node('button','graph-status-agent');button.type='button';button.dataset.name=a.name;
    const portrait=face(a);portrait.setAttribute('aria-hidden','true');
    button.append(portrait,node('span','graph-status-name',a.name));
+   const meter=contextMeter(a);
+   if(meter){
+    button.setAttribute('aria-description',meter.title);
+    button.append(meter);
+   }
    if(needsReview(a)){
     button.title=attentionReasons[a.act_state];
     button.setAttribute('aria-label',a.name+' · '+button.title);

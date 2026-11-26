@@ -2171,6 +2171,10 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
             status = _card_private_mapping(children / f"{name}.agy-status.json") if row.get("running") else {}
             if status.get("tmux") != identity:
                 status = {}
+            size = status.get("ctx_window_tokens")
+            size = size if type(size) is int and size > 0 else None
+            used = status.get("ctx_used")
+            used = used if size is not None and type(used) is int and 0 <= used <= 100 else None
             return {"cwd": agent_card.absolute_cwd(plan.get("cwd")),
                     "model_id": agent_card.native_model_id(status.get("model_id")) or plan.get("model"),
                     "effort": status.get("effort") or plan.get("effort"),
@@ -2179,7 +2183,8 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                     "parent_agent": state.get("parent_agent"),
                     "harness_kind": "antigravity", **_card_antigravity_permissions(
                         plan, screen_launch if row.get("running") else None, registration["project_key"], identity),
-                    "ctx_window_tokens": None}
+                    "ctx_window": str(size) if size is not None else None,
+                    "ctx_window_tokens": size, "ctx_used": used}
     kind = agent_card.HARNESS_KIND.get(program)
     cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
     candidate_parent = agent_card.parent_name(session.get("parent_agent"), name) if kind else None
@@ -2319,6 +2324,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
            if permission_reason != _PERMISSION_UNSUPPORTED else {}),
         "cwd": cwd, "model_id": model, "effort": effort, "harness_kind": kind,
         "ctx_window_tokens": harness_context.window_tokens(row.get("ctx_window")) if kind else None,
+        **({"ctx_used": None, "ctx_window": None, "ctx_window_tokens": None} if kind == "antigravity" else {}),
         "computer_use": computer, "browser_use": browser, **observed,
         "parent_state": parent_state, "parent_agent": parent,
     }

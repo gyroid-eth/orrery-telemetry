@@ -7,6 +7,37 @@ import pytest
 from mobile_reader_browser import AREA, MAIL_MARKDOWN, assert_mail_markdown, phone  # noqa: F401
 
 
+def test_mobile_lists_update_an_antigravity_context_meter(phone):
+    _, js, wait, state = phone
+    agent = state["snapshot"]["agents"][0]
+    agent.update(provider="google", model="gemini-4-argon", ctx_used=None)
+    refresh = "document.dispatchEvent(new Event('visibilitychange'))"
+    js("OrreryMobileTerminal.close();OrreryMobileGraph.show();" + refresh)
+    working = "document.querySelector('#graph-working-agents [data-name=SampleAgent]')"
+    wait(working + "!==null")
+    wait("OrreryMobileGraph.agents()[0]?.provider==='google'")
+    js("document.querySelector('[data-agent-status=work] summary').click()")
+    meter = working + "?.querySelector('.agent-context-meter')"
+    assert js(meter + "===null")
+
+    agent["ctx_used"] = 14
+    js(refresh)
+    wait(meter + "?.getAttribute('aria-valuenow')==='86'")
+    assert js(meter + ".firstElementChild.style.width") == "86%"
+
+    js("OrreryMobileWorkspace.readerEntry('SampleAgent',null).click()")
+    picker = "document.querySelector('.workspace-agent-choice .agent-context-meter')"
+    wait(picker + "?.getAttribute('aria-valuenow')==='86'")
+    assert js(picker + ".getBoundingClientRect().width") > 0
+
+    agent["ctx_used"] = 100
+    js(refresh)
+    wait(picker + "?.getAttribute('aria-valuenow')==='0'")
+    state["snapshot"]["sources"]["agents"] = dict(status="stale", observed_at=time.time() - 45, age_seconds=45)
+    js(refresh)
+    wait(picker + "===null && " + meter + "===null")
+
+
 def test_reader_unknown_permissions_disclose_reasons_without_resizing_header(phone):
     _, js, wait, state = phone
     height = js("document.querySelector('.reader-bar').offsetHeight")

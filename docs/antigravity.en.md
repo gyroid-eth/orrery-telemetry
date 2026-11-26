@@ -217,6 +217,11 @@ cannot be loaded.
 
 ## Dashboard controls
 
+Managed interactive Antigravity sessions show a context window bar in the
+cockpit roster and phone agent lists, for both **Standalone** agents and
+delegated children. The bar appears when Antigravity's statusLine reports
+current context usage.
+
 The Dashboard uses the same provider-aware process-tree measurement for Claude,
 Codex, and Antigravity. For a delegated Antigravity child, `EXIT` re-reads the
 process tree immediately, sends `SIGINT` only to the measured `agy` process, and

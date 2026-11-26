@@ -122,7 +122,11 @@ html[data-color-theme=light] .mobile .node .provider-seat{fill:var(--panel);stro
 }
 .mobile .graph-status-agent:hover{background:var(--control-active)}
 .graph-status-agent .face{width:28px;height:28px}
-.graph-status-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.graph-status-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-context-meter{flex:none;width:48px;height:2px;overflow:hidden;background:var(--hair)}
+.agent-context-meter>span{display:block;height:100%;background:var(--ink)}
+.agent-context-meter.is-warm>span{background:var(--amber)}
+.agent-context-meter.is-low>span{background:var(--alert)}
 .graph-status-flag{
   flex:none;width:16px;margin-inline-start:auto;text-align:center;font:italic 600 20px/1 var(--serif)
 }
