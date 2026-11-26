@@ -8269,7 +8269,8 @@ def _native_context_runtime(session, created, session_id, program):
     evidence = None
     if _valid(session):
         try:
-            capture = _tmux_run(['capture-pane', '-p', '-J', '-t', '=' + session, '-S', '-45'],
+            # A pane target needs the colon after an exact session selector.
+            capture = _tmux_run(['capture-pane', '-p', '-J', '-t', f'={session}:', '-S', '-45'],
                                 capture_output=True, text=True, timeout=3)
             if capture.returncode == 0:
                 result = harness_context.parse_context(capture.stdout, program)

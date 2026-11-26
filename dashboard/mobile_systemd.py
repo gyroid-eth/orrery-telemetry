@@ -157,6 +157,17 @@ class RelayUnit:
     def stop(self):
         _require('stop', '--', UNIT)
 
+    def restart_if_active(self) -> bool:
+        if not self.active():
+            return False
+        enabled = _systemctl('is-enabled', '--quiet', '--', UNIT)
+        if enabled is None:
+            raise UnitError('systemd_unavailable')
+        if enabled.returncode:
+            return False
+        _require('try-restart', '--', UNIT)
+        return True
+
     def remove(self):
         if self.interpreter() is None:
             return
