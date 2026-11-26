@@ -2138,26 +2138,29 @@ def _card_process_permissions(session, process_tree, program, kind):
     return agent_process.observe(pid, process_tree, kind, read=read)
 
 
-def _card_antigravity_permissions(plan, screen_launch, project, identity):
+def _card_antigravity_permissions(plan, screen_launch, project, identity, *, selection=None):
     supplied = plan.get("tools")
-    spec = None
-    if isinstance(supplied, list) and all(isinstance(arg, str) for arg in supplied):
-        tools = _child_tools_module()
-        try:
+    tools = _child_tools_module()
+    try:
+        spec = selection
+        if spec is None and isinstance(supplied, list) and all(isinstance(arg, str) for arg in supplied):
             spec = tools.normalize(tools=tools.parse_cli(supplied), platform="darwin")
+        if spec is not None:
             tools.check_provider(spec, "gemini")
-        except tools.ToolsError:
-            spec = None
+    except tools.ToolsError:
+        spec = None
     if spec is None:
         return agent_card.antigravity_tool_permissions(None)
+    browser_mode = spec["tools"].get("browser_mode")
     if (screen_launch and plan.get("screen_tmux") == identity
             and screen_launch["project"] == project
             and screen_launch["generation"] == plan.get("screen_generation")):
-        return agent_card.antigravity_tool_permissions(spec, screen_launch["computer_use"], screen_live=True)
+        return {**agent_card.antigravity_tool_permissions(spec, screen_launch["computer_use"], screen_live=True),
+                "browser_mode": browser_mode}
     mode = plan.get("screen_launch_mode")
     if mode not in ("off", "view", "control"):
         mode = tools.screen_mode(spec) or "off"
-    return agent_card.antigravity_tool_permissions(spec, mode)
+    return {**agent_card.antigravity_tool_permissions(spec, mode), "browser_mode": browser_mode}
 
 
 def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, screen_launch=None, process_tree=None):
@@ -2171,14 +2174,30 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
             status = _card_private_mapping(children / f"{name}.agy-status.json") if row.get("running") else {}
             if status.get("tmux") != identity:
                 status = {}
+            selection = None
+            reason = _PERMISSION_HISTORY_UNVERIFIED
+            if row.get("history_binding") == "bound" and row.get("history_session_id"):
+                try:
+                    helper = _gemini_interactive_module(str(Path(HOOKS_DIR) / "gemini_interactive.py"))
+                    helper["launch_parent"](state)
+                    cwd = helper["validate_plan"](plan)
+                    if not plan.get("standalone"):
+                        helper["_workspace_mcp_snapshot"](Path(RUNTIME_DIR), state, cwd)
+                    changed = helper["permission_selection"](Path(RUNTIME_DIR), state, row["history_session_id"])
+                    selection = changed["selection"] if changed else None
+                    reason = ""
+                except (OSError, RuntimeError, ValueError, KeyError):
+                    reason = "Antigravity's saved launch settings are unavailable"
             return {"cwd": agent_card.absolute_cwd(plan.get("cwd")),
                     "model_id": agent_card.native_model_id(status.get("model_id")) or plan.get("model"),
                     "effort": status.get("effort") or plan.get("effort"),
                     "act_state": status.get("activity"),
                     "parent_state": "top" if plan.get("standalone") is True else "child",
                     "parent_agent": state.get("parent_agent"),
+                    "permission_resume_supported": not reason, "permission_resume_reason": reason,
                     "harness_kind": "antigravity", **_card_antigravity_permissions(
-                        plan, screen_launch if row.get("running") else None, registration["project_key"], identity),
+                        plan, screen_launch if row.get("running") else None, registration["project_key"], identity,
+                        selection=selection),
                     "ctx_window_tokens": None}
     kind = agent_card.HARNESS_KIND.get(program)
     cwd = agent_card.absolute_cwd(session.get("cwd")) if kind else None
@@ -2187,7 +2206,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
     parent_state = "child" if parent else "top" if row.get("parentless") is True else None
     model = effort = computer = browser = spec = None
     managed_screen = False
-    permission_reason = (_PERMISSION_SETTINGS_MISSING if kind in {"claude", "codex", *harness_runtime.HARNESSES}
+    permission_reason = (_PERMISSION_SETTINGS_MISSING if kind in {"claude", "codex", "antigravity", *harness_runtime.HARNESSES}
                          else _PERMISSION_UNSUPPORTED)
     if kind == "codex":
         model = agent_card.codex_model_id(runtime.get("codex_card_model"), codex_catalog)
@@ -2566,6 +2585,10 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
         controls = agent_card.permission_controls(row, browser_options)
         if controls is not None:
             row["permission_controls"] = controls
+            if not any(control["can_change"] for control in controls.values()):
+                reasons = dict.fromkeys(control["change_reason"] for control in controls.values() if control["change_reason"])
+                row.update(permission_resume_supported=False,
+                           permission_resume_reason=" · ".join(reasons) or _PERMISSION_UNSUPPORTED)
         signature = (
             row.get("act_state"),
             row.get("ctx_used"),
@@ -4201,7 +4224,7 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
       会話で復元される事故の実績あり)。program で先に分岐して回避する。"""
     program = _agent_program(session)
     if (expected_history_session_id is not None
-            and program not in _CODEX_PROGRAMS | {"claude", "claude-code", *harness_runtime.HARNESSES}):
+            and program not in _CODEX_PROGRAMS | {"claude", "claude-code", "antigravity", *harness_runtime.HARNESSES}):
         return {"ok": False, "error": "The child's provider changed before resume"}
     if conversation_tools is not None and program not in {"claude", "claude-code"}:
         return {"ok": False, "error": "Claude resume prerequisites changed"}
@@ -4209,7 +4232,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
         return _do_resume_native(session, program, open_terminal=open_terminal, replace_husk=replace_husk,
                                  expected_history_session_id=expected_history_session_id)
     if program.startswith("antigravity"):
-        return _do_resume_gemini(session, open_terminal=open_terminal, replace_husk=replace_husk)
+        return _do_resume_gemini(session, open_terminal=open_terminal, replace_husk=replace_husk,
+                                 expected_history_session_id=expected_history_session_id)
     if program == "codex-app" and session in _codex_app_runtimes():
         return _open_codex_app(session)
     if program.startswith("codex"):
@@ -5622,30 +5646,43 @@ def _gemini_interactive_module(path):
         "child_resume": _child_resume_module(), "child_tools": _child_tools_module()})
 
 
-def _gemini_resume_material(session):
+def _gemini_resume_material(session, *, live=None):
     module = _child_resume_module()
     runtime = Path(RUNTIME_DIR)
     helper = Path(HOOKS_DIR) / "gemini_interactive.py"
     registration = _resume_registration(session, {"antigravity"})
     if sys.platform != "darwin" or not registration or not helper.is_file():
         raise _ResumeCapabilityError("unsupported_provider", "Managed Antigravity resume is unavailable")
-    current = _card_child_state(runtime / "child-agents", session, registration)
-    if not current.get("gemini_launch"):
-        raise _ResumeCapabilityError("unsupported_provider", "No managed Antigravity launch was recorded")
     try:
         state = module.inspect_retained(runtime, session, agent_id=registration["agent_id"],
-                                        project_key=registration["project_key"], program="antigravity")
+                                        project_key=registration["project_key"], program="antigravity",
+                                        allow_active=bool(live))
+        if not state.get("gemini_launch"):
+            raise _ResumeCapabilityError("unsupported_provider", "No managed Antigravity launch was recorded")
         interactive = _gemini_interactive_module(str(helper))
-        interactive["launch_parent"](state)
+        parent = interactive["launch_parent"](state)
         cwd = interactive["validate_plan"](state["gemini_launch"])
-        sid = interactive["saved_conversation"](runtime, session, registration)
+        if live:
+            actual_parent = _card_session_env(session, live, "PARENT_AGENT", live.get("parent_agent"))
+            if actual_parent and actual_parent != parent:
+                raise _ResumeCapabilityError("identity_mismatch", "The agent's parent changed")
+            binding = agy_history.binding(runtime, session, registration, live)
+            sid = binding.get("history_session_id") if binding.get("history_binding") == "bound" else None
+        else:
+            sid = interactive["saved_conversation"](runtime, session, registration)
+        changed = interactive["permission_selection"](runtime, state, sid) if sid else None
     except module.ResumeStateError as exc:
         raise _ResumeCapabilityError(exc.code, str(exc)) from None
+    except _ResumeCapabilityError:
+        raise
     except (OSError, ValueError, KeyError, TypeError):
         raise _ResumeCapabilityError("config_unrestorable", "Antigravity launch settings are unavailable") from None
     if state["gemini_launch"].get("standalone"):
         try:
-            interactive["validate_standalone_config"](state["gemini_launch"])
+            if changed:
+                interactive["validate_permission_selection"](runtime, state, changed["selection"])
+            else:
+                interactive["validate_standalone_config"](state["gemini_launch"])
         except ValueError as exc:
             raise _ResumeCapabilityError("config_unrestorable", str(exc)) from None
     if not isinstance(sid, str) or not re.fullmatch(
@@ -5654,12 +5691,34 @@ def _gemini_resume_material(session):
     return registration, state, helper, cwd, sid
 
 
-def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False):
+def _await_gemini_permission_resume(session, registration, sid, identity, *, timeout=30):
+    if not re.fullmatch(r"\$\d+\|[1-9]\d*\|[1-9]\d*", identity):
+        return False
+    target, created, pid = identity.split("|")
+    launch = {"session_id": target, "created": int(created), "tmux_pid": int(pid)}
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        observed = _tmux(["display-message", "-t", target, "-p",
+                          "#{session_name}|#{session_id}|#{session_created}|#{pid}"]).strip()
+        if observed != f"{session}|{identity}":
+            return False
+        history = agy_history.binding(RUNTIME_DIR, session, registration, launch)
+        status = _card_private_mapping(Path(RUNTIME_DIR) / "child-agents" / f"{session}.agy-status.json")
+        if (history.get("history_binding") == "bound" and history.get("history_session_id") == sid
+                and status.get("tmux") == observed and status.get("activity") == "wait"):
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expected_history_session_id=None):
     module = _child_resume_module()
     runtime = Path(RUNTIME_DIR)
     started = mail_changed = was_retired = False
     try:
         registration, state, helper, cwd, sid = _gemini_resume_material(session)
+        if expected_history_session_id is not None and sid != expected_history_session_id:
+            raise _ResumeCapabilityError("identity_mismatch", _PERMISSION_HISTORY_UNVERIFIED)
         owner_id = registration["agent_id"]
         project = registration["project_key"]
         module.begin_resume(runtime, session, agent_id=owner_id, project_key=project,
@@ -5681,26 +5740,39 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False):
             "AGENTSTACK_HOME": str(Path(HOOKS_DIR).parent), "AGENTSTACK_HOOKS_DIR": HOOKS_DIR,
             "AGENTSTACK_WORKTREE_ROOT": _worktree_root(),
             "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": project,
-            **({"AGENTSTACK_PORT": str(PORT)} if state["gemini_launch"].get("standalone") is True else {}),
+            **({"AGENTSTACK_PORT": str(PORT)} if (state["gemini_launch"].get("standalone") is True
+                or expected_history_session_id is not None or module.tools_record_path(runtime, session).is_file()) else {}),
             "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
             "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
             "AGENT_NAME": session, "PARENT_AGENT": state.get("parent_agent", ""),
             "AGENTSTACK_RESERVED_IDENTITY": "1", "AGENTSTACK_GEMINI_INTERACTIVE": "1",
         }
+        if generation := module.tools_change_generation():
+            environment["AGENTSTACK_TOOLS_CHANGE_GENERATION"] = generation
+        if os.environ.get("AGENTSTACK_SCREEN_PYTHON"):
+            environment["AGENTSTACK_SCREEN_PYTHON"] = os.environ["AGENTSTACK_SCREEN_PYTHON"]
         context = Path(HOOKS_DIR) / "project-context.sh"
         command = (
             ". " + shlex.quote(str(context)) + ' && agentstack_apply_workspace_context "$PWD" "$AGENTSTACK_PROJECT_KEY" && exec '
             + shlex.join([state["gemini_launch"]["python"], str(helper), "run", "--conversation", sid])
         )
+        verify_permission = expected_history_session_id is not None
+        launch_options = {"include_identity": True} if verify_permission else {}
         launched = _launch_claude_resume_tmux(
             ["tmux", "new-session", "-A", "-s", session, "-c", str(cwd),
              *[value for key, item in environment.items() for value in ("-e", key + "=" + item)],
              # The launcher prepends the wait gate to the Bash command. Split
              # argv keeps tmux from running it through the user's default shell.
              "/bin/bash", "-c", command],
-            title=session, open_terminal=open_terminal, replace_husk=replace_husk)
+            title=session, open_terminal=open_terminal, replace_husk=replace_husk, **launch_options)
         if not launched.get("ok"):
             raise _ResumeCapabilityError("config_unrestorable", "Antigravity tmux resume could not be started")
+        if verify_permission and not _await_gemini_permission_resume(
+                session, registration, sid, launched.get("tmux_identity", "")):
+            if _child_session_live(session, module.boot_time()) is not False:
+                return {"ok": False, "error": "Could not confirm the Antigravity conversation resumed; check its terminal",
+                        "resume_confirmation_pending": True}
+            raise _ResumeCapabilityError("config_unrestorable", "Antigravity stopped before resume was confirmed")
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         result = _resume_unavailable(getattr(exc, "code", "config_unrestorable"))
         if isinstance(exc, _ResumeCapabilityError):
@@ -8194,6 +8266,14 @@ def _permission_resume_material(session, sid, *, live=None):
     runtime = pathlib.Path(RUNTIME_DIR)
     directory = runtime / "child-agents"
     module = _child_resume_module()
+    if program == "antigravity":
+        _registration, state, helper, cwd, actual_sid = _gemini_resume_material(session, live=live)
+        if actual_sid != sid:
+            raise ValueError(_PERMISSION_HISTORY_UNVERIFIED)
+        agy = _gemini_interactive_module(str(helper))
+        changed = agy["permission_selection"](runtime, state, sid)
+        spec = changed["selection"] if changed else agy["_tool_selection"](state["gemini_launch"])
+        return program, program, state, module.tools_record_path(runtime, session), spec, str(cwd)
     if program in harness_runtime.HARNESSES:
         registration, state, document = _native_resume_material(session, program, allow_active=bool(live))
         history = _dsh_history_binding if program == "dsh" else _hermes_history_binding
@@ -8385,14 +8465,16 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
     keep_browser_off = (provider == "claude" and bool(saved and saved.get("browser_disabled"))
                         and tools is _TOOLS_UNSET)
     if permission is not None:
+        if provider in {*harness_runtime.HARNESSES, "antigravity"} and "browser_use" in permission:
+            permission = {"history_session_id": sid, "browser_mode": "personal" if permission["browser_use"] else "off"}
         if provider == "codex":
             servers = config.get("mcp_servers")
+        elif provider == "antigravity":
+            servers = {}
         else:
             servers = selection.claude_mcp_definitions(claude_json, cwd)
             if provider in harness_runtime.HARNESSES:
                 servers = {**(config.get("mcp_servers") or {}), **servers}
-                if "browser_use" in permission:
-                    permission = {"history_session_id": sid, "browser_mode": "personal" if permission["browser_use"] else "off"}
         spec = selection.normalize(old["base"], selection.change_permission(old["tools"], permission, servers))
         if provider == "claude":
             selection.check_provider(spec, provider)
@@ -8400,7 +8482,15 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
                 keep_browser_off = permission["browser_mode"] == "off"
             elif "browser_use" in permission:
                 keep_browser_off = not permission["browser_use"]
-    if provider in harness_runtime.HARNESSES:
+    if provider == "antigravity":
+        agy = _gemini_interactive_module(str(Path(HOOKS_DIR) / "gemini_interactive.py"))
+        agy["validate_permission_selection"](runtime, state, spec)
+        plan = state["gemini_launch"]
+        candidate = {"version": 1, "agent_id": state["agent_id"], "workspace": plan["cwd"],
+                     "workspace_file_id": plan["workspace_file_id"], "history_session_id": sid,
+                     "selection": spec, "computer_use_changed": "computer_use" in permission}
+        profile = None
+    elif provider in harness_runtime.HARNESSES:
         selection.native_plan(spec, cwd=cwd, claude_json=claude_json, codex_config=config)
         if check_only:
             selection.check_screen_relay(spec)

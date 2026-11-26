@@ -986,22 +986,29 @@ def native_resume_input(runtime_dir: Path, state: dict[str, Any]) -> dict[str, A
     return {**document, 'backend_kind': kind, 'resume_session_id': session_id}
 
 
-def native_tools_selection(runtime_dir: Path, state: dict, document: dict) -> dict:
-    """Read the staged/committed selection for this exact native launch."""
+def permission_selection(runtime_dir: Path, state: dict, history_session_id: str, **launch_binding) -> dict | None:
+    """Read the staged or committed change for this owner and launch."""
     record = tools_record_path(runtime_dir, state['agent_name'])
     if not os.path.lexists(record):
-        selection = document.get('tools', {'base': 'default', 'tools': {}})
-        if not isinstance(selection, dict):
-            raise ResumeStateError('config_unrestorable', 'The saved native tools selection is invalid')
-        return selection
-    saved = json.loads(_read_private(record, 'native tools selection', 4096))
+        return None
+    saved = json.loads(_read_private(record, 'saved tools selection', 4096))
     if (not isinstance(saved, dict) or saved.get('version') != 1
             or saved.get('agent_id') != state['agent_id']
-            or saved.get('state_dir') != document['state_dir']
-            or saved.get('history_session_id') != document['resume_session_id']
+            or saved.get('history_session_id') != history_session_id
+            or any(saved.get(key) != value for key, value in launch_binding.items())
             or not isinstance(saved.get('selection'), dict)):
-        raise ResumeStateError('identity_mismatch', 'The native tools selection belongs to a different launch')
-    return saved['selection']
+        raise ResumeStateError('identity_mismatch', 'The saved tools selection belongs to a different launch')
+    return saved
+
+
+def native_tools_selection(runtime_dir: Path, state: dict, document: dict) -> dict:
+    record = permission_selection(runtime_dir, state, document['resume_session_id'], state_dir=document['state_dir'])
+    if record is not None:
+        return record['selection']
+    selection = document.get('tools', {'base': 'default', 'tools': {}})
+    if not isinstance(selection, dict):
+        raise ResumeStateError('config_unrestorable', 'The saved native tools selection is invalid')
+    return selection
 
 
 def inspect_retained(

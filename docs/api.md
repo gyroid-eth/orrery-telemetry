@@ -720,6 +720,8 @@ API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、
 
 API 54 では、生成された dsh と Hermes も親の有無にかかわらず同じリクエストを利用できます。プロバイダーが記録した本人の会話を照合し、専用プロファイルを引き継いで、再起動後に会話 ID と端末の入力待ちを確認します。
 
+macOS の管理起動による Antigravity CLI も、親の有無にかかわらず同じリクエストを利用できます。保存済み workspace と会話を照合し、選択した MCP 設定と個別の画面操作権限で起動して、新しい端末の会話 ID と入力待ちを確認します。委任されたセッションに適用できるのは、起動時に生成された workspace MCP 設定です。
+
 稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と変更欄を一つ指定します。`computer_use` は `off`、`view`、`control`、API 54 の `browser_mode` は `off`、`temporary`、`personal` です。従来のクライアントは引き続き真偽値の `browser_use` を指定できます。この確認に成功すると、起動設定や Mail 登録を変更せずに `{"ok":true,"action":"validated"}` を返します。
 
 ```json

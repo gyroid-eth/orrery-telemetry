@@ -717,6 +717,8 @@ API 45 accepts `permission` on a legacy `/api/jump` for a stopped, retained Clau
 
 In API 54, generated dsh and Hermes agents can use the same permission request with or without a parent. The server requires the provider's bound native conversation, retains the agent's private profile, and confirms the same conversation and an idle terminal prompt after restart.
 
+Managed Antigravity CLI sessions on macOS also use this request with or without a parent. The server checks the saved workspace and bound conversation, projects the selected MCP configuration and screen grants, and waits for the same conversation and the new terminal's idle status. For a delegated session, only the launcher's own workspace MCP configuration is eligible for replacement.
+
 Before stopping a running agent, add `check_only:true` to the request. Use the roster's bound `history_session_id` and exactly one change. `computer_use` accepts `off`, `view` or `control`. Starting in API 54, `browser_mode` accepts `off`, `temporary` or `personal`. Existing clients can still send the boolean `browser_use`. A successful check returns `{"ok":true,"action":"validated"}` without changing the saved selection or Mail registration.
 
 ```json

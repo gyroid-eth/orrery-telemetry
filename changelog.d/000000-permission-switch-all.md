@@ -3,3 +3,5 @@
 旧運用の agent 一覧に Computer use と Browser の状態・根拠・変更可否・理由を追加しました。生成された Claude Code／Codex CLI では、Browser の Off・Temporary Chrome・My Chrome を選び、確認のうえで同じ会話を再開できます。Telemetry API 世代を 54 に上げました。
 
 生成された dsh／Hermes でも、親の有無にかかわらず左ペインから切り替え、同じ会話を再開できます。
+
+macOS の管理起動による Antigravity CLI にも同じ切り替えと再開を追加しました。変更できない項目には理由を表示します。
