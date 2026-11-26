@@ -12,7 +12,60 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
+  docs:
+    name: documentation scope and consistency
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+      - name: Classify pull request changes
+        id: scope
+        shell: bash
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          docs_only=false
+          # NUL-delimited raw records include file modes. With renames disabled,
+          # both the source and destination of a move are checked.
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]] &&
+             git diff --raw --no-renames -z "$PR_BASE...$PR_HEAD" -- > "$RUNNER_TEMP/pr-changes"; then
+            while IFS= read -r -d '' change && IFS= read -r -d '' path; do
+              case "$change" in
+                ':000000 100644 '*|':100644 000000 '*|':100644 100644 '*) ;;
+                *) docs_only=false; break ;;
+              esac
+              case "$path" in
+                # These Markdown files are consumed by the installed runtime.
+                skills/*|*/skills/*|templates/*|claude/*|codex/*|bin/lib/harness_instructions.md)
+                  docs_only=false; break ;;
+                *.md|docs/*.png|docs/*.jpg|docs/*.jpeg|docs/*.gif|docs/*.webp|docs/*.svg|changelog.d/README.txt)
+                  docs_only=true ;;
+                *) docs_only=false; break ;;
+              esac
+            done < "$RUNNER_TEMP/pr-changes"
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        if: steps.scope.outputs.docs_only == 'true'
+        with:
+          python-version: "3.12"
+      - name: Install documentation test dependencies
+        if: steps.scope.outputs.docs_only == 'true'
+        run: python -m pip install pytest pytest-timeout
+      - name: Check documentation and publication hygiene
+        if: steps.scope.outputs.docs_only == 'true'
+        run: >-
+          python -m pytest --noconftest -q
+          tests/test_docs_consistency.py tests/test_changelog_release.py tests/test_no_personal_identifiers.py
+
   secret-service-linux:
+    needs: docs
+    if: needs.docs.outputs.docs_only != 'true'
     # 合成storeだけ。WSL/D-Bus/unlockや実providerの受入ではない。
     runs-on: ubuntu-latest
     name: native credential references (Ubuntu)
@@ -38,6 +91,8 @@ jobs:
         run: node --test --test-name-pattern='one memory lookup|secret service reader' tests/test_dsh_thin_credentials.mjs
 
   portable-startup:
+    needs: docs
+    if: needs.docs.outputs.docs_only != 'true'
     # These regressions cover portable components, not a full Windows install.
     runs-on: windows-latest
     name: portable startup (Windows)
@@ -65,6 +120,8 @@ jobs:
           tests/test_dashboard_quota_adapters.py tests/test_codex_models.py
 
   watcher-linux:
+    needs: docs
+    if: needs.docs.outputs.docs_only != 'true'
     # The Mail watcher is the one component that behaves differently on Linux:
     # fswatch there is inotify, which reports a signal in a brand-new recipient
     # folder late or not at all. Only the watcher's tests run here, with the
@@ -87,6 +144,8 @@ jobs:
           PYTHONPATH=. python -m pytest -q -s tests/test_mail_watcher_recovery_scan.py tests/test_notify_importance_filter.py
 
   tests:
+    needs: docs
+    if: needs.docs.outputs.docs_only != 'true'
     # 対応 OS は macOS（README「対応環境」）。ubuntu で回すと launchd / launchctl /
     # mailctl の rehearsal が環境不在で落ち、対応外の失敗と本物の回帰が混ざる。
     # 2026-09-03 の公開まで ubuntu で 22 run 連続赤だったのはこれ。
