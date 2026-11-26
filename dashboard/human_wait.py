@@ -9,9 +9,11 @@ import re
 
 try:
     from .provider_stalls import locked_events, save_events
+    from .question_screen import parse_hermes_question
     from .terminal_state import AGY_MCP_APPROVAL_CONTROLS, current_modal_activity, normalize
 except ImportError:  # executable dashboard/server.py
     from provider_stalls import locked_events, save_events
+    from question_screen import parse_hermes_question
     from terminal_state import AGY_MCP_APPROVAL_CONTROLS, current_modal_activity, normalize
 
 
@@ -184,6 +186,8 @@ def observe(text, program, activity):
     choice = _CHOICE.get(program)
     if choice and (screen := choice(rows)):
         return screen
+    if program == "hermes" and activity == "question" and (question := parse_hermes_question(text)):
+        return Screen("question", (question["control"],))
     if activity in {"wait", "work", "question"}:
         return "clear"
     if activity == "ask":

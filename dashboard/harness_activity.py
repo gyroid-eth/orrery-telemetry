@@ -8,8 +8,10 @@ import re
 
 try:
     from .harness_context import parse_context
+    from .question_screen import parse_hermes_question
 except ImportError:  # executable dashboard/server.py
     from harness_context import parse_context
+    from question_screen import parse_hermes_question
 
 _ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 _EDGES = ' \t\xa0\u3000│┃╭╮╰╯┌┐└┘─━┏┓┗┛'
@@ -138,6 +140,8 @@ def parse_activity(text, program):
     """
     if program not in ('dsh', 'hermes') or not isinstance(text, str):
         return None
+    if program == 'hermes' and parse_hermes_question(text):
+        return 'question'
     lines = _ANSI.sub('', text).replace('\r', '').splitlines()[-45:]
     rows = [row.strip(_EDGES) for row in lines]
     rows = [row for row in rows if row]

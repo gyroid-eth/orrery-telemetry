@@ -27,6 +27,17 @@ def sample(capture, evidence, **changes):
                    human_wait=evidence), **changes}
 
 
+def test_compact_hermes_question_is_a_human_wait_without_quoting_the_body():
+    capture = (FIXTURES / 'native_activity/hermes-clarify-compact.txt').read_text()
+    assert harness_activity.parse_activity(capture,'hermes')=='question'
+    evidence=observed(capture,'hermes')
+    assert evidence.kind=='question'
+    assert evidence.lines==('↑/↓ to select, Enter to lock, Tab next question',)
+    assert not isinstance(observed(capture.replace('Tab next question',''), 'hermes'),human_wait.Screen)
+    assert not isinstance(observed(capture + '\n❯ A new ordinary draft\n', 'hermes'),human_wait.Screen)
+    assert not isinstance(observed(capture.replace('2. Detailed report','3. Detailed report'), 'hermes'),human_wait.Screen)
+
+
 @pytest.mark.parametrize("case", APPROVALS, ids=lambda c: c["id"])
 def test_real_approval_notifies_once_and_dismissed_or_stale_does_not(case, tmp_path):
     program = case["program"]

@@ -28,6 +28,7 @@ MAX_PREVIEW_BYTES=12288
 HEX=re.compile(r'[a-f0-9]{64}\Z')
 EPOCH=re.compile(r'[a-f0-9]{32}\Z')
 NAME=re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,95}\Z')
+QUESTION_TOKEN=re.compile(r'[A-Za-z0-9_-]{32}\Z')
 OPERATIONS={'targets':{'epoch','name'},'preview':{'epoch','choice'},'prepare':{'epoch','choice','revision','text'},
             'commit':{'epoch','intent','confirmation'},'cancel':{'epoch','intent'},'status':{'epoch','intent'},
             'image':{'epoch','choice','revision','image'},'file':{'epoch','choice','revision','file'}}
@@ -45,6 +46,12 @@ def request_fields(operation,payload,*,fresh=None):
         if payload.get(operation) is None or not isinstance(payload['label'],str) or not 1<=len(payload['label'])<=256:
             return False
         fields.add('label')
+    if operation=='prepare' and 'question' in payload:
+        question=payload['question']
+        if (not isinstance(question,dict) or set(question)!={'token','choice'}
+                or not _matches(QUESTION_TOKEN,question['token']) or type(question['choice']) is not int
+                or not 0<=question['choice']<=9):return False
+        fields.add('question')
     if set(payload)!=fields:return False
     if operation=='file' and payload['file'] is not None:
         file=payload['file']
@@ -52,6 +59,21 @@ def request_fields(operation,payload,*,fresh=None):
                 and isinstance(file['format'],str) and file['format'] in FILE_FORMATS
                 and isinstance(file['data'],str) and 0<len(file['data'])<=4*((MAX_FILE_BYTES+2)//3))
     return True
+
+
+def _checked_question(value):
+    if (not isinstance(value,dict) or set(value)!={'token','kind','harness','mode','body','choices','draft_empty'}
+            or value['kind']!='question' or value['harness']!='hermes' or value['mode'] not in ('choice','other')
+            or not _matches(QUESTION_TOKEN,value['token']) or type(value['draft_empty']) is not bool
+            or not isinstance(value['body'],str) or not 1<=len(value['body'])<=1000
+            or not isinstance(value['choices'],list) or len(value['choices'])>9):
+        raise InputUnavailable('input_response_invalid')
+    for index,option in enumerate(value['choices'],1):
+        if (not isinstance(option,dict) or set(option) not in ({'id','label'},{'id','label','other'})
+                or type(option['id']) is not int or option['id']!=index
+                or not isinstance(option['label'],str) or not 1<=len(option['label'])<=400
+                or 'other' in option and (option['other'] is not True or index!=len(value['choices']))):
+            raise InputUnavailable('input_response_invalid')
 
 
 def attachment_error(operation,reason):
@@ -134,6 +156,9 @@ class InputClient:
             value['targets']=targets;return value
         if operation=='preview':
             expected={'contract','epoch','target','text','truncated','controls_removed','observed_at','max_lines','max_bytes'}
+            if 'question' in value:
+                _checked_question(value['question'])
+                expected.add('question')
             if set(value)!=expected:raise InputUnavailable('input_response_invalid')
             value['target']=_public_target(value['target'],fresh=fresh)
             lines,size=value['max_lines'],value['max_bytes']
