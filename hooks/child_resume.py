@@ -153,9 +153,9 @@ def _file_identity(path: Path) -> list[int] | None:
 
 
 def begin_tools_change(runtime: Path, name: str, validated: dict,
-                       record: Path, candidate: dict, profile: str | None) -> str:
+                       record: Path, candidate: dict, profile: str | None, *, adopt=False) -> str:
     """Write intent before staging; recovery never reads generated config."""
-    state_path, _, home, mcp, lock = _paths(runtime, name)
+    state_path, token_path, home, mcp, lock = _paths(runtime, name)
     if not _tools_record_is_canonical(runtime, name, record):
         raise ResumeStateError("invalid_identity", "Tools record is not canonical")
     raw_candidate = (json.dumps(candidate, separators=(",", ":"), sort_keys=True) + "\n").encode()
@@ -166,7 +166,18 @@ def begin_tools_change(runtime: Path, name: str, validated: dict,
     created = False
     try:
         with _AgentLock(lock, exclusive=True):
-            state = _load_state(state_path)
+            if adopt:
+                if any(os.path.lexists(path) for path in (
+                        state_path, state_path.with_name(f".{name}.registration-pending.json"), _legacy_pending(state_path))):
+                    raise ResumeStateError("identity_mismatch", "A newer managed launch has appeared")
+                state = dict(validated)
+                _validate_identity(state, agent_name=name)
+                stored = _read_private(token_path, "standalone owner credential", MAX_TOKEN_BYTES).strip()
+                if (not _retained_shape(state) or not state.get("permission_adoption")
+                        or not hmac.compare_digest(stored, state.get("registration_token", "").encode())):
+                    raise ResumeStateError("identity_mismatch", "The standalone owner changed")
+            else:
+                state = _load_state(state_path)
             if state != validated or state.get("tools_change_generation") or os.path.lexists(journal):
                 raise ResumeStateError("config_unrestorable", "Child state changed before the tools change")
             old = _read_private(record, "tools selection", 4096).hex() if os.path.lexists(record) else None
@@ -178,6 +189,8 @@ def begin_tools_change(runtime: Path, name: str, validated: dict,
                      "candidate_sha256": hashlib.sha256(raw_candidate).hexdigest(),
                      "generated": {path.name: _file_identity(path) for path in (home, mcp)},
                      "phase": "prepared"}
+            if adopt:
+                saved["adopted"] = True
             _atomic_json(journal, saved)
             created = True
             state["tools_change_generation"] = generation
@@ -209,8 +222,12 @@ def finish_tools_change(runtime: Path, name: str, generation: str, *, commit: bo
     journal = _tools_journal(state_path)
     with _AgentLock(lock, exclusive=True):
         saved = json.loads(_read_private(journal, "tools change journal", 16384))
-        state = _load_state(state_path)
         phase = saved.get("phase")
+        if (saved.get("adopted") is True and saved.get("generation") == generation and not commit
+                and phase in {"prepared", "rollback"} and not os.path.lexists(state_path)):
+            journal.unlink()
+            return
+        state = _load_state(state_path)
         if (saved.get("generation") != generation or phase not in {"prepared", "ready", "rollback", "commit"}
                 or state.get("tools_change_generation") not in (None, generation)
                 or saved.get("identity") != {key: state.get(key) for key in ("agent_id", "agent_name", "project_key", "program")}):
@@ -259,8 +276,11 @@ def finish_tools_change(runtime: Path, name: str, generation: str, *, commit: bo
         else:
             for path in (home, mcp):
                 _remove_exact(path.with_name(f".{path.name}.tools-{generation}"))
-        state.pop("tools_change_generation", None)
-        _atomic_json(state_path, state)
+        if phase == "rollback" and saved.get("adopted") is True:
+            state_path.unlink()
+        else:
+            state.pop("tools_change_generation", None)
+            _atomic_json(state_path, state)
         journal.unlink()
 
 def _utc_now(now: datetime | None = None) -> datetime:
@@ -1009,6 +1029,22 @@ def native_tools_selection(runtime_dir: Path, state: dict, document: dict) -> di
     if not isinstance(selection, dict):
         raise ResumeStateError('config_unrestorable', 'The saved native tools selection is invalid')
     return selection
+
+
+def verified_codex_permission_adoption(runtime_dir: Path, registration: dict, sid: str, profile: str) -> bool:
+    """Prove that the current tools transaction owns the move to a child profile."""
+    generation = tools_change_generation()
+    if not generation:
+        return False
+    name = registration["agent_name"]
+    state = inspect_retained(runtime_dir, name, agent_id=registration["agent_id"],
+                             project_key=registration["project_key"], program=registration["program"], allow_active=True)
+    state_path = _paths(runtime_dir, name)[0]
+    journal = json.loads(_read_private(_tools_journal(state_path), "tools change journal", 16384))
+    return (state.get("permission_adoption") == sid and state.get("codex_standalone") is True
+            and not state.get("parent_agent") and state.get("codex_mcp_profile") == profile
+            and state.get("tools_change_generation") == generation and journal.get("generation") == generation
+            and journal.get("phase") == "ready" and journal.get("adopted") is True)
 
 
 def inspect_retained(

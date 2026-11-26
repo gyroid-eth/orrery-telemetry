@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":54}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":55}
 ```
 
 See [Installation](install.en.md#version) for version resolution order.
@@ -713,11 +713,15 @@ In API 54, legacy roster rows with permission information include `permission_co
 
 `browser_use.mode` is `off`, `temporary` (Temporary Chrome), `personal` (My Chrome), or null when the mode is unknown. `browser_use.options` lists the modes the launcher can offer and is empty when the action is unavailable.
 
-API 45 accepts `permission` on a legacy `/api/jump` for a stopped, retained Claude or Codex CLI child with a saved tool selection. API 46 also supports agents spawned without a parent when they meet the same conditions. Direct launches, persistent agents, Codex App, conversation-only resumes, and fresh and global modes are ineligible. Legacy roster rows report `permission_resume_supported` and a short English `permission_resume_reason`. A direct launch or other agent with no saved settings reports `No saved launch settings; use Resume`.
+API 45 accepts `permission` on a legacy `/api/jump` for a stopped, retained Claude or Codex CLI child with a saved tool selection. API 46 also supports agents spawned without a parent when they meet the same conditions. Persistent agents, Codex App, conversation-only resumes, and fresh and global modes are ineligible. Legacy roster rows report `permission_resume_supported` and a short English `permission_resume_reason`.
 
 In API 54, generated dsh and Hermes agents can use the same permission request with or without a parent. The server requires the provider's bound native conversation, retains the agent's private profile, and confirms the same conversation and an idle terminal prompt after restart.
 
 Managed Antigravity CLI sessions on macOS also use this request with or without a parent. The server checks the saved workspace and bound conversation, projects the selected MCP configuration and screen grants, and waits for the same conversation and the new terminal's idle status. For a delegated session, only the launcher's own workspace MCP configuration is eligible for replacement.
+
+API 55 uses the retained default MCP profile when a generated Codex CLI agent has no explicit tools record. A direct, parentless Claude Code, Codex CLI or Antigravity CLI launch with verified owner and conversation evidence can move to managed permissions. The roster sets `permission_managed_launch:true` for this transition. After the user confirms, include `adopt:true` inside `permission` for both preflight and the final jump. The original owner, working directory and conversation are kept. For a launcher that leaves an idle shell behind, the same request can replace that single verified terminal. A direct native dsh or Hermes session requires a bound launch and private profile to use permission resume.
+
+For a running generated Claude Code agent, the guarded exit records its default selection when the live terminal confirms that no explicit launch marker was allocated.
 
 Before stopping a running agent, add `check_only:true` to the request. Use the roster's bound `history_session_id` and exactly one change. `computer_use` accepts `off`, `view` or `control`. Starting in API 54, `browser_mode` accepts `off`, `temporary` or `personal`. Existing clients can still send the boolean `browser_use`. A successful check returns `{"ok":true,"action":"validated"}` without changing the saved selection or Mail registration.
 

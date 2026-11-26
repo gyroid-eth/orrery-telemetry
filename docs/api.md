@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":54}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":55}
 ```
 
 version の解決順は [インストール](install.md#version)を参照してください。
@@ -716,11 +716,15 @@ API 54 の legacy roster は、権限を表示する行に `permission_controls`
 
 `browser_use.mode` は `off`、`temporary`（Temporary Chrome）、`personal`（My Chrome）、または方式が不明な場合の null です。`browser_use.options` は起動時に選べる方式を返し、操作できない行では空になります。
 
-API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。直接起動、常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。直接起動などで設定の記録がない場合の理由は `No saved launch settings; use Resume` です。
+API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。
 
 API 54 では、生成された dsh と Hermes も親の有無にかかわらず同じリクエストを利用できます。プロバイダーが記録した本人の会話を照合し、専用プロファイルを引き継いで、再起動後に会話 ID と端末の入力待ちを確認します。
 
 macOS の管理起動による Antigravity CLI も、親の有無にかかわらず同じリクエストを利用できます。保存済み workspace と会話を照合し、選択した MCP 設定と個別の画面操作権限で起動して、新しい端末の会話 ID と入力待ちを確認します。委任されたセッションに適用できるのは、起動時に生成された workspace MCP 設定です。
+
+API 55 は、道具の選択を省略して生成された Codex CLI の保存済み MCP プロファイルを引き継ぎます。親なしで直接起動した Claude Code、Codex CLI、Antigravity CLI は、所有者と元の会話を確認できれば管理起動に移行できます。一覧の `permission_managed_launch:true` に対し、利用者が確認した後、事前確認と再開の両方で `permission` 内に `adopt:true` を付けます。元の所有者・作業ディレクトリ・会話を引き継ぎ、端末に単一の待機シェルだけが残った場合はその端末を置き換えます。dsh／Hermes の権限付き再開には、対応する起動記録と専用プロファイルが必要です。
+
+生成済みで稼働中の Claude Code は、端末に明示選択の起動マーカーがないことを確認してから、権限付きの終了時に既定を記録します。
 
 稼働中の対象には、まず `check_only:true` を付けてリクエストします。`history_binding: bound` の `history_session_id` と変更欄を一つ指定します。`computer_use` は `off`、`view`、`control`、API 54 の `browser_mode` は `off`、`temporary`、`personal` です。従来のクライアントは引き続き真偽値の `browser_use` を指定できます。この確認に成功すると、起動設定や Mail 登録を変更せずに `{"ok":true,"action":"validated"}` を返します。
 

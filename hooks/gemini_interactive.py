@@ -305,9 +305,10 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
     if config_dir is not None:
         settings["trustedWorkspaces"].append(str(config_dir))
         extra = ["--add-dir", str(config_dir)]
+    model = ["--model", plan["model"]] if plan.get("model") else []
+    effort = ["--effort", plan["effort"]] if plan.get("effort") else []
     return [plan["binary"], "--mode", "auto", "--sandbox", *extra, "--settings",
-            json.dumps(settings, separators=(",", ":")), "--model", plan["model"],
-            "--effort", plan["effort"],
+            json.dumps(settings, separators=(",", ":")), *model, *effort,
             *(["--conversation", conversation] if conversation else ["-i", prompt])]
 
 

@@ -166,20 +166,21 @@ def permission_controls(row, browser_options=()):
 
     running = row.get("running")
     category = row.get("category")
+    managed_launch = row.get("permission_managed_launch") is True
     standalone = (row.get("parent_state") == "top" or row.get("parentless") is True
                   or row.get("standalone") is True)
     reason = row.get("permission_resume_reason") if row.get("permission_resume_supported") is not True else None
-    if row.get("permission_resume_supported") is not True or row.get("permission_source") == "process":
+    if row.get("permission_resume_supported") is not True:
         reason = reason or "Permission changes are unavailable"
     elif (not standalone and row.get("parent_state") != "child"
           or row.get("history_binding") != "bound" or not row.get("history_session_id")):
         reason = "No verified conversation" if standalone else "No verified child conversation"
-    elif category == "finished":
+    elif category == "finished" and not managed_launch:
         reason = "Exit this agent first"
     elif not (running is True and category == "agent"):
-        if running is not False or category not in {"gone", "retired"}:
+        if running is not False or (category not in {"gone", "retired"} and not (managed_launch and category == "finished")):
             reason = "Agent is not confirmed stopped"
-        elif row.get("resume_capability") not in {"ready", "verification_required"}:
+        elif not managed_launch and row.get("resume_capability") not in {"ready", "verification_required"}:
             reason = "Conversation cannot be resumed"
     action = None if reason else "restart" if running is True else "resume"
     controls = {

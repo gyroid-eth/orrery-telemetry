@@ -1370,6 +1370,40 @@ def test_resume_fallback_cannot_change_recorded_provenance(binding_env) -> None:
     ] == "bound"
 
 
+def test_standalone_receipt_can_move_to_child_only_with_its_owned_adoption(binding_env, monkeypatch):
+    from hooks import child_resume
+
+    runtime, registration = binding_env["runtime"], binding_env["registration"]
+    first_path, first_id = _prepare_standalone(binding_env, now=100.0)
+    assert _record(binding_env, first_path, first_id) == "bound"
+    receipt = runtime / "session_index" / f"{AGENT_ID}.json"
+    original = receipt.read_bytes()
+    owner = b"local-fixture-owner"
+    child_resume._atomic_bytes(runtime / f"agent_token_{AGENT}", owner)
+    state = {**registration, "schema_version": 1, "provider": "codex", "launch_origin": "child",
+             "registration_token": owner.decode(), "permission_adoption": SESSION_ID,
+             "codex_standalone": True, "codex_mcp_profile": "inherit",
+             "retired_at": "2026-10-01T00:00:00Z", "resume_expires_at": "2099-01-01T00:00:00Z"}
+    tools = child_resume.tools_record_path(runtime, AGENT)
+    generation = child_resume.begin_tools_change(
+        runtime, AGENT, state, tools, {"base": "default", "tools": {}}, "inherit", adopt=True)
+    args = dict(resume_session_id=SESSION_ID, launch_origin="child", codex_mcp_profile="inherit")
+    monkeypatch.setenv("AGENTSTACK_TOOLS_CHANGE_GENERATION", "a" * 32)
+    with pytest.raises(ValueError, match="verified prior receipt"):
+        prepare_mod.check_resume(runtime, registration, **args)
+    monkeypatch.setenv("AGENTSTACK_TOOLS_CHANGE_GENERATION", generation)
+    assert prepare_mod.check_resume(runtime, registration, **args)[0] == first_id
+    with pytest.raises(ValueError, match="verified prior receipt"):
+        prepare_mod.check_resume(runtime, registration, **{**args, "codex_mcp_profile": "orrery-only"})
+    launch_path, launch_id = prepare_mod.prepare(
+        runtime, registration, launch_kind="resume", history_mode="enabled", now=200.0, **args)
+    launch = json.loads(launch_path.read_bytes())
+    assert launch["launch_id"] == launch_id and launch["fallback_launch_id"] == first_id
+    assert launch["launch_origin"] == "child"
+    assert receipt.read_bytes() == original
+    child_resume.finish_tools_change(runtime, AGENT, generation, commit=False)
+
+
 def test_write_failure_does_not_raise_and_is_visible(binding_env, monkeypatch) -> None:
     launch_path, launch_id = _prepare(binding_env)
     original = record_mod._atomic_json
