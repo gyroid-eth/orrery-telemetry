@@ -21,34 +21,29 @@ The standard binary location is `~/.local/bin/agy`.
 
 ## Set up Gemini in ORRERY
 
-Check the install location and planned copies from an ORRERY Telemetry checkout:
+The standard [`scripts/install.sh`](install.en.md) installs and updates the
+Gemini integration files and starts Dashboard on macOS and WSL (Ubuntu).
+Install `agy` and sign in when you want to use Gemini. Use
+`--dashboard-only` for a dashboard-only installation.
 
-```sh
-scripts/install-gemini-provider.sh --dry-run
-```
+For [**NEW AGENT**](#dashboard-new-agent), the launcher configures Mail MCP in the
+private launch configuration for standalone agents or in the worktree for
+delegated agents.
 
-Choose a setup based on how you will use the provider. The dry run works without `agy`.
-
-- For [**NEW AGENT**](#dashboard-new-agent) or other delegated children, run
-  `scripts/install-gemini-provider.sh`. The launcher configures Mail MCP in the
-  private launch configuration for a standalone agent or in the worktree for a delegated agent.
-- **To send Mail from a top-level `agent-start-gemini` session**, first run
-  `scripts/install-gemini-provider.sh --dry-run --configure-mcp`. Show the user
-  the planned `orrery-mail` entry in `~/.gemini/config/mcp_config.json`. After approval,
-  run the following command. This also works if the provider is already installed.
+**To send Mail from a top-level `agent-start-gemini` session**, first run
+`scripts/install-gemini-provider.sh --dry-run --configure-mcp`. Show the user
+the planned `orrery-mail` entry in `~/.gemini/config/mcp_config.json`. After
+approval, run this command from the Telemetry checkout.
 
 ```sh
 scripts/install-gemini-provider.sh --configure-mcp
 ```
 
-Restart the Dashboard after installation:
-
-```sh
-~/.agentstack/dashboard/agentctl.sh restart
-```
-
-The script copies the files needed for the Gemini integration. If it reports an
-outdated core, update the core and run it again.
+Use the shared installer for updates. If installation fails, resolve the
+reported error and rerun `scripts/install.sh`. The normal uninstall removes the
+integration files recorded in the install manifest and keeps Antigravity CLI
+and user settings. To remove a manually configured Mail MCP entry, run
+`~/.agentstack/bin/agentstack-gemini-setup --uninstall` first.
 
 ## Show account quota in Usage left
 
@@ -129,8 +124,8 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 ## Dashboard NEW AGENT
 
-[Set up Gemini](#set-up-gemini-in-orrery) and restart Dashboard
-to see Antigravity in **NEW AGENT**. On macOS, when the catalog advertises standalone
+[Set up Gemini](#set-up-gemini-in-orrery), then choose Antigravity and a model
+in **NEW AGENT**. On macOS, when the catalog advertises standalone
 support (API 50 or later), leave the parent blank to open an interactive agent in
 the selected folder, including a folder outside Git. The CLI receives the first
 task once. You can use Mail, Reader, and Resume from history.
@@ -305,8 +300,8 @@ boundary against another process running as that user.
 ## Design boundary
 
 The shared process-tree liveness check supports `program=antigravity` / `agy`.
-`scripts/install-gemini-provider.sh` installs the Gemini integration files,
-which are preserved when the core is updated.
+The shared installer installs the Gemini integration files and updates them
+together during a standard update.
 
 - Top-level `agy` exits to its interactive shell, which remains attachable as `finished`.
 - A delegated launcher reports the result, releases reservations, soft-retires the identity,

@@ -1,11 +1,8 @@
-"""The core installer must neither ship, activate, nor overwrite the optional
-Gemini provider.
+"""The generic core copy leaves the Gemini runtime to its own transaction.
 
-The provider's dashboard runtime and its launcher hooks are one contract that
-only ``install-gemini-provider.sh`` installs.  These tests drive the real
-``install_payload`` function from ``scripts/install.sh`` against a temporary
-install directory, including over a payload laid down by the real provider
-installer.
+The full installer runs that transaction before starting Dashboard. These
+tests exercise the earlier ``install_payload`` phase in a temporary directory,
+including over a runtime laid down by the Gemini installer.
 """
 from __future__ import annotations
 
@@ -44,9 +41,7 @@ def _function(text: str, name: str) -> str:
 
 
 def _payload_declaration(text: str) -> str:
-    match = re.search(r"^RUNTIME_SCHEMA_SOURCE=.*\nRUNTIME_FIXTURE_SOURCE=.*\nRUNTIME_CLIENT_CONTRACT_SOURCES=\(\n.*?^\)\nOPTIONAL_PROVIDER_PAYLOAD=\(\n.*?^\)\n", text, re.DOTALL | re.MULTILINE)
-    assert match, "core payload declarations missing"
-    return match.group(0)
+    return text[text.index("RUNTIME_SCHEMA_SOURCE="):text.index("\nis_gemini_runtime_file()")]
 
 
 def _provider_installer_files() -> list[str]:
@@ -62,7 +57,7 @@ def _run_install_payload(install_dir: pathlib.Path, *, tier: str = "tier1",
     text = _installer_text()
     functions = "\n".join([_payload_declaration(text)] + [
         _function(text, name) for name in (
-            "copy_tree", "is_optional_provider_payload", "copy_core_tree",
+            "copy_tree", "is_gemini_runtime_file", "copy_core_tree",
             "install_child_mcp_proxy", "install_payload")
     ])
     script = "\n".join([
@@ -89,7 +84,7 @@ def _run_install_payload(install_dir: pathlib.Path, *, tier: str = "tier1",
 
 def test_core_exclusions_cover_every_provider_contract_file_it_would_copy():
     provider_files = _provider_installer_files()
-    provider_declaration = _payload_declaration(_installer_text()).split('OPTIONAL_PROVIDER_PAYLOAD=(\n', 1)[1]
+    provider_declaration = _payload_declaration(_installer_text()).split('GEMINI_RUNTIME_FILES=(\n', 1)[1]
     declared = re.findall(r'^  "([^"]+)"$', provider_declaration, re.MULTILINE)
     assert declared == list(PROVIDER_PAYLOAD)
     assert set(declared) <= set(provider_files)
@@ -115,7 +110,7 @@ def test_install_payload_routes_provider_bearing_trees_through_the_exclusion():
     assert 'copy_tree "$REPO_ROOT/dashboard"' not in body
 
 
-def test_fresh_core_install_omits_provider_payload_and_runs_core_server(tmp_path, monkeypatch):
+def test_core_copy_leaves_provider_activation_to_the_gemini_transaction(tmp_path, monkeypatch):
     install_dir = tmp_path / "agentstack"
     result = _run_install_payload(install_dir)
     assert result.returncode == 0, result.stderr
@@ -194,7 +189,7 @@ print(json.dumps(result))
     assert service_runner._default_server_path() == install_dir / "dashboard" / "server.py"
 
 
-def test_core_reinstall_keeps_an_installed_provider_contract_intact(tmp_path):
+def test_core_copy_keeps_the_previous_gemini_runtime_until_the_transaction(tmp_path):
     install_dir = tmp_path / "agentstack"
     first = _run_install_payload(install_dir)
     assert first.returncode == 0, first.stderr
@@ -261,8 +256,8 @@ def test_dry_run_plans_exclusions_without_copying(tmp_path):
     install_dir = tmp_path / "agentstack"
     result = _run_install_payload(install_dir, dry_run=True)
     assert result.returncode == 0, result.stderr
-    assert re.search(r"copy \S+/hooks -> \S+/hooks \(core files; optional provider payload excluded\)",
+    assert re.search(r"copy \S+/hooks -> \S+/hooks \(Gemini runtime handled by its own transaction\)",
                      result.stdout), result.stdout
-    assert re.search(r"copy \S+/dashboard -> \S+/dashboard \(core files; optional provider payload excluded\)",
+    assert re.search(r"copy \S+/dashboard -> \S+/dashboard \(Gemini runtime handled by its own transaction\)",
                      result.stdout), result.stdout
     assert not install_dir.exists()

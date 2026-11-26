@@ -21,33 +21,27 @@ agy models
 
 ## Gemini を使うための設定
 
-ORRERY Telemetry の checkout で、まず導入先とコピー予定を確認します。
+通常の [`scripts/install.sh`](install.md) は、macOS と WSL（Ubuntu）で Gemini の
+連携ファイルを導入・更新し、Dashboard を起動します。`agy` の導入とサインインは
+利用者が Gemini を使うときに行います。`--dashboard-only` は同梱の対象外です。
 
-```sh
-scripts/install-gemini-provider.sh --dry-run
-```
+[**NEW AGENT**](#dashboard-new-agent) では、Mail MCP は親なし起動の専用設定か、
+委任起動の作業用 worktree に用意されます。
 
-導入方法は使う経路で選びます。`--dry-run` は `agy` のない環境でも使えます。
-
-- Dashboard の [**NEW AGENT**](#dashboard-new-agent) または委任する子で使う場合は
-  `scripts/install-gemini-provider.sh` を実行します。Mail MCP は親なし起動では専用の起動設定に、委任起動では作業用 worktree に用意されます。
-- **`agent-start-gemini` で立てる親なし agent から Mail を送る場合**は、
-  `scripts/install-gemini-provider.sh --dry-run --configure-mcp` で追加先を確認します。
-  `~/.gemini/config/mcp_config.json` に `orrery-mail` を設定する変更を利用者に示し、
-  了承後に次を実行します。すでに provider を導入済みの場合も同じコマンドです。
+**`agent-start-gemini` で立てる親なし agent から Mail を送る場合**は、
+`scripts/install-gemini-provider.sh --dry-run --configure-mcp` で追加先を確認します。
+`~/.gemini/config/mcp_config.json` に `orrery-mail` を設定する変更を利用者に示し、
+了承後に Telemetry の checkout で次を実行します。
 
 ```sh
 scripts/install-gemini-provider.sh --configure-mcp
 ```
 
-導入後、Dashboard を再起動します。
-
-```sh
-~/.agentstack/dashboard/agentctl.sh restart
-```
-
-このスクリプトは Gemini の連携に必要なファイルをコピーします。core の更新を
-求められた場合は、更新してから再実行します。
+更新時も連携ファイルは共通 installer で更新します。導入に失敗した場合は、
+表示された原因を解消して `scripts/install.sh` を再実行します。
+通常のアンインストールは所有記録にある連携ファイルを削除し、Antigravity CLI と
+利用者の設定を保持します。手動で追加した Mail MCP を外す場合は、先に
+`~/.agentstack/bin/agentstack-gemini-setup --uninstall` を実行します。
 
 ## Usage left に利用枠を表示
 
@@ -131,7 +125,7 @@ incomplete. A non-zero launcher/runtime status is likewise incomplete.
 
 ## Dashboard NEW AGENT
 
-[Gemini の設定](#gemini-を使うための設定)を済ませて Dashboard を再起動すると、**NEW AGENT** に Antigravity が出ます。
+[Gemini の設定](#gemini-を使うための設定)を済ませ、**NEW AGENT** で Antigravity と model を選びます。
 macOS でカタログが親なし起動に対応している場合（API 50 以降）は、親を選ばず、
 指定したフォルダで対話型 agent を起動できます。Git を使っていないフォルダも選べます。
 最初の task は CLI に一度だけ渡り、Mail、Reader、履歴からの Resume を使えます。
@@ -287,7 +281,7 @@ boundary against another process running as that user.
 ## Design boundary
 
 共通のプロセスツリーの稼働判定は `program=antigravity` / `agy` に対応します。
-Gemini の連携ファイルは `scripts/install-gemini-provider.sh` で導入し、core の更新時にも保持されます。
+Gemini の連携ファイルは共通 installer で導入し、通常の更新でも一式を更新します。
 
 - Top-level `agy` exits to its interactive shell, which remains attachable as `finished`.
 - A delegated launcher reports the result, releases reservations, soft-retires the identity,

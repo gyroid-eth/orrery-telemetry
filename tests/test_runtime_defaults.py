@@ -168,11 +168,7 @@ def _tracked_core_payload_files() -> list[str]:
         text=True,
         check=True,
     ).stdout.split("\0")
-    provider_owned = _provider_installer_files()
-    return [
-        path for path in tracked
-        if path and path not in provider_owned and path not in SOURCE_ONLY_ENTRIES
-    ]
+    return [path for path in tracked if path and path not in SOURCE_ONLY_ENTRIES]
 
 
 def test_source_only_payload_exception_does_not_hide_unlisted_bin(monkeypatch):
@@ -185,27 +181,9 @@ def test_source_only_payload_exception_does_not_hide_unlisted_bin(monkeypatch):
             args[0], 0, stdout="\0".join(paths) + "\0"
         ),
     )
-    monkeypatch.setattr(sys.modules[__name__], "_provider_installer_files", lambda: set())
     expected = {f"/installed/{path}" for path in _tracked_core_payload_files()}
     actual = {"/installed/bin/agentstack-enroll"}
     assert expected - actual == {"/installed/bin/agentstack-unlisted"}
-
-
-def _provider_installer_files() -> set[str]:
-    """Tracked payload that a provider installer, not the core one, copies.
-
-    scripts/install-gemini-provider.sh keeps its own FILES=( ... ) list and the
-    core installer leaves those alone by design. Read the list from the script
-    so the two cannot drift apart silently: a file added there is excluded
-    here on the same commit.
-    """
-    files: set[str] = set()
-    for script in sorted(ROOT.glob("scripts/install-*-provider.sh")):
-        match = re.search(r"^FILES=\((.*?)^\)", script.read_text(encoding="utf-8"),
-                          re.MULTILINE | re.DOTALL)
-        if match:
-            files.update(re.findall(r'"([^"]+)"', match.group(1)))
-    return files
 
 
 def _expected_owned_dirs(install_dir: pathlib.Path) -> list[str]:

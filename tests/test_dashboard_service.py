@@ -262,12 +262,12 @@ def test_service_definitions_use_runner_runtime_log_and_restart_policy():
 
 def test_core_copy_distributes_the_standalone_authority_parser(tmp_path):
     source = (ROOT / "scripts/install.sh").read_text()
-    block = source[source.index("OPTIONAL_PROVIDER_PAYLOAD=("):source.index("\n# The child MCP proxy")]
+    block = source[source.index("GEMINI_RUNTIME_FILES=("):source.index("\n# The child MCP proxy")]
     staged = tmp_path / "source"
     staged.mkdir()
     module = ROOT / "dashboard/legacy_http_admission.py"
     shutil.copy2(module, staged)
-    (staged / "provider_server.py").write_text("# optional fixture")
+    (staged / "provider_server.py").write_text("# Gemini entry point fixture")
     installed = tmp_path / "installed"
     result = subprocess.run(["/bin/bash", "-euc", 'DRY_RUN=false\nplan() { :; }\n' + block +
                              '\ncopy_core_tree "$1" "$2" dashboard\n', "fixture", str(staged), str(installed)],

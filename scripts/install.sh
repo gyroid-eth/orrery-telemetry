@@ -131,8 +131,9 @@ usage() {
   cat <<'EOF'
 Usage: install.sh [--dry-run] [--dashboard-only|--scoped] [options]
 
-Core install only. This creates ~/.agentstack, installs hooks/skills/dashboard assets,
-creates env.sh and service files, and writes install-state.json. Tier1 shows a
+This creates ~/.agentstack, installs hooks, skills, dashboard and Gemini
+integration files, creates env.sh and service files, and writes install-state.json.
+Set up Antigravity CLI and its sign-in separately to use Gemini. Tier1 shows a
 Claude Code user-settings and MCP dry-run diffs and only merges after explicit approval
 (an interactive yes, or a user-selected --assume-yes).
 It does not modify shell dotfiles. After Tier1 preview and explicit approval,
@@ -2321,6 +2322,7 @@ validate_repo_assets() {
   if [[ "$TIER" != "tier0" ]]; then
     [[ -f "$REPO_ROOT/hooks/check-file-reservation.sh" ]] || die "missing hooks/check-file-reservation.sh"
     [[ -f "$REPO_ROOT/hooks/settings.template.json" ]] || die "missing hooks/settings.template.json"
+    [[ -f "$SCRIPT_DIR/install-gemini-provider.sh" ]] || die "missing scripts/install-gemini-provider.sh"
     [[ -d "$REPO_ROOT/skills" ]] || die "missing skills directory"
     [[ -f "$REPO_ROOT/claude/CLAUDE.md" ]] || die "missing claude/CLAUDE.md"
     for source in templates/fresh/claude/CLAUDE.md templates/fresh/codex/AGENTS.md \
@@ -2671,14 +2673,6 @@ copy_tree() {
   fi
 }
 
-# Install-relative files owned by optional provider installers (for example
-# scripts/install-gemini-provider.sh). service_runner.py starts
-# provider_server.py whenever it exists, so shipping it from the core would
-# activate an optional provider that was never installed. The provider's
-# dashboard runtime and its launcher hooks are one contract installed
-# together; a core reinstall overwriting only the hooks would pair an old
-# runtime with a new adapter (or the reverse). The core neither copies nor
-# removes these: an existing provider install keeps all of its files.
 RUNTIME_SCHEMA_SOURCE="$REPO_ROOT/packages/agentstack_mail/src/agentstack_mail/schema_contract.py"
 RUNTIME_FIXTURE_SOURCE="$REPO_ROOT/packages/agentstack_mail/fixtures/global-server-s2a.json"
 RUNTIME_CLIENT_CONTRACT_SOURCES=(
@@ -2719,7 +2713,10 @@ RUNTIME_PUBLIC_ENTRY_SOURCES=(
   "$REPO_ROOT/bin/agentstack-http-operator"
   "$REPO_ROOT/bin/agentstack-ui-client"
 )
-OPTIONAL_PROVIDER_PAYLOAD=(
+# The Gemini installer stages its runtime and launch hooks together before
+# publishing provider_server.py, which makes service_runner.py load them.
+# The generic tree copy must leave those files to that transaction.
+GEMINI_RUNTIME_FILES=(
   "dashboard/provider_server.py"
   "dashboard/gemini_provider_runtime.py"
   "hooks/spawn_gemini_child.sh"
@@ -2727,16 +2724,16 @@ OPTIONAL_PROVIDER_PAYLOAD=(
   "hooks/gemini_interactive.py"
 )
 
-is_optional_provider_payload() {
+is_gemini_runtime_file() {
   local relative="$1"
   local owned
-  for owned in "${OPTIONAL_PROVIDER_PAYLOAD[@]}"; do
+  for owned in "${GEMINI_RUNTIME_FILES[@]}"; do
     [[ "$relative" == "$owned" ]] && return 0
   done
   return 1
 }
 
-# copy_tree for a core directory that may also hold provider-owned files.
+# copy_tree for directories that also hold the Gemini runtime.
 # $3 is the directory's install-relative name (dashboard, hooks).
 copy_core_tree() {
   local src="$1"
@@ -2744,7 +2741,7 @@ copy_core_tree() {
   local relative_root="$3"
   local entry
   local name
-  plan "copy $src -> $dst (core files; optional provider payload excluded)"
+  plan "copy $src -> $dst (Gemini runtime handled by its own transaction)"
   if [[ "$DRY_RUN" == true ]]; then
     return 0
   fi
@@ -2752,7 +2749,7 @@ copy_core_tree() {
   for entry in "$src"/* "$src"/.[!.]* "$src"/..?*; do
     [[ -e "$entry" || -L "$entry" ]] || continue
     name="${entry##*/}"
-    if is_optional_provider_payload "$relative_root/$name"; then
+    if is_gemini_runtime_file "$relative_root/$name"; then
       continue
     fi
     cp -R "$entry" "$dst/"
@@ -5351,6 +5348,24 @@ verify_dashboard_service() {
   fi
 }
 
+install_gemini_provider() {
+  if [[ "$TIER" == tier0 ]]; then
+    return 0
+  fi
+  plan "install Gemini integration files and record ownership"
+  if [[ "$DRY_RUN" == true ]]; then
+    return 0
+  fi
+  # Gemini records ownership before activating its entry point. On a fresh
+  # install, first record the core and the Mail services that already exist.
+  # The normal manifest write after dashboard startup adds its actual service.
+  if [[ ! -e "$MANIFEST" && ! -L "$MANIFEST" ]]; then
+    write_manifest manual "" "${AGENT_MAIL_SERVICE_KIND:-}" "${AGENT_MAIL_SERVICE_PATH:-}"
+  fi
+  AGENTSTACK_PYTHON="$PYTHON_BIN" /bin/bash "$SCRIPT_DIR/install-gemini-provider.sh" \
+    --install-dir "$INSTALL_DIR"
+}
+
 write_manifest() {
   plan "write manifest $MANIFEST"
   plan "distribute inactive native harness examples; keep existing files"
@@ -5798,6 +5813,7 @@ PY
     safe_merge_settings
     safe_managed_doc_setups
   fi
+  install_gemini_provider
   start_service "$service_kind"
   write_manifest "${ACTIVE_SERVICE_KIND:-manual}" "${SERVICE_PATH:-}" \
     "${AGENT_MAIL_SERVICE_KIND:-}" "${AGENT_MAIL_SERVICE_PATH:-}"
