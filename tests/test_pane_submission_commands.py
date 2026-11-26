@@ -276,6 +276,72 @@ def test_watcher_reads_the_end_of_a_scrolled_claude_draft():
     assert not submission['ready'](view, 'A different prompt that ends elsewhere.')
 
 
+def test_codex_reads_the_terminal_scroll_marker_without_stripping_typed_arrows():
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    footer = ['', '  GPT-6.1-Sol default · ~']
+    metadata = '/tmp/fixture.sock\t100\t%1\t200\t2\t0\t30\t1\tzsh'
+    text = ('ORRERY Mail notification: message from FixtureSender [normal]: Ready. Body preview: '
+            'Segment 5 has stable identifying text for this specific mail. Fetch inbox to read the rest.')
+    rows = ['\x1b[1m›\x1b[0m Segment 5 has stable identifying text for this      \x1b[2m↑',
+            '\x1b[0m  specific mail.', '  Fetch inbox to read the rest.', *footer]
+    view = submission['frame'](metadata, rows, '%1')
+    assert view.editor == 'codex' and view.scrolled and not view.draft_continues
+    assert '↑' not in view.draft and submission['ready'](view, text)
+    assert submission['same_notice'](view, text)
+
+    rows[0] = rows[0].replace('\x1b[2m↑', '↑')
+    typed = submission['frame'](metadata, rows, '%1')
+    assert not typed.scrolled and '↑' in typed.draft
+
+    rows[0] = rows[0].replace('↑', '\x1b[2m↑')
+    rows[2] += '      \x1b[2m↓'
+    partial = submission['frame'](metadata, rows, '%1')
+    assert partial.scrolled and partial.draft_continues
+    assert not submission['same_notice'](partial, text)
+    assert not submission['ready'](partial, text)
+
+
+@pytest.mark.parametrize('editor', ['agy', 'claude', 'codex', 'dsh', 'hermes'])
+@pytest.mark.parametrize('case', ['same', 'changed', 'generic-trailer'])
+def test_watcher_retries_a_scrolled_notice_from_its_visible_tail(monkeypatch, editor, case):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    submit = submission['submit']
+    frames = submit.__globals__
+    monkeypatch.setitem(frames, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
+    # A distinct section remains visible before the shared preview trailer.
+    trailer = ' ... Fetch inbox to read the rest.'
+    body = '日本語の通知本文と折り返しを確かめます。Fixture 41097 shows the right ending.'
+    notice = ('ORRERY Mail notification: message from FixtureSender [normal]: Ready. Body preview: '
+              + body + trailer)
+    draft = '本語の通知本文と折り返しを確かめます。\nFixture 41097 shows the right ending.' + trailer
+    if case == 'changed':
+        draft = draft.replace('right ending', 'wrong ending')
+    elif case == 'generic-trailer':
+        draft = trailer.strip()
+    frame = submission['Frame']
+    identity = (Path('/tmp/fixture.sock'), 100, '%1', 200)
+    pending = frame(*identity, draft, False, editor=editor, bracketed=True,
+                    scrolled=editor != 'dsh', dsh_clipped=editor == 'dsh')
+    empty = frame(*identity, '', False, editor=editor, bracketed=True)
+    operations = []
+    reasons = []
+    ticks = itertools.count()
+    monkeypatch.setitem(frames, 'time', SimpleNamespace(
+        monotonic=lambda: next(ticks) * .01, sleep=lambda _: None))
+    monkeypatch.setitem(frames, 'capture', lambda command, pane: empty if operations else pending)
+
+    def command(*args):
+        operations.append(args)
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    result = submit(command, lambda: True, '%1', notice, on_wait=reasons.append)
+    if case == 'same':
+        assert result == 'accepted' and operations == [('send-keys', '-t', '%1', 'C-m')]
+        assert not reasons
+    else:
+        assert result == 'refused' and not operations and reasons == ['editor_not_empty']
+
+
 def test_expired_submit_after_load_still_deletes_its_buffer(monkeypatch):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
