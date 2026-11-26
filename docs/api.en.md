@@ -856,7 +856,7 @@ Request:
 | `task` | yes | Task body. The UI accepts up to 4,000 characters |
 | `name` | no | Remove hyphens when specified; must be `available` |
 | `dir` | no | Existing working directory. Defaults to the source repository |
-| `provider` | no | `claude` (default), `codex`, `gemini` for the optional Antigravity provider, or a native connection ID from the catalog (legacy `deepseek` / `strata`, or an added ID such as `strata-epyc`). Send the exact catalog ID |
+| `provider` | no | `claude` (default), `codex`, `gemini` (Antigravity), or a native connection ID from the catalog (legacy `deepseek` / `strata`, or an added ID such as `strata-epyc`). Send the exact catalog ID |
 | `harness` | DeepSeek / Local required | `dsh` or `hermes`. Claude optionally accepts `claude-code` (legacy alias `claudecode`), Codex `codex-cli` (legacy alias `codex`) |
 | `helper_model` | no | Omitted or `same` inherits the main model. DeepSeek / Local also accepts same-backend formal IDs in the selected model/harness `helper_models`; undeclared or foreign IDs are rejected |
 | `web_search` | no | Native dsh / Hermes only. Set `exa` or `searxng` to override the search provider for this launch. The shared `web_search` setting in the managed spawn manifest supplies the URL and credential reference. Omission uses the shared settings if present, or keeps the existing behavior |
@@ -882,7 +882,7 @@ Since API 44, `{"tools":{"chrome_extension":true}}` enables the configured `chro
 
 A child with a `base` or `tools` selection is not started when the selection cannot be applied (no Mail proxy, a server that cannot be copied, ...). Malformed selections return 400 here; errors that depend on the child's directory are returned as a launcher failure. In API 53, Antigravity on macOS accepts a managed relay through `tools.screen` and the catalog's browser modes through `tools.browser_mode`. See the [Antigravity launch requirements](antigravity.en.md#dashboard-new-agent).
 
-Unknown request fields return HTTP 400 before model resolution or launch. When the optional Gemini provider is installed, it also accepts `resources` (see [Gemini delegation](delegation.en.md)); other providers reject that field.
+Unknown request fields return HTTP 400 before model resolution or launch. The `resources` field is specific to delegated Gemini launches. See [Gemini delegation](delegation.en.md).
 
 After failed startup, the API calls the launcher's common cleanup. If cleanup cannot be confirmed, the response has `ok: false`, `cleanup_state: "unknown"` and `cleanup_incomplete: true`; the API preserves child state, owner credentials and handoff files. A successful cleanup may retain resumable material, which the API also leaves intact.
 

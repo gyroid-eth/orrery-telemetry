@@ -6,10 +6,11 @@
 
 ## 誰のためのものか
 
-- **対象はcoding agentを使う人**: Claude Code・Codex・DeepSeek・Local LLMで、コードを書き、ファイルを変え、コマンドを実行するagentを使いたい人向けです。これから最初のagentを準備する人も使えます。DeepSeek/LocalはdshまたはHermesで動かし、Claude CodeやCodexへのログインは必要ありません
+- **対象は coding agent を使う人**。Claude Code・Codex・Gemini・DeepSeek・Local LLM で、コードを書き、ファイルを変え、コマンドを実行する agent を使いたい人向けです。これから最初の agent を準備する人も使えます。
 - **向いている人**: agent を複数動かしていて、その連携を人間が仲介している人。Codex の出力を Claude Code に貼り直す、アプリやタブを行き来して各 agent の様子を確かめる、といった手作業をなくし、全体を一枚の画面で俯瞰したい人
 - **向いていない人**: agent は 1 体で足りている人。このツールの価値は複数 agent の協調と、その観測にあります
-- **対応する agent**: Claude Code / Codex / DeepSeek / Local modelsのagentを扱います。DeepSeekとLocal modelsはdsh / Hermesで動かします。Codex Desktopのtaskとsubagent、Google Antigravity / Geminiは、core installのあとに追加できるoptional providerとして同じdashboardに載せられます。それぞれ接続方法と対応範囲が異なります
+- **対応する agent**。Claude Code と Codex は各 CLI、Gemini は Google Antigravity CLI（`agy`）、DeepSeek と Local LLM は dsh または Hermes で動きます。
+- **Codex Desktop の task と subagent** は optional provider として同じ dashboard に載せられます。
 
 ## 目的から選ぶ
 
@@ -18,6 +19,7 @@
 | 使う系統 | 共通導入後の準備 |
 | --- | --- |
 | Claude Code / Codex | 使うCLIを入れてログインし、下の[最初のagentを起動する手順](#3-最初の-agent-を起動しdashboard-で見る)へ |
+| Gemini（Antigravity） | Antigravity CLI の導入とサインインを済ませ、NEW AGENT から起動。[Gemini の導入ガイド](antigravity.md) |
 | DeepSeek / Local LLM | [APIの初期設定ガイド](native-setup.md)でdsh/Hermes・キー・接続設定を準備し、NEW AGENTから起動。Claude/Codexのログインは不要 |
 
 準備済みのagentを観測するときはDECK / NETWORKを開きます。agent同士を連携させるなら、[Mailの通し確認](#5-しりとりで通しの確認をする)へ進みます。APIの[対応組合せと制限](managed-catalog.md)も確認してください。
@@ -27,9 +29,9 @@
 
 | 選ぶもの | 意味と現在の例 |
 | --- | --- |
-| provider / backend | 接続先と資格の設定。API 起動の provider ID は `deepseek` と `strata`（画面では Local）。既存の `claude` / `codex` は各 CLI のログインを使う経路です |
+| provider / backend | 接続先と資格の設定。`claude` / `codex` / `gemini` は各 CLI のログイン、`deepseek` と `strata`（画面では Local）は設定済みの API 接続を使います |
 | model | 接続先で使う正式な model ID。同じ backend の設定済み候補から選びます |
-| harness | 会話と tool の実行を担う CLI。API 起動では `dsh` または `hermes` を明示します。Claude Code / Codex CLI はそれぞれ自身の harness を使います |
+| harness | 会話と tool の実行を担う CLI。DeepSeek / Local の API 接続では `dsh` または `hermes` を明示します。Claude Code、Codex CLI、Antigravity CLI はそれぞれ自身の harness を使います |
 
 model の作り手と API の接続先は同じとは限りません。Local に置いた DeepSeek model でも接続先は Local です。agent の名前（identity）、親子関係、作業 project、Mail の宛先は、この3つとは別です。model や harness を選んだだけでは親や連絡先は決まりません。
 
@@ -54,7 +56,7 @@ API 起動は legacy mode です。macOS の Keychain と Linux の明示した 
 
 Python 3.11 以上と `git`・`tmux`・`uv` が必要です。[OS ごとの前提](https://github.com/gyroid-eth/orrery/blob/master/README.md#始める前に)で `curl`・`lsof`・`xz` も確認します。macOS では `brew install uv` で uv を追加できます。公式スクリプトで入れた場合は `export PATH="$HOME/.local/bin:$PATH"` を同じシェルで実行して、`uv --version` で確認します。
 
-**Windowsの人へ**: WSL2のUbuntuの中に入れます。以下のコマンドはUbuntuで実行し、dashboardはWindowsのブラウザで開きます。[WSL2の準備](install.md#windowswsl2で入れる)を済ませてから、Claude/Codexを選ぶ場合はCLIのログイン、DeepSeek/Localを選ぶ場合は[APIの初期設定](native-setup.md)へ進みます。
+**Windows の人へ**。WSL2 の Ubuntu を開きます。以下のコマンドは Ubuntu で実行し、dashboard は Windows のブラウザで開きます。[WSL2 の準備](install.md#windowswsl2で入れる)のあと、使う系統に合わせて Claude／Codex の CLI へのログイン、[Gemini の導入](antigravity.md)、または DeepSeek／Local の [API の初期設定](native-setup.md)へ進みます。
 
 ### 1. 入れる
 
@@ -81,6 +83,8 @@ agentstack-selftest
 **成功**: `agentstack-doctor` の必須の確認が `ok:` になり、`missing:` が出ないこと。`warn:` は内容と表示された対処を確認します（補足の `note:` や `mail-features:` 行も通常の出力です）。`agentstack-selftest` が `self-test passed: two agents registered, exchanged messages, ...` で終わります。どこかで止まったら[トラブルシューティング](troubleshooting.md)の該当節へ進んでください。
 
 ### 3. 最初の agent を起動し、dashboard で見る
+
+**Gemini の場合**は [Gemini の導入ガイド](antigravity.md)で Antigravity CLI のサインインと Telemetry の設定を済ませます。NEW AGENT で **Antigravity** と model を選んで起動し、DECK にカードが現れることを確認します。
 
 **DeepSeek / Local LLMの場合**: [APIの初期設定ガイド](native-setup.md)を終え、`http://127.0.0.1:8770/`のNEW AGENTで準備したModelとHarnessを選んで起動します。DECKに科学者名付きのカードが現れたら、ガイドの短い会話確認と下の[Mail確認](#5-しりとりで通しの確認をする)へ進みます。
 
