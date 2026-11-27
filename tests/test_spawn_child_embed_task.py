@@ -296,11 +296,10 @@ def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
     assert "If a required tool is unavailable, ask your parent agent for help (or the operator in standalone mode)." in injected
     if prompt_path == "mail":
         assert "Use only the first matching coordination route" in injected
-        assert "provided tool descriptions and argument schema show a bound ORRERY proxy" in injected
-        assert "call fetch_inbox with only the arguments accepted by that schema" in injected
-        assert "actual provided schema is confirmed raw/direct" in injected
+        assert 'call fetch_inbox with {"include_bodies": true}' in injected
+        assert "provided schema is confirmed raw/direct" in injected
         assert "A proxy failure is not evidence to switch to raw or a helper" in injected
-        assert "treat the inbox request as authoritative" in injected
+        assert "Treat the inbox request as authoritative" in injected
         assert "First, if" not in injected
         assert "agentstack-reregister" not in injected
 
@@ -312,11 +311,15 @@ def test_both_codex_launch_paths_append_the_profile_notice() -> None:
     ) == 2
 
 
-def test_both_mail_task_entrypoints_use_the_route_aware_prompt_builder() -> None:
+def test_mail_task_entrypoints_use_the_route_aware_prompt_builder() -> None:
     text = SPAWN.read_text(encoding="utf-8")
     assert text.count(
-        'CODEX_PROMPT="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"'
+        'CODEX_PROMPT="$(build_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"'
     ) == 2
+    assert text.count(
+        'CHILD_PROMPT="$(build_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME" claude)"'
+    ) == 2
+    assert 'prompt="$(build_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"' in text
     assert "The canonical task is in your ORRERY Mail inbox." in text
     assert "A proxy failure is not evidence to switch to raw or a helper." in text
     assert "First, if ${REREGISTER_HELPER" not in text
