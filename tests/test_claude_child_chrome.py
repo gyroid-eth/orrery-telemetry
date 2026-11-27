@@ -1,9 +1,8 @@
 """Claude in Chrome for Claude children (--claude-chrome).
 
-The default is "inherit": with no request the child's launch command is the
-one used before the option existed, and the user's own Claude settings decide
-whether Chrome is available. A request adds --chrome on every launch path and
-records what a resume must restore.
+The default is "inherit": without a Chrome request, the user's own Claude
+settings decide whether Chrome is available. A request adds
+--chrome on every launch path and records what a resume must restore.
 """
 from __future__ import annotations
 
@@ -147,7 +146,8 @@ def _log_text(env) -> str:
 def _launch_env(tmp_path, *, codex=False):
     env, workdir = _fake_launch_env(tmp_path, codex=codex)
     env["AGENTSTACK_PYTHON"] = sys.executable
-    for key in ("AGENTSTACK_CLAUDE_CHILD_CHROME", "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE"):
+    for key in ("AGENTSTACK_CLAUDE_CHILD_CHROME", "AGENTSTACK_CLAUDE_CHILD_CHROME_DEVICE",
+                "AGENTSTACK_CHILD_SANDBOX"):
         env.pop(key, None)
     env["FAKE_WARM_LOG"] = str(tmp_path / "warm.log")
     # The aliases (and so the warm pool's expected model) come from the bundled
@@ -211,7 +211,14 @@ def test_settings_json_survives_the_tmux_shell_and_child_shell():
     assert shlex.split(provider) == flags
 
 
-def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
+def _expected_child_settings_flags(*, sandbox=False):
+    flags = child_tools.claude_native_screen_flags(sys.platform)
+    settings = json.loads(flags[1]) if flags else {}
+    settings["sandbox"] = {"enabled": sandbox}
+    return ["--settings", json.dumps(settings, separators=(",", ":")), *flags[2:]]
+
+
+def test_default_spawn_preserves_pre_chrome_launch_and_prompt_with_child_settings(tmp_path):
     """Run the launcher from before this change and this one on the same input."""
     old_hooks = tmp_path / "old" / "hooks"
     old_hooks.mkdir(parents=True)
@@ -243,10 +250,9 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
             prompts[label] = rest.split("\035\n", 1)[1].split("CALL", 1)[0]
         else:
             shell, option, raw_inner = shlex.split(launch[-1])
-            if sys.platform == 'darwin':
-                native_flags = ' ' + shlex.join(child_tools.claude_native_screen_flags('darwin'))
-                assert native_flags in raw_inner
-                raw_inner = raw_inner.replace(native_flags, '', 1)
+            settings_flags = ' ' + shlex.join(_expected_child_settings_flags())
+            assert settings_flags in raw_inner
+            raw_inner = raw_inner.replace(settings_flags, '', 1)
             launch[-1] = f"{shell} {option} '{raw_inner}'"
             # The new one passes the same text as the launch argument instead,
             # and runs the claude path it resolved (bare `claude` if none).
@@ -267,25 +273,27 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
             prompts[label] = log.split("ARGV_TASK\034600\034", 1)[1].split("CALL", 1)[0]
             assert "\034load-buffer\034" not in log and "\034paste-buffer\034" not in log
         launches[label] = launch
-    # Without --claude-chrome the child is launched exactly as before, and gets
-    # exactly the prompt it got before; only how the prompt travels changed.
+    # Compare the launch after checking the explicit child settings and
+    # normalizing the argument transport of the same first prompt.
     assert launches["new"] == launches["old"]
     assert prompts["new"] == prompts["old"] and "SameChild" in prompts["new"]
     assert raw_inner.replace(ARGV_PROMPT, "") == PRE_CHROME_INNER
 
 
-@pytest.mark.parametrize("warm_model", ["opus", "sonnet"])
-def test_default_spawn_cold_starts_for_mac_screen_policy_and_uses_warm_pool_elsewhere(tmp_path, warm_model):
+@pytest.mark.parametrize(("warm_model", "sandbox"), [("opus", False), ("sonnet", True)])
+def test_parented_spawn_cold_starts_to_apply_the_child_sandbox(tmp_path, warm_model, sandbox):
     env, workdir = _launch_env(tmp_path)
     env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
+    if sandbox:
+        env["AGENTSTACK_CHILD_SANDBOX"] = "on"
     result = _spawn(tmp_path, env, workdir, "WarmChild", "--model", warm_model)
     assert result.returncode == 0, result.stderr
-    if sys.platform == 'darwin':
-        assert not (tmp_path / 'warm.log').exists()
-        assert '--disallowed-tools mcp__computer-use' in _new_session(env)[-1]
-        return
+    assert "Cold start" in result.stderr
+    assert not (tmp_path / "warm.log").exists()
     model = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5"}[warm_model]
-    assert (tmp_path / "warm.log").read_text() == f"claim-model WarmChild {model}\n"
+    launch = _new_session(env)
+    assert f"CLAUDE_CHILD_MODEL={model}" in launch
+    assert " " + shlex.join(_expected_child_settings_flags(sandbox=sandbox)) in shlex.split(launch[-1])[-1]
 
 
 @pytest.mark.parametrize("pool", [
@@ -309,13 +317,19 @@ def test_a_claim_that_cannot_promise_the_model_falls_back_to_cold_start(tmp_path
 
 def test_a_claim_reporting_another_model_is_stopped(tmp_path):
     env, workdir = _launch_env(tmp_path)
-    _simulate_linux_launcher(tmp_path)
     env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
+    env["WARM_POOL"] = str(pathlib.Path(env["AGENTSTACK_HOOKS_DIR"]) / "warm_pool.sh")
     env["FAKE_WARM_REPORT"] = "LyingChild claude-opus-7"
-    result = _spawn(tmp_path, env, workdir, "LyingChild", "--model", "opus")
-    assert result.returncode != 0
+    source = SPAWN.read_text(encoding="utf-8")
+    start = source.index("claim_warm_session() {")
+    function = source[start:source.index("\n}\n", start) + 3]
+    result = subprocess.run(
+        ["/bin/bash", "-c", function + "\nclaim_warm_session opus LyingChild claude-opus-5-5"],
+        cwd=workdir, env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 2
     assert "reported 'LyingChild claude-opus-7' instead of 'LyingChild claude-opus-5-5'" in result.stderr
-    assert "Cold start" not in result.stderr
+    assert ["kill-session", "-t", "=LyingChild"] in _calls(env)
 
 
 @pytest.mark.parametrize("status", ["opus ready\nsonnet ready", "opus ready (claude-opus-5)\nsonnet ready (claude-sonnet-5)"])
@@ -341,10 +355,9 @@ def test_chrome_request_skips_a_ready_warm_session_and_adds_chrome(tmp_path):
 
 def assert_chrome_launch(env):
     inner = shlex.split(_new_session(env)[-1])[-1]
-    expected = LAUNCHED_CHROME_INNER
-    if sys.platform == 'darwin':
-        flags = child_tools.claude_native_screen_flags('darwin')
-        expected = expected.replace(CHROME_APPROVAL, ' ' + shlex.join(flags[:2]) + CHROME_APPROVAL)
+    flags = _expected_child_settings_flags()
+    expected = LAUNCHED_CHROME_INNER.replace(CHROME_APPROVAL, ' ' + shlex.join(flags[:2]) + CHROME_APPROVAL)
+    if flags[2:]:
         expected = expected.replace(' --chrome ', ' ' + shlex.join(flags[2:]) + ' --chrome ')
     assert inner == expected
 
@@ -903,11 +916,13 @@ def test_new_agent_form_offers_chrome_only_for_claude():
 
 
 
-def test_warm_handoff_refuses_a_different_resolved_identity(tmp_path):
+def test_cold_spawn_does_not_take_a_warm_session_identity(tmp_path):
     env,workdir=_launch_env(tmp_path)
     _simulate_linux_launcher(tmp_path)
     env['AGENTSTACK_HOOKS_DIR']=str(_hooks_with_warm_pool(tmp_path))
     env['FAKE_WARM_IDENTITY_OVERRIDE']='AnotherIdentity'
     result=_spawn(tmp_path,env,workdir,'WarmChild','--model','opus')
-    assert result.returncode!=0 and 'LAUNCH_IDENTITY_UNAVAILABLE' in result.stderr
-    assert 'load-buffer' not in (tmp_path/'tmux.log').read_text()
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "warm.log").exists()
+    assert "WarmChild" in _new_session(env)
+    assert "load-buffer" not in _log_text(env)
