@@ -9157,28 +9157,36 @@ def _agent_name_comparison_key(name: str) -> str:
     return (name or "").replace("-", "").casefold()
 
 
-def _spawn_name_status(name: str) -> str:
-    """Return available/occupied/unknown; database failures fail closed."""
+def _spawn_name_keys(name: str):
     if FRESH_MODE:
         from agentstack_mail.storage_origin_contract import name_keys
+        return name_keys(name)
+    return (_agent_name_comparison_key(name),)
+
+
+def _spawn_occupied_name_keys() -> set[str] | None:
+    if FRESH_MODE:
         roster = asyncio.run(_fresh_backend().roster())
-        return 'occupied' if any(set(name_keys(name)).intersection(name_keys(a['name'])) for a in roster['agents']) else 'available'
-    if not name or not os.path.exists(DB_PATH):
-        return "unknown"
-    comparison_key = _agent_name_comparison_key(name)
+        return {key for agent in roster["agents"] for key in _spawn_name_keys(agent["name"])}
+    if not os.path.exists(DB_PATH):
+        return None
     try:
         with _db() as con:
-            registered_names = (
-                row[0] for row in con.execute("SELECT name FROM agents")
-                if isinstance(row[0], str)
-            )
-            occupied = any(
-                _agent_name_comparison_key(registered) == comparison_key
-                for registered in registered_names
-            )
-        return "occupied" if occupied else "available"
+            return {key for (name,) in con.execute("SELECT name FROM agents")
+                    if isinstance(name, str) for key in _spawn_name_keys(name)}
     except sqlite3.Error:
+        return None
+
+
+def _spawn_name_status(name: str, occupied: set[str] | None = None) -> str:
+    """Return available/occupied/unknown; database failures fail closed."""
+    if not name:
         return "unknown"
+    if occupied is None:
+        occupied = _spawn_occupied_name_keys()
+    if occupied is None:
+        return "unknown"
+    return "occupied" if occupied.intersection(_spawn_name_keys(name)) else "available"
 
 
 def _spawn_name_vocabulary() -> tuple[list[str], list[str]]:
@@ -9225,6 +9233,20 @@ def suggest_spawn_name(scientist: str, attempts: int = 20) -> str | None:
         if _spawn_name_status(candidate) == "available":
             return candidate
     return None
+
+
+def suggest_spawn_adjectives(scientist: str) -> list[str] | None:
+    """Check all adjective suggestions against the same identities as Launch."""
+    if not re.fullmatch(r"[A-Za-z]{2,63}", scientist or ""):
+        return None
+    scientists, adjectives = _spawn_name_vocabulary()
+    if scientist not in scientists:
+        return None
+    occupied = _spawn_occupied_name_keys()
+    if occupied is None:
+        return None
+    return [adjective for adjective in adjectives
+            if _spawn_name_status(f"{adjective}-{scientist}", occupied) == "available"]
 
 
 def _suggest_any_spawn_name(attempts: int = 75) -> str | None:
@@ -11746,8 +11768,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path=='/api/name-status':
                 payload=dict(name=query.get('name',[''])[0],status=_spawn_name_status(query.get('name',[''])[0]))
             elif path=='/api/suggest-name':
-                payload=dict(name=suggest_spawn_name(query.get('scientist',[''])[0]))
-                if not payload['name']:raise ValueError('name_unavailable')
+                scientist = query.get('scientist', [''])[0]
+                if query.get('choices') == ['1']:
+                    choices = suggest_spawn_adjectives(scientist)
+                    if choices is None:raise ValueError('name_unavailable')
+                    payload = dict(adjectives=choices)
+                else:
+                    payload = dict(name=suggest_spawn_name(scientist))
+                    if not payload['name']:raise ValueError('name_unavailable')
             elif path=='/api/spawn-status':
                 if set(query)-{'name','mail_instance_id','mail_agent_id'}:raise ValueError('invalid_query')
                 ref=None
@@ -12034,9 +12062,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/suggest-name":
             query = parse_qs(urlparse(self.path).query)
             scientist = (query.get("scientist") or [""])[0]
-            name = suggest_spawn_name(scientist)
-            payload = {"name": name} if name else {"error": "no available name found"}
-            self._send(200 if name else 409, json.dumps(payload).encode(), "application/json; charset=utf-8")
+            if query.get("choices") == ["1"]:
+                choices = suggest_spawn_adjectives(scientist)
+                ok = choices is not None
+                payload = {"adjectives": choices} if ok else {"error": "name availability could not be verified"}
+            else:
+                name = suggest_spawn_name(scientist)
+                ok = bool(name)
+                payload = {"name": name} if ok else {"error": "no available name found"}
+            self._send(200 if ok else 409, json.dumps(payload).encode(), "application/json; charset=utf-8")
         elif path == "/api/fs/dirs":
             query = parse_qs(urlparse(self.path).query)
             payload = spawn_directory_suggestions((query.get("path") or [""])[0])

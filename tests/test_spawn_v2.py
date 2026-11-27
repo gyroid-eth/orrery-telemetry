@@ -711,6 +711,20 @@ def test_suggest_name_endpoint_returns_409_when_exhausted(monkeypatch):
         thread.join()
 
 
+def test_available_adjectives_use_launch_occupancy_without_returning_registered_names(monkeypatch, tmp_path):
+    db = tmp_path / "mail.sqlite3"
+    with sqlite3.connect(db) as con:
+        con.execute("CREATE TABLE agents(name TEXT)")
+        con.executemany("INSERT INTO agents VALUES(?)", [("RainyCurie",), ("Windy-Curie",)])
+    monkeypatch.setattr(server, "DB_PATH", str(db))
+    monkeypatch.setattr(server, "_spawn_name_vocabulary", lambda: (["Curie"], ["Rainy", "Windy", "Quiet"]))
+    assert server._spawn_name_status("Rainy-Curie") == "occupied"
+    assert server._spawn_name_status("WindyCurie") == "occupied"
+    assert server.suggest_spawn_adjectives("Curie") == ["Quiet"]
+    db.unlink()
+    assert server.suggest_spawn_adjectives("Curie") is None
+
+
 def test_spawn_dirs_rejects_traversal_external_and_symlink_escape(monkeypatch, tmp_path):
     root = tmp_path / "root"
     inside = root / "alpha"
