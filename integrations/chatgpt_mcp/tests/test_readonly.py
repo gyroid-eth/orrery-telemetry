@@ -356,7 +356,7 @@ def test_supported_fresh_generations_still_require_fresh_contract(api):
     assert data.scope["includes_unobserved"] is True
 
 
-@pytest.mark.parametrize("api", [999, 58, 54, 51, 33, True, "39", None])
+@pytest.mark.parametrize("api", [999, 59, 54, 51, 33, True, "39", None])
 def test_unknown_fresh_generations_are_rejected_before_roster_read(api):
     backend = FakeDashboard({**FRESH, "api": api}, AGENTS_FRESH)
     with pytest.raises(DashboardError):
