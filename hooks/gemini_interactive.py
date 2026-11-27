@@ -281,29 +281,39 @@ def validate_permission_selection(runtime, state, spec):
     child_tools.check_screen_relay(spec)
 
 
-def _managed_mail_approval_rules(home, cwd, config_dir):
-    """Grant by tool name only when that name resolves to the child Mail wrapper."""
+def _matches_managed_mcp(home, cwd, config_dir, name, definition):
+    """Check that no inherited server can shadow an approved managed server."""
     configs = [("global", home / ".gemini" / "config" / "mcp_config.json"),
                ("workspace", Path(cwd) / ".agents" / "mcp_config.json")]
     if config_dir is not None:
         configs.append(("launch", config_dir / ".agents" / "mcp_config.json"))
-    managed = _mail_server()
     found = False
     for scope, path in configs:
         try:
             servers = child_tools._agy_inherited_servers(path, scope)
         except (OSError, child_tools.ToolsError):
-            return []
-        if "orrery-mail" not in servers:
+            return False
+        if name not in servers:
             continue
-        entry = servers["orrery-mail"]
+        entry = servers[name]
         if isinstance(entry, dict) and entry.get("disabled") is True:
             continue
         # A same-named inherited server can take precedence in Antigravity.
-        if entry != managed:
-            return []
+        if entry != definition:
+            return False
         found = True
-    return [f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS] if found else []
+    return found
+
+
+def _managed_browser_approval_rules(home, cwd, config_dir, selection):
+    mode = selection["tools"].get("browser_mode")
+    if mode not in ("temporary", "personal"):
+        return []
+    name, definition = child_tools._browser_mcp(mode)
+    if not _matches_managed_mcp(home, cwd, config_dir, name, definition):
+        return []
+    tools, _ = child_tools._approval(selection, name, definition, browser_server=name)
+    return [f"mcp({name}/{tool})" for tool in tools]
 
 
 def _prompt_with_mcp_tools(prompt, *, managed_mail, parent, browser_mode):
@@ -344,7 +354,8 @@ def terminal_mode(sandbox):
     return ["--mode", "auto", "--sandbox"] if sandbox else ["--mode", "accept-edits"]
 
 
-def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None, parent=None):
+def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None, parent=None,
+            selection=None):
     if (prompt is None) == (conversation is None):
         raise ValueError("Provide the first task or an existing conversation")
     sandbox = plan.get("standalone") is True or os.environ.get("AGENTSTACK_CHILD_SANDBOX") == "on"
@@ -356,7 +367,8 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
         "command": shlex.join([plan["python"], str(Path(__file__).resolve()), "status"]),
     }
     permissions = settings["permissions"]
-    selection = _tool_selection(plan) if screen_mode is None or prompt is not None else None
+    if selection is None:
+        selection = _tool_selection(plan)
     if screen_mode is None:
         screen_mode = child_tools.screen_mode(selection)
     screen_permissions = []
@@ -364,9 +376,13 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
         screen_policy = child_tools._screen_state()
         screen_tools = screen_policy["VIEW_TOOLS"] if screen_mode == "view" else screen_policy["TOOLS"]
         screen_permissions = [f"mcp({child_tools.SCREEN_SERVER}/{tool})" for tool in screen_tools]
-    mail_rules = _managed_mail_approval_rules(home, cwd, config_dir)
+    mail_rules = ([f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS]
+                  if _matches_managed_mcp(home, cwd, config_dir, "orrery-mail", _mail_server()) else [])
+    explicit = set(permissions.get("deny", ())) | set(permissions.get("ask", ()))
+    browser_rules = [rule for rule in _managed_browser_approval_rules(home, cwd, config_dir, selection)
+                     if rule not in explicit]
     settings["permissions"] = {**permissions, "allow": list(dict.fromkeys(
-        [*permissions.get("allow", ()), *mail_rules, *screen_permissions]
+        [*permissions.get("allow", ()), *mail_rules, *screen_permissions, *browser_rules]
     ))}
     if prompt is not None:
         prompt = _prompt_with_mcp_tools(prompt, managed_mail=bool(mail_rules), parent=parent,
@@ -542,9 +558,9 @@ def run(runtime, name, task_file=None, conversation=None):
         if not standalone:
             write_tool_refusal_rule(cwd)
         changed = permission_selection(runtime, state, conversation) if conversation else None
+        spec = changed["selection"] if changed else _tool_selection(plan)
         screen_mode = "off"
         if standalone or conversation is None or changed:
-            spec = changed["selection"] if changed else _tool_selection(plan)
             if changed and not standalone:
                 workspace_mcp = _workspace_mcp_snapshot(runtime, state, cwd)
             mcp_path = (workspace_mcp[0] if workspace_mcp else
@@ -575,7 +591,7 @@ def run(runtime, name, task_file=None, conversation=None):
             [sys.executable, str(history_helper()), "prepare", str(state["agent_id"]), identity],
             env=env, text=True, timeout=5).strip()
         argv = command(plan, cwd, prompt=prompt, conversation=conversation, config_dir=config_dir,
-                       screen_mode=screen_mode, parent=parent)
+                       screen_mode=screen_mode, parent=parent, selection=spec)
         if prompt is not None:
             return _run_first_task(argv, env=env, runtime=runtime, name=name, identity=identity,
                                    servers=mcp["mcpServers"])

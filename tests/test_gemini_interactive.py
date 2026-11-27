@@ -184,6 +184,57 @@ def test_session_settings_allow_only_the_selected_screen_tools(managed, monkeypa
     assert json.loads(settings.read_text()) == original
 
 
+@pytest.mark.parametrize("mode", ["off", "temporary", "personal"])
+@pytest.mark.parametrize("resume", [False, True])
+def test_browser_approval_tracks_current_choice_and_preserves_explicit_rules(
+        managed, monkeypatch, tmp_path, mode, resume):
+    _, cwd, state = managed
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    paths = tmp_path / ".gemini/antigravity-cli"
+    paths.mkdir(parents=True)
+    settings = paths / "settings.json"
+    deny = ["mcp(chrome-devtools/new_page)", "execute_url(example.com)"]
+    ask = ["mcp(chrome-devtools/take_screenshot)"]
+    original = {"permissions": {"deny": deny, "ask": ask, "allow": ["read_file(.)"]}}
+    settings.write_text(json.dumps(original))
+    definition = {"command": "/fixture/npx", "args": ["-y", "chrome-devtools-mcp@latest", "--isolated"]}
+    browser = "chrome-devtools"
+    monkeypatch.setattr(agy.child_tools, "_browser_mcp", lambda _: (browser, definition))
+    child_resume._atomic_json(cwd / ".agents/mcp_config.json", {
+        "mcpServers": {browser: definition} if mode != "off" else {},
+    })
+    previous = ("temporary" if mode == "off" else "off") if resume else mode
+    plan = {**state["gemini_launch"], "tools": [f"browser-mode:{previous}"]}
+    selection = agy.child_tools.normalize(tools={"browser_mode": mode})
+    entry = {"conversation": SID, "screen_mode": "off", "selection": selection} if resume else {"prompt": "First task"}
+    args = agy.command(plan, cwd, **entry)
+    permissions = json.loads(args[args.index("--settings") + 1])["permissions"]
+    browser_rules = [rule for rule in permissions["allow"] if rule.startswith("mcp(chrome-devtools/")]
+    assert ("mcp(chrome-devtools/list_pages)" in browser_rules) == (mode != "off")
+    if mode == "off":
+        assert not browser_rules
+    assert "mcp(chrome-devtools/*)" not in browser_rules
+    assert deny[0] not in browser_rules and ask[0] not in browser_rules
+    assert not any(rule.startswith("execute_url(") for rule in permissions["allow"])
+    assert permissions["deny"] == deny and permissions["ask"] == ask
+    assert json.loads(settings.read_text()) == original
+
+
+def test_foreign_chrome_server_is_not_approved_when_browser_is_on(managed, monkeypatch, tmp_path):
+    _, cwd, state = managed
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(agy.child_tools, "_browser_mcp", lambda _: ("chrome-devtools", {
+        "command": "/fixture/npx", "args": ["-y", "chrome-devtools-mcp@latest"],
+    }))
+    child_resume._atomic_json(cwd / ".agents/mcp_config.json", {
+        "mcpServers": {"chrome-devtools": {"command": "/fixture/foreign"}},
+    })
+    plan = {**state["gemini_launch"], "tools": ["browser-mode:temporary"]}
+    args = agy.command(plan, cwd, prompt="First task")
+    approvals = json.loads(args[args.index("--settings") + 1])["permissions"]["allow"]
+    assert not any(rule.startswith("mcp(chrome-devtools/") for rule in approvals)
+
+
 def test_edit_uses_shared_reservation_and_shell_stays_in_the_worktree(managed, monkeypatch):
     runtime, cwd, _ = managed
     calls = []
