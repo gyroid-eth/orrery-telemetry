@@ -49,6 +49,32 @@ def test_orchestrator_command_omits_the_effort_option(managed, monkeypatch, tmp_
         assert "--effort" not in args
 
 
+@pytest.mark.parametrize(("access", "mode"), [("read", "view"), ("operate", "control")])
+def test_wsl_antigravity_uses_the_same_managed_screen_gate(tmp_path, monkeypatch, access, mode):
+    monkeypatch.setattr(agy.child_tools, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(agy.child_tools, "_screen_state", lambda: vars(screen_state))
+    monkeypatch.setattr(screen_state, "_python", lambda _: sys.executable)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "FixtureWSL")
+    monkeypatch.setenv("WSL_INTEROP", "/run/WSL/fixture")
+    monkeypatch.setenv("AGENTSTACK_PORT", "53163")
+    tools = agy.child_tools.change_permission({"screen_off": True}, {"computer_use": mode}, {}, managed_screen=True)
+    assert tools == {"screen": {"server": "orrery-screen", "access": access}}
+    spec = agy.child_tools.normalize(tools=tools)
+    mcp, actual = agy.child_tools.agy_launch_config("/fixture/mail", spec, runtime=str(tmp_path),
+        project=PROJECT, child=NAME, generation="1"*32, mail_env="")
+    assert actual == mode
+    [launch] = screen_state.Store(tmp_path).list()
+    assert launch["computer_use"] == mode
+    binding = mcp["mcpServers"]["orrery-screen"]
+    assert binding["env"]["WSL_INTEROP"] == "/run/WSL/fixture"
+    plan = {"binary": "/fixture/agy", "python": sys.executable}
+    argv = agy.command(plan, tmp_path, prompt="Fixture task", screen_mode=mode)
+    grants = json.loads(argv[argv.index("--settings") + 1])["permissions"]["allow"]
+    expected = screen_state.VIEW_TOOLS if mode == "view" else screen_state.TOOLS
+    assert grants == [f"mcp(orrery-screen/{tool})" for tool in expected]
+
+
 def test_one_workspace_is_trusted_without_changing_global_settings(managed, monkeypatch, tmp_path):
     _, cwd, state = managed
     settings = tmp_path / ".gemini/antigravity-cli/settings.json"

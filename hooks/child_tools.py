@@ -474,8 +474,8 @@ def check_provider(spec: dict, provider: str) -> None:
                 or (screen and screen["server"] != SCREEN_SERVER)
                 or any(name != SCREEN_SERVER for name in names)):
             raise ToolsError("Antigravity supports only the managed Computer use selection")
-        if sys.platform == "linux" and (screen_mode(spec) is not None or tools.get("browser_mode") == "personal"):
-            raise ToolsError("My Chrome and Computer use are unavailable for Antigravity on Linux")
+        if sys.platform == "linux" and not running_in_wsl() and screen_mode(spec) is not None:
+            raise ToolsError("Computer use requires Windows Cua Driver when running Antigravity on Linux")
     elif provider != "claude":
         if restrictive(spec):
             raise ToolsError(f"base and tools are not supported for provider: {provider}")
@@ -509,7 +509,11 @@ def _direct_chrome_package(definition: dict) -> str | None:
     args = definition.get("args") or []
     if not isinstance(command, str) or not isinstance(args, list):
         return None
-    if re.split(r"[/\\]", command)[-1] not in ("npx", "npx.cmd", "npx.exe"):
+    launcher = re.split(r"[/\\]", command)[-1]
+    if (launcher == "node.exe" and args and isinstance(args[0], str)
+            and args[0].lower().replace("\\", "/").endswith("/node_modules/npm/bin/npx-cli.js")):
+        args = args[1:]
+    elif launcher not in ("npx", "npx.cmd", "npx.exe"):
         return None
     options = True
     for word in args:
@@ -822,6 +826,23 @@ def _browser_npx(home=None):
     raise ToolsError("Install Node.js to use Chrome DevTools")
 
 
+def _windows_browser_npx():
+    """Use Windows Node so autoConnect discovers the Windows Chrome profile."""
+    commands = [shutil.which("node.exe"), "/mnt/c/Program Files/nodejs/node.exe", "/c/Program Files/nodejs/node.exe"]
+    for command in filter(None, commands):
+        node = Path(command)
+        script = node.with_name("node_modules") / "npm/bin/npx-cli.js"
+        if not node.is_absolute() or not node.is_file() or not os.access(node, os.X_OK) or not script.is_file():
+            continue
+        try:
+            windows_path = subprocess.check_output(["wslpath", "-w", str(script)], text=True, timeout=2).strip()
+        except (OSError, subprocess.SubprocessError):
+            break
+        if re.fullmatch(r"[A-Za-z]:\\[^\x00-\x1f]+", windows_path):
+            return {"command": str(node), "args": [windows_path]}
+    raise ToolsError("My Chrome requires Windows Node.js with npm when running in WSL")
+
+
 def _browser_mcp(mode, codex_config=None):
     if mode == "personal" and codex_config is not None:
         configured = _native_codex_browser(codex_config, explicit=True)
@@ -829,9 +850,11 @@ def _browser_mcp(mode, codex_config=None):
             if not _personal_chrome(configured[1]):
                 raise ToolsError("My Chrome requires Chrome DevTools with autoConnect")
             return configured
+    runtime = (_windows_browser_npx() if mode == "personal" and sys.platform == "linux" and running_in_wsl()
+               else _browser_npx())
     switch = "--isolated" if mode == "temporary" else "--autoConnect"
-    return "chrome-devtools", {**_browser_npx(), "args": ["-y", "chrome-devtools-mcp@latest",
-                                                       switch, "--no-usage-statistics"]}
+    args = [*runtime.get("args", ()), "-y", "chrome-devtools-mcp@latest", switch, "--no-usage-statistics"]
+    return "chrome-devtools", {**runtime, "args": args}
 
 
 def launch_browser_modes(codex_config, *, home=None):
@@ -866,8 +889,12 @@ def launch_browser_modes(codex_config, *, home=None):
             choices["antigravity"] = ["off"]
             if have_npx:
                 choices["antigravity"].append("temporary")
-                if sys.platform == "darwin":
-                    choices["antigravity"].append("personal")
+            try:
+                _browser_mcp("personal")
+            except ToolsError:
+                pass
+            else:
+                choices["antigravity"].append("personal")
     return choices
 
 
@@ -1019,7 +1046,7 @@ def agy_launch_config(mail_command, spec, *, runtime, project, child, mail_env, 
     if mode in ("temporary", "personal"):
         name, definition = _browser_mcp(mode)
         servers[name] = definition
-    if sys.platform != "darwin":
+    if sys.platform != "darwin" and not (sys.platform == "linux" and running_in_wsl()):
         return {"mcpServers": servers}, None
     state = _screen_state()
     mode_for_screen = screen_mode(spec)
@@ -1105,7 +1132,7 @@ def claude_mcp_definitions(claude_json: str, cwd: str) -> dict:
     return {**(user if isinstance(user, dict) else {}), **(project if isinstance(project, dict) else {})}
 
 
-def change_permission(tools: dict, permission: dict, definitions: dict | None) -> dict:
+def change_permission(tools: dict, permission: dict, definitions: dict | None, *, managed_screen: bool = False) -> dict:
     """Patch one permission in a saved, normalized selection."""
     definitions = definitions if isinstance(definitions, dict) else {}
 
@@ -1135,7 +1162,7 @@ def change_permission(tools: dict, permission: dict, definitions: dict | None) -
         elif mode == "off":
             # Persist the choice even when there is no relay in the new launch.
             changed["screen_off"] = True
-        elif mode == "view" or (mode == "control" and (screen == SCREEN_SERVER or SCREEN_SERVER in mcp)):
+        elif mode == "view" or (mode == "control" and (managed_screen or screen == SCREEN_SERVER or SCREEN_SERVER in mcp)):
             changed["screen"] = {"server": SCREEN_SERVER, "access": "read" if mode == "view" else "operate"}
         elif mode == "control":
             direct = next((name for name in mcp if name in removed), "cua-driver")

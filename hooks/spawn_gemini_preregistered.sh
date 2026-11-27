@@ -540,6 +540,8 @@ export AGENTSTACK_MAIL_ENV=$(printf '%q' "$MAIL_ENV")
 export AGENTSTACK_MAIL_HTTP_BEARER_MODE=$(printf '%q' "$HTTP_BEARER_MODE")
 export AGENTSTACK_PYTHON=$(printf '%q' "$PYTHON_BIN")
 ${AGENTSTACK_DSH_NODE:+export AGENTSTACK_DSH_NODE=$(printf '%q' "$AGENTSTACK_DSH_NODE")}
+${WSL_INTEROP:+export WSL_INTEROP=$(printf '%q' "$WSL_INTEROP")}
+${WSL_DISTRO_NAME:+export WSL_DISTRO_NAME=$(printf '%q' "$WSL_DISTRO_NAME")}
 export AGENTSTACK_EXTRA_PROTECTED_ROOTS=$(printf '%q' "$AGENTSTACK_EXTRA_PROTECTED_ROOTS")
 . $(printf '%q' "$PROJECT_CONTEXT_HELPER") || exit 1
 agentstack_apply_workspace_context "\$PWD" "\$AGENTSTACK_PROJECT_KEY" || exit 1

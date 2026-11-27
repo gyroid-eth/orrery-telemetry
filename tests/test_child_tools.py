@@ -1218,6 +1218,34 @@ def test_api_preserves_explicit_screen_off_in_launcher_arguments():
     assert child_tools.normalize(tools=child_tools.parse_cli(list(args[1::2])))["tools"] == tools
 
 
+def test_wsl_personal_chrome_uses_windows_node_and_autoconnect(tmp_path, monkeypatch):
+    monkeypatch.setattr(child_tools.sys, "platform", "linux")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("WSL_DISTRO_NAME", "FixtureWSL")
+    windows_node = tmp_path / "nodejs/node.exe"
+    windows_node.parent.mkdir()
+    _executable(windows_node, "#!/bin/sh\nexit 0\n")
+    script = windows_node.with_name("node_modules") / "npm/bin/npx-cli.js"
+    script.parent.mkdir(parents=True)
+    script.touch()
+    monkeypatch.setattr(child_tools.shutil, "which", lambda name: str(windows_node) if name == "node.exe" else None)
+
+    def convert(args, **_):
+        assert args == ["wslpath", "-w", str(script)]
+        return r"C:\Program Files\nodejs\node_modules\npm\bin\npx-cli.js" + "\n"
+
+    monkeypatch.setattr(child_tools.subprocess, "check_output", convert)
+    modes = child_tools.launch_browser_modes({})
+    assert modes["antigravity"] == modes["codex"] == ["off", "personal"]
+    name, definition = child_tools._browser_mcp("personal")
+    assert name == "chrome-devtools"
+    assert definition["command"] == str(windows_node)
+    assert definition["args"][1:] == ["-y", "chrome-devtools-mcp@latest", "--autoConnect", "--no-usage-statistics"]
+    assert child_tools.table_entry(definition)[0] == "chrome-devtools-mcp"
+    script.unlink()
+    assert child_tools.launch_browser_modes({})["antigravity"] == ["off"]
+
+
 @pytest.mark.parametrize("selection", [{"screen": "read"}, {"mcp": ["orrery-screen"]}])
 def test_screen_off_rejects_simultaneous_screen_selection(selection):
     with pytest.raises(child_tools.ToolsError, match="Computer use Off"):

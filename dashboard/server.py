@@ -5863,6 +5863,11 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expect
             environment["AGENTSTACK_TOOLS_CHANGE_GENERATION"] = generation
         if os.environ.get("AGENTSTACK_SCREEN_PYTHON"):
             environment["AGENTSTACK_SCREEN_PYTHON"] = os.environ["AGENTSTACK_SCREEN_PYTHON"]
+        if node := os.environ.get("AGENTSTACK_DSH_NODE"):
+            environment["AGENTSTACK_DSH_NODE"] = node
+        if _is_wsl():
+            if interop := _screen_http().wsl_launch_interop():
+                environment["WSL_INTEROP"] = interop
         context = Path(HOOKS_DIR) / "project-context.sh"
         command = (
             ". " + shlex.quote(str(context)) + ' && agentstack_apply_workspace_context "$PWD" "$AGENTSTACK_PROJECT_KEY" && exec '
@@ -8745,7 +8750,13 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
             servers = selection.claude_mcp_definitions(claude_json, cwd)
             if provider in harness_runtime.HARNESSES:
                 servers = {**(config.get("mcp_servers") or {}), **servers}
-        spec = selection.normalize(old["base"], selection.change_permission(old["tools"], permission, servers))
+        wsl_agy = provider == "antigravity" and _is_wsl()
+        if wsl_agy and permission.get("computer_use") in ("view", "control"):
+            reason = _spawn_computer_catalog().get("computer_use_reason")
+            if reason:
+                raise ValueError(reason)
+        spec = selection.normalize(old["base"], selection.change_permission(
+            old["tools"], permission, servers, managed_screen=wsl_agy))
         if provider == "claude":
             selection.check_provider(spec, provider)
             if "browser_mode" in permission:
@@ -9468,6 +9479,17 @@ def _spawn_browser_modes():
     return tools.launch_browser_modes(config)
 
 
+def _spawn_computer_catalog():
+    if _is_wsl():
+        reason = ("Computer use is unavailable in this launch mode." if FRESH_MODE or GLOBAL_MODE else
+                  _screen_http().wsl_computer_use_reason(_env_path("AGENTSTACK_HOME", "~/.agentstack"), HOOKS_DIR))
+        return {"computer_use": not reason, "computer_use_transport": "orrery-screen",
+                "computer_modes": ["off"] if reason else ["off", "view", "control"],
+                **({"computer_use_reason": reason} if reason else {})}
+    return {"computer_use": sys.platform == "darwin",
+            **({"computer_modes": ["off", "view", "control"]} if sys.platform == "darwin" and not FRESH_MODE else {})}
+
+
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     if sys.platform == "win32":
@@ -9501,8 +9523,7 @@ def spawn_names_payload() -> dict:
     local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
         os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
     return {
-        "computer_use": sys.platform == "darwin",
-        **({"computer_modes": ["off", "view", "control"]} if sys.platform == "darwin" and not FRESH_MODE else {}),
+        **_spawn_computer_catalog(),
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
@@ -10473,6 +10494,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     if standalone and not spec.standalone_supported:
         return {"ok": False,
                 "error": f"standalone not supported for provider {provider}"}
+    if _is_wsl() and {"screen:read:orrery-screen", "screen:operate:orrery-screen"}.intersection(spec.provider_args):
+        reason = _spawn_computer_catalog().get("computer_use_reason")
+        if reason:
+            return {"ok": False, "error": reason}
     if requested_name and re.fullmatch(
             r"[A-Z][A-Za-z]{1,63}(?:-[A-Z][A-Za-z]{1,63})?",
             requested_name) is None:
@@ -10831,6 +10856,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     env = os.environ.copy()
     # Provider values first: the identity/context keys below always win.
     env.update(_spawn_env_overrides(payload, spec))
+    if _is_wsl() and {"screen:read:orrery-screen", "screen:operate:orrery-screen", "browser-mode:personal"}.intersection(
+            spec.provider_args):
+        if interop := _screen_http().wsl_launch_interop():
+            env["WSL_INTEROP"] = interop
     # A dashboard request states Claude in Chrome explicitly (spec.provider_args);
     # the CLI env defaults would otherwise turn an unchecked box back on.
     env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME", None)

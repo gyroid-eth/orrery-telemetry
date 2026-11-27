@@ -259,7 +259,7 @@
       return;
     }
     if (reset) {
-      computerMode = next.key === 'dsh' || next.key === 'antigravity' ? 'off' : 'control';
+      computerMode = next.key === 'dsh' || next.key === 'antigravity' || next.computer_use_transport === 'orrery-screen' ? 'off' : 'control';
       if (computerMenu.matches(':popover-open')) computerMenu.hidePopover();
     }
     if (!modes.includes(computerMode)) computerMode = modes[0] || 'off';
@@ -267,8 +267,8 @@
     for (const attr of ['role', 'aria-checked', 'aria-describedby']) computer.removeAttribute(attr);
     computer.setAttribute('aria-controls', computerMenu.id);
     computer.setAttribute('aria-expanded', String(computerMenu.matches(':popover-open')));
-    computer.setAttribute('aria-disabled', String(!modes.length));
-    computer.title = 'Computer use: ' + (modes.length ? computerLabels[computerMode] : 'Unavailable');
+    computer.setAttribute('aria-disabled', String(!modes.length || Boolean(next.computer_use_reason)));
+    computer.title = next.computer_use_reason || 'Computer use: ' + (modes.length ? computerLabels[computerMode] : 'Unavailable');
     computer.setAttribute('aria-label', computer.title);
     for (const [mode, button] of computerChoices) {
       button.hidden = !modes.includes(mode);
