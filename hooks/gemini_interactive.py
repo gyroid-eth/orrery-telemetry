@@ -391,7 +391,9 @@ def _deliver_first_task(process, pane, identity, task_file, menu_file, servers, 
                 if tmux("send-keys", "-t", pane, "Escape").returncode:
                     raise ValueError("Antigravity's MCP manager could not be closed")
                 stage = "submitting"
-        elif stage == "opening" and any(row.startswith("? for shortcuts") for row in rows):
+        elif stage == "opening":
+            # submit-input already checks the actual editor and refuses while
+            # agy is restoring its UI or while an operator has a draft.
             result = tmux("submit-input", pane, str(menu_file))
             if result.returncode not in (0, 3):
                 raise ValueError("Antigravity's MCP manager could not be opened safely")

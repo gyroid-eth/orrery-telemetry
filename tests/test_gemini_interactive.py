@@ -342,13 +342,17 @@ def test_delegated_first_task_names_the_configured_mcp_tools(managed, monkeypatc
 
 
 @pytest.mark.parametrize("browser_ready", [True, False])
-def test_first_task_waits_for_same_panes_mcp_tools(monkeypatch, tmp_path, browser_ready):
+@pytest.mark.parametrize("startup_screen", [
+    "? for shortcuts  Gemini 3.8 Flash · low",
+    "> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\nauto · Gemini 3.8 Flash · low",
+])
+def test_first_task_waits_for_same_panes_mcp_tools(monkeypatch, tmp_path, browser_ready, startup_screen):
     menu, task = tmp_path / "menu", tmp_path / "task"
     browser_row = "✓ chrome-devtools  Tools: new_page"
     ready_menu = ["MCP Servers", "✓ orrery-mail  Tools: send_message",
                   "Keyboard: ↑/↓ Navigate  enter Actions  esc Exit"]
     states = iter([
-        "? for shortcuts  Gemini 3.8 Flash · low",
+        startup_screen,
         "\n".join(ready_menu + ["◌ chrome-devtools"]),
         "\n".join(ready_menu + ([browser_row] if browser_ready else [])),
         "working",
