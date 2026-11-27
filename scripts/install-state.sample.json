@@ -131,7 +131,7 @@
   "managed_harness_roots": [],
   "notes": [
     "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
-    "Claude and Codex skills use manifest-owned symlinks; existing conflicts are preserved.",
+    "Claude and Codex skills use manifest-owned symlinks. Antigravity's personal skills manifest references the bundled source.",
     "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
     "Claude MCP user config uses an explicit-confirm, fixed-name structural merge."
   ],

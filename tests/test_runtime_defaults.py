@@ -921,6 +921,10 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
         assert link.is_symlink()
         assert link.resolve() == pathlib.Path(record["target"])
         assert record["path"] in manifest["owned_files"]
+    agy_manifest = home / ".gemini/config/skills.json"
+    assert json.loads(agy_manifest.read_text()) == {"entries": [
+        {"path": str(install_dir / "skills"), "include_only": ["delegate", "log"]},
+    ]}
     assert set(_expected_owned_dirs(install_dir)) <= set(manifest["owned_dirs"])
     systemd_unit = (
         home
@@ -1118,6 +1122,7 @@ def test_isolated_installer_migrates_annotations_and_matches_manifest_sample(tmp
     assert not (home / ".claude" / "skills" / "log").exists()
     assert not (home / ".codex" / "skills" / "delegate").is_symlink()
     assert not (home / ".codex" / "skills" / "log").is_symlink()
+    assert not agy_manifest.exists()
     claude_remaining = {
         str(path.relative_to(home / ".claude"))
         for path in (home / ".claude").rglob("*")

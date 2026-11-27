@@ -1,7 +1,4 @@
-"""Run the installer's link/manifest functions and real uninstall in fake homes.
-
-No services, user settings, or managed instruction files are changed.
-"""
+"""Run the installer's skill integration and real uninstall in fake homes."""
 from __future__ import annotations
 
 import json
@@ -35,7 +32,7 @@ def _install(home, *, codex_home=None, tier="tier1", dry_run=False):
     shutil.copytree(ROOT / "skills", install_dir / "skills", dirs_exist_ok=True)
     functions = "\n".join(_function(name) for name in (
         "plan", "run", "symlink_points_to", "install_skill_links_for",
-        "install_claude_skill_links", "install_codex_skill_links", "write_manifest",
+        "install_claude_skill_links", "install_codex_skill_links", "install_agy_skills", "write_manifest",
     ))
     # The manifest has unrelated service metadata. Initialize its variables to
     # empty values, then provide only the isolated paths and required JSON.
@@ -57,10 +54,11 @@ def _install(home, *, codex_home=None, tier="tier1", dry_run=False):
         *[f"{key}={shlex.quote(value)}" for key, value in values.items()],
         # Use the actual installer declarations, including CODEX_HOME fallback.
         *[re.search(rf'^{key}=.*$', INSTALLER, re.M).group(0)
-          for key in ("CLAUDE_SKILLS_DIR", "CODEX_SKILLS_DIR")],
+          for key in ("CLAUDE_SKILLS_DIR", "CODEX_SKILLS_DIR", "AGY_SKILLS_MANIFEST")],
         'warn() { printf "warning: %s\\n" "$*" >&2; }',
         'say() { printf "%s\\n" "$*"; }',
         functions, "install_claude_skill_links", "install_codex_skill_links",
+        "install_agy_skills",
         'write_manifest "" ""',
     ])
     env = {key: value for key, value in os.environ.items()
@@ -98,7 +96,8 @@ def test_install_reinstall_and_uninstall_codex_links(tmp_path, codex_home_name):
     expected = [{"path": str(skills_dir / name),
                  "target": str(install_dir / "skills" / name)}
                 for name in ("delegate", "log")]
-    assert manifest["skill_links"][-2:] == expected
+    assert [record for record in manifest["skill_links"]
+            if pathlib.Path(record["path"]).parent == skills_dir] == expected
     for record in expected:
         link = pathlib.Path(record["path"])
         assert link.is_symlink() and str(link.resolve()) == record["target"]
@@ -164,6 +163,7 @@ def test_dashboard_only_and_dry_run_do_not_create_skill_links(tmp_path, tier, dr
     _install(home, tier=tier, dry_run=dry_run)
     assert not (home / ".codex/skills").exists()
     assert not (home / ".claude/skills").exists()
+    assert not (home / ".gemini/config/skills.json").exists()
 
 
 def test_default_skill_links_match_manifest_sample(tmp_path):
@@ -175,3 +175,76 @@ def test_default_skill_links_match_manifest_sample(tmp_path):
                    for key, value in record.items()}
                   for record in _manifest(install_dir)["skill_links"]]
     assert normalized == sample["skill_links"]
+
+
+def test_antigravity_manifest_upgrade_and_uninstall_preserve_user_entries(tmp_path):
+    home = tmp_path / "home"
+    config = home / ".gemini/config"
+    user_skill = config / "skills/log/SKILL.md"
+    user_skill.parent.mkdir(parents=True)
+    user_skill.write_text("personal log")
+    manifest = config / "skills.json"
+    personal = {"entries": [{"path": "my-skills"}], "exclude": ["some-skill"],
+                "inherits": [{"path": "/personal/skills.json"}]}
+    manifest.write_text(json.dumps(personal))
+    _, install_dir = _install(home)
+    entry = {"path": str(install_dir / "skills"), "include_only": ["delegate", "log"]}
+    merged = {**personal, "entries": [entry, *personal["entries"]]}
+    assert json.loads(manifest.read_bytes()) == merged
+    assert user_skill.read_text() == "personal log"
+    _install(home)
+    assert json.loads(manifest.read_bytes()) == merged
+    merged["entries"].append({"path": "/another/user/directory"})
+    manifest.write_text(json.dumps(merged))
+    _uninstall(home, install_dir)
+    assert json.loads(manifest.read_bytes()) == {
+        **personal, "entries": [*personal["entries"], {"path": "/another/user/directory"}],
+    }
+    assert user_skill.read_text() == "personal log"
+
+
+def test_antigravity_manifest_respects_user_skills_on_install_and_update(tmp_path):
+    home = tmp_path / "home"
+    config = home / ".gemini/config"
+    user_log = config / "personal/log/SKILL.md"
+    user_log.parent.mkdir(parents=True)
+    user_log.write_text("personal log")
+    inherited = config / "other-skills.json"
+    inherited.write_text(json.dumps({"entries": [{"path": "personal"}]}))
+    personal = {"inherits": [{"path": str(inherited)}]}
+    manifest = config / "skills.json"
+    manifest.write_text(json.dumps(personal))
+    _, install_dir = _install(home)
+    assert json.loads(manifest.read_bytes()) == {
+        **personal, "entries": [{"path": str(install_dir / "skills"), "include_only": ["delegate"]}],
+    }
+    user_delegate = config / "personal/delegate/SKILL.md"
+    user_delegate.parent.mkdir()
+    user_delegate.write_text("personal delegate")
+    _install(home)
+    assert json.loads(manifest.read_bytes()) == personal
+    assert user_log.read_text() == "personal log"
+    assert user_delegate.read_text() == "personal delegate"
+
+
+@pytest.mark.parametrize("kind", ["invalid", "existing-entry", "symlink"])
+def test_antigravity_preserves_unowned_manifest(tmp_path, kind):
+    home = tmp_path / "home"
+    manifest = home / ".gemini/config/skills.json"
+    manifest.parent.mkdir(parents=True)
+    original = '{broken}'
+    if kind == "symlink":
+        target = home / "personal.json"
+        target.write_text(original)
+        manifest.symlink_to(target)
+    elif kind == "existing-entry":
+        original = json.dumps({"entries": [
+            {"path": str(home / ".agentstack/skills"), "include_only": ["delegate", "log"]},
+        ]})
+        manifest.write_text(original)
+    else:
+        manifest.write_text(original)
+    _, install_dir = _install(home)
+    _uninstall(home, install_dir)
+    assert manifest.read_text() == original
+    assert manifest.is_symlink() == (kind == "symlink")

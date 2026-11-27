@@ -66,7 +66,8 @@ fi
 PROJECT_FOLDER="$({ sed -n 's/^export AGENTSTACK_PROJECT_KEY=//p' "$INSTALL_DIR/env.sh" 2>/dev/null | head -n 1 | tr -d "'\"" ; } || true)"
 
 python3 - "$MANIFEST" "$DRY_RUN" "$PURGE_DATA" "$MERGE_TOOL" \
-  "$MCP_MERGE_TOOL" "$SCRIPT_DIR/lib/install_examples.py" "$SCRIPT_DIR/../dashboard/systemd_dashboard.py" <<'PY'
+  "$MCP_MERGE_TOOL" "$SCRIPT_DIR/lib/install_examples.py" "$SCRIPT_DIR/../dashboard/systemd_dashboard.py" \
+  "$SCRIPT_DIR/lib/agy_skills.py" <<'PY'
 import importlib.util
 import json
 import os
@@ -311,6 +312,13 @@ if sys.platform == "linux":
 
 remove_claude_mcp()
 remove_settings_hooks()
+
+agy_skills = pathlib.Path(sys.argv[8])
+if agy_skills.is_file():
+    subprocess.run([sys.executable, str(agy_skills), "dry-uninstall" if dry_run else "uninstall",
+                    str(manifest_path.parent / "skills"), str(pathlib.Path.home() / ".gemini/config/skills.json"),
+                    str(manifest_path.parent / "runtime/agy-skills-entry.json")],
+                   check=True)
 
 # Examples have separate content ownership. Run before the library itself is
 # removed with the ordinary bin payload; never recursively purge this subtree.

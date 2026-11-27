@@ -913,6 +913,7 @@ CLAUDE_SETTINGS="${AGENTSTACK_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_JSON="${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
+AGY_SKILLS_MANIFEST="$HOME/.gemini/config/skills.json"
 SAFE_MERGE_RESULT_FILE="$RUNTIME_DIR/settings-merge-result.json"
 MCP_MERGE_RESULT_FILE="$RUNTIME_DIR/claude-mcp-merge-result.json"
 MAIL_DB="${AGENTSTACK_MAIL_DB:-}"
@@ -2889,6 +2890,7 @@ install_payload() {
     cp "$SCRIPT_DIR/lib/mail_required_features.json" "$BIN_DIR/lib/mail_required_features.json"
     cp "$SCRIPT_DIR/lib/mail_update_notice.py" "$BIN_DIR/lib/mail_update_notice.py"
     cp "$SCRIPT_DIR/lib/install_examples.py" "$BIN_DIR/lib/install_examples.py"
+    cp "$SCRIPT_DIR/lib/agy_skills.py" "$BIN_DIR/lib/agy_skills.py"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/runtime_client.py" "$BIN_DIR/lib/runtime_client.py"
@@ -3002,6 +3004,16 @@ install_claude_skill_links() {
 
 install_codex_skill_links() {
   install_skill_links_for "Codex" "$CODEX_SKILLS_DIR"
+}
+
+install_agy_skills() {
+  if [[ "$TIER" == "tier0" ]]; then
+    plan "skip Antigravity skills for --dashboard-only"
+    return
+  fi
+  plan "reference $SKILLS_DIR in Antigravity's personal manifest $AGY_SKILLS_MANIFEST"
+  run "$PYTHON_BIN" "$SCRIPT_DIR/lib/agy_skills.py" install "$SKILLS_DIR" \
+    "$AGY_SKILLS_MANIFEST" "$RUNTIME_DIR/agy-skills-entry.json"
 }
 
 render_installed_templates() {
@@ -5449,7 +5461,7 @@ mail_autostart_managed = sys.argv[16] == "true"
 install_dir = pathlib.Path("$INSTALL_DIR")
 # Skill discovery paths are data, not Python source. In particular CODEX_HOME
 # may contain quotes or literal backslashes that Python would otherwise parse.
-skill_dirs = tuple(pathlib.Path(raw) for raw in sys.argv[17:19])
+skill_dirs = tuple(pathlib.Path(raw) for raw in sys.argv[17:19] if raw)
 owned_files = []
 for rel in ("hooks", "skills", "dashboard", "bin", "codex", "claude", "integrations"):
     base = install_dir / rel
@@ -5654,7 +5666,7 @@ manifest = {
     ],
     "notes": [
         "Tier1 user-settings merge is JSON-parser based, explicit-confirm only, and manifest recorded.",
-        "Claude and Codex skills use manifest-owned symlinks; existing conflicts are preserved.",
+        "Claude and Codex skills use manifest-owned symlinks. Antigravity's personal skills manifest references the bundled source.",
         "Dashboard service logs persist under runtime with bounded rotation and crash restart diagnostics.",
         "Claude MCP user config uses an explicit-confirm, fixed-name structural merge.",
     ],
@@ -5813,6 +5825,7 @@ PY
   install_managed_harnesses
   install_claude_skill_links
   install_codex_skill_links
+  install_agy_skills
   render_installed_templates
   ensure_native_agentstack_mail
   say "ORRERY Mail requested-name handling: honored (passthrough)"

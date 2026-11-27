@@ -19,6 +19,10 @@ Do not use Claude Code's built-in Agent or Task tool, agent teams, or `SendMessa
 The goal is not only to launch a child. The parent agent remains responsible for scoping the task, reducing collision risk, monitoring the child, reading the result, and reporting a verified outcome to the user.
 
 <!-- native-delegate:start -->
+Antigravity CLI can load only the first 24,000 bytes of this skill. In
+Antigravity, read the remaining sections of this local `SKILL.md` before
+starting a child, including the monitoring and completion instructions.
+
 ## DeepSeek / Local children, and every child of a dsh / Hermes parent: use the dashboard API
 
 Use the dashboard's standard `POST /api/spawn` in two cases. Explicit global mode still follows the global contract above.
