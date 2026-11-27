@@ -138,25 +138,38 @@ def test_native_missing_id_is_unavailable_before_mail_or_tmux(tmp_path, monkeypa
 
 @pytest.mark.parametrize(('harness', 'interrupt'), [('dsh', 'Escape'), ('hermes', 'C-c')])
 def test_guarded_native_exit_waits_for_idle_before_submitting_exit(monkeypatch, harness, interrupt):
+    from _exit_terminal import ExitTerminal
+
     name = 'FirstAgent'
     fixtures = Path(__file__).with_name('fixtures') / 'native_activity'
-    panes = iter((fixtures / f'{harness}-{state}.txt').read_text() for state in ('work', 'idle'))
+    work = (fixtures / f'{harness}-work.txt').read_text()
+    if harness == 'hermes':
+        work = work.replace('cli.tui.placeholder_busy', '\x1b[3mcli.tui.placeholder_busy\x1b[23m')
+    row = next(i for i, line in enumerate(work.splitlines()) if '❯' in line)
+    cursor = work.splitlines()[row].index('❯') + 2
+    terminal = ExitTerminal(monkeypatch, server, name, editor=harness, screen=(work, row, cursor))
     monkeypatch.setattr(server, 'lookup_agent', lambda *a, **kw: {
         'category': 'agent', 'program': harness, 'attached': False})
-    monkeypatch.setattr(server, '_tmux', lambda args: next(panes) if args[0] == 'capture-pane' else f'{name}|17|19')
-    calls = []
-
-    def tmux(args, **kwargs):
-        if args[0] == 'send-keys':
-            calls.append(args[1:])
-        return subprocess.CompletedProcess(args, 0, stdout='bash', stderr='')
-
-    monkeypatch.setattr(server, '_tmux_run', tmux)
-    monkeypatch.setattr(server.time, 'sleep', lambda _: None)
     sessions = {name: {'session_id': '$41', 'created': 17, 'server_pid': 19}}
     result = server._do_exit(name, sessions=sessions, verified_program=harness)
-    assert result['actions'] == ['interrupted', 'exit-sent']
-    assert calls == [['-t', '$41', interrupt], ['-t', '$41', '-l', '/exit'], ['-t', '$41', 'C-m']]
+    assert result['actions'] == ['interrupted', 'exit-sent'], result
+    assert terminal.mutations == [
+        ('send-keys', '-t', '%41', interrupt), ('paste', '/exit'), ('send-keys', '-t', '%41', 'C-m')]
+
+
+def test_permission_exit_leaves_hermes_approval_for_the_operator(monkeypatch):
+    from _exit_terminal import ExitTerminal
+
+    name = 'FirstAgent'
+    approval = (Path(__file__).with_name('fixtures') / 'native_activity/hermes-approval-real-footer.txt').read_text()
+    row = next(i for i, line in enumerate(approval.splitlines()) if line.startswith('⚠'))
+    terminal = ExitTerminal(monkeypatch, server, name, editor='hermes', screen=(approval, row, 4))
+    monkeypatch.setattr(server, 'lookup_agent', lambda *a, **kw: {'category': 'agent', 'program': 'hermes'})
+    sessions = {name: {'session_id': '$41', 'created': 17, 'server_pid': 19}}
+    result = server._do_exit(name, sessions=sessions, verified_program='hermes')
+    assert not result['ok']
+    assert 'Close any selection or approval' in result['error']
+    assert not terminal.mutations
 
 
 def test_hermes_permission_resume_confirms_loaded_id_in_its_new_terminal(monkeypatch):

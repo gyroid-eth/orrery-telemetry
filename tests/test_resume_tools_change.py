@@ -764,6 +764,8 @@ def test_permission_resume_preserves_generated_standalone(stopped, monkeypatch):
 
 @pytest.mark.parametrize("change", [{"browser_use": True}, {"browser_mode": "temporary"}])
 def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch, change):
+    from _exit_terminal import ExitTerminal
+
     runtime, record, provider, state = stopped
     mark_generated_standalone(stopped)
     configure_fixture_browser(provider)
@@ -786,10 +788,9 @@ def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch, 
     calls = []
     monkeypatch.setattr(server, "lookup_agent", lambda name, **kw: {
         "name": name, "category": "agent", "program": provider, "running": True, "attached": False})
-    monkeypatch.setattr(server, "_tmux", lambda args: f"{NAME}|25|101")
+    terminal = ExitTerminal(monkeypatch, server, NAME, editor=provider, created=25, pid=101)
     monkeypatch.setattr(server, "_tmux_run", lambda args, **kw:
-        calls.append(args) or subprocess.CompletedProcess(args, 0, provider, ""))
-    monkeypatch.setattr(server.time, "sleep", lambda seconds: None)
+        calls.append(args) or terminal.command(args, **kw))
     permission = {"history_session_id": SID, **change}
     before = (state_file.read_bytes(), record.read_bytes())
     assert server.do_jump(NAME, check_only=True, permission=permission) == {"ok": True, "action": "validated"}
@@ -806,12 +807,14 @@ def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch, 
     assert calls == []
     child_resume._atomic_json(state_file, active_state)
     assert server.do_exit(NAME, history_session_id=SID)["ok"]
-    assert any(args[0] == "send-keys" for args in calls)
-    assert all(args[2] == "$17" for args in calls)
+    assert calls[0][:3] == ["display-message", "-t", "$17"]
+    assert terminal.mutations == [("paste", "/exit"), ("send-keys", "-t", "%41", "C-m")]
+    terminal.mutations.clear()
     calls.clear()
-    monkeypatch.setattr(server, "_tmux", lambda args: f"{NAME}|26|101")
+    terminal.created = 26
     assert not server.do_exit(NAME, history_session_id=SID)["ok"]
-    assert calls == []
+    assert calls == [["display-message", "-t", "$17", "-p", "#{session_name}|#{session_created}|#{pid}|#{pane_id}"]]
+    assert not terminal.mutations
 
 
 def test_permission_uses_generated_codex_default_and_requires_claude_launch_record(stopped, monkeypatch):

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager, closing
 import json
 import os
 from pathlib import Path
+import runpy
 import shlex
 import shutil
 import sqlite3
@@ -247,7 +248,8 @@ def test_borrowed_runtime_rechecks_target_without_closing_owner(tmp_path,monkeyp
 def test_real_handler_capture_history_jump_exit_are_current_and_finite(tmp_path,monkeypatch):
     async def run_test():
         async with live(tmp_path) as (runtime,people,parent,_):
-            run,row,commands,_,_=await setup(parent,tmp_path,monkeypatch)
+            run,row,commands,tmux,_=await setup(parent,tmp_path,monkeypatch)
+            mock_exit_composer(monkeypatch, row, tmux)
             receipt=_read_private(run/'session.json');transcript=Path(receipt['transcript_path'])
             binding=_read_private(Path(parent.context['binding_path']))
             transcript.write_text(json.dumps(dict(type='assistant',message=dict(role='assistant',content=[
@@ -468,6 +470,49 @@ def test_ended_husk_capture_and_single_resume_are_distinct_from_delivery(tmp_pat
             with pytest.raises(B1Error,match='FRESH_CLEANUP_PROCESS_PRESENT'):await targets.exit(dict(session='Alpha'))
             assert not any(c[0][0]=='kill-pane' for c in commands)
     asyncio.run(run_test())
+
+
+def mock_exit_composer(monkeypatch, row, tmux, when=None):
+    runtime = runpy.run_path(str(ROOT / "bin/lib/runtime_tmux.py"))
+    tmux["submit_terminal_exit"] = runtime["submit_terminal_exit"]
+    submission = runtime["module_api"]("pane_submission")
+    monkeypatch.setitem(submission["submit"].__globals__, "try_lock",
+                        lambda _: os.open(os.devnull, os.O_RDONLY))
+    previous_command = tmux["Transport"].command
+    draft = ""
+
+    def command(self, *args, **kwargs):
+        nonlocal draft
+        if args[0] == "display-message" and submission["METADATA"] in args:
+            modal = when == "before" or when == "after-paste" and draft
+            screen = ("Do you want to make this edit to test.txt?\n❯ 1. Yes\n  2. No\nEsc to cancel\n"
+                      if modal else f"› {draft}\n? for shortcuts\n")
+            cursor_y, cursor_x = (1, 2) if modal else (0, 2 + len(draft))
+            metadata = f"{self.path}\t17\t{row['pane']['pane_id']}\t100\t{cursor_y}\t0\t{cursor_x}\t1\tcodex"
+            return subprocess.CompletedProcess(args, 0, f"{metadata}\n{screen}", "")
+        if args[0] == "paste-buffer":
+            draft = "/exit"
+        elif args[0] == "send-keys":
+            draft = ""
+        return previous_command(self, *args, **kwargs)
+
+    tmux["Transport"].command = command
+
+
+@pytest.mark.parametrize("when", ["before", "after-paste"])
+def test_exit_on_approval_does_not_confirm_or_record_a_submission(tmp_path, monkeypatch, when):
+    async def scenario():
+        async with live(tmp_path) as (_, _, parent, _):
+            run, row, calls, tmux, _ = await setup(parent, tmp_path, monkeypatch)
+            mock_exit_composer(monkeypatch, row, tmux, when)
+            result = await Targets(parent, ROOT).exit({"session": "Alpha"})
+            assert result["ok"] is False
+            expected = "Cannot confirm /exit" if when == "after-paste" else "Close any selection or approval"
+            assert expected in result["error"]
+            assert any(args[0] == "paste-buffer" for args, _ in calls) is (when == "after-paste")
+            assert not any(args[0] == "send-keys" for args, _ in calls)
+            assert not (run / "pc-exit.json").exists()
+    asyncio.run(scenario())
 
 
 def test_capture_rechecks_after_os_command_and_missing_pane_is_not_an_app_template(tmp_path,monkeypatch):

@@ -21,7 +21,7 @@ def run(js, embedded=True):
     prelude = f"const EMBED_MODE={str(embedded).lower()};" + """
       const events=[];const location={origin:'http://localhost:1234'};
       const window={parent:{postMessage:(message,origin)=>events.push({...message,origin})}};
-      const toast=()=>{};
+      const toasts=[];const toast=(...args)=>toasts.push(args);
     """
     result = subprocess.run(['node', '-e', prelude + helper + js],
                             text=True, capture_output=True, timeout=20)
@@ -78,14 +78,15 @@ def test_bulk_resume_only_notifies_completed_resume(ok, http_ok, action, expecte
     assert actions(run(js)) == expected
 
 
-# The same outcomes for every EXIT path. A finished agent left in its shell
-# gets "exit" typed there (shell-exit-sent), which ends the session too.
+# Each EXIT control handles success and reports server refusals consistently.
+EXIT_REFUSAL = "Cannot confirm an empty agent input. Close any selection or approval, clear the draft, and try Exit again."
 EXIT_OUTCOMES = [
     ({'ok': True, 'actions': ['exit-sent']}, True, ['exit']),
     ({'ok': True, 'actions': ['warn-attached', 'exit-sent']}, True, ['exit']),
     ({'ok': True, 'actions': ['shell-exit-sent', 'zombie-pane:zsh']}, True, ['exit']),
     ({'ok': True, 'actions': []}, True, []),
     ({'ok': False, 'actions': ['exit-sent']}, True, []),
+    ({'ok': False, 'error': EXIT_REFUSAL}, False, []),
     ({'ok': True, 'actions': ['exit-sent']}, False, []),
 ]
 
@@ -107,12 +108,14 @@ def test_deck_exit_arming_failures_and_cleanup_do_not_complete(payload, http_ok,
       (async()=>{await exitAgent({stopPropagation(){}},'Pilot');
       const armed={events:[...events],requests};
       await exitAgent({stopPropagation(){}},'Pilot');
-      console.log(JSON.stringify({armed,events,requests}));})();
+      console.log(JSON.stringify({armed,events,requests,toasts}));})();
     """
     result = run(js)
     assert result['armed'] == {'events': [], 'requests': 0}
     assert result['requests'] == 1
     assert actions(result['events']) == expected
+    if payload.get('error') == EXIT_REFUSAL:
+        assert result['toasts'][-1] == ['✕ FAIL', '> ' + EXIT_REFUSAL, True]
 
 
 @pytest.mark.parametrize('payload,http_ok,expected', EXIT_OUTCOMES)
@@ -124,8 +127,11 @@ def test_detail_panel_exit_completes_like_the_deck(payload, http_ok, expected):
       const TM=()=>button;
     """
     js += f"async function fetch(){{return {{ok:{str(http_ok).lower()},json:async()=>({json.dumps(payload)})}};}}"
-    js += function('exitPanelAgent') + "exitPanelAgent().then(()=>console.log(JSON.stringify(events)));"
-    assert actions(run(js)) == expected
+    js += function('exitPanelAgent') + "exitPanelAgent().then(()=>console.log(JSON.stringify({events,toasts})));"
+    result = run(js)
+    assert actions(result['events']) == expected
+    if payload.get('error') == EXIT_REFUSAL:
+        assert result['toasts'][-1] == ['✕ FAIL', '> ' + EXIT_REFUSAL, True]
 
 
 def test_detail_panel_exit_transport_failure_does_not_complete():

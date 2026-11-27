@@ -11227,9 +11227,9 @@ def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
     else:
         live = sessions[session]
         selector = live["session_id"]
-        expected = f'{session}|{live["created"]}|{live["server_pid"]}'
-        if _tmux(["display-message", "-t", selector, "-p", "#{session_name}|#{session_created}|#{pid}"]).strip() != expected:
-            return {"ok": False, "error": "The agent's tmux session changed before exit"}
+    target_format = "#{session_name}|#{session_created}|#{pid}|#{pane_id}"
+    def observed_target():
+        return _tmux(["display-message", "-t", selector, "-p", target_format]).strip()
 
     actions = []
     if target.get("attached"):
@@ -11267,10 +11267,18 @@ def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
         actions.extend(["provider-headless:antigravity", "interrupt-sent"])
         return {"ok": True, "session": session, "actions": actions}
 
+    observed = observed_target()
+    fields = observed.split("|")
+    if (len(fields) != 4 or fields[0] != session or not all(field.isdigit() for field in fields[1:3])
+            or not re.fullmatch(r"%\d+", fields[3])
+            or sessions is not None and fields[1:3] != [str(live["created"]), str(live["server_pid"])]):
+        return {"ok": False, "error": "The agent's tmux session changed before exit"}
+    pane = fields[3]
+
     # pane で動いているプロセスを確認
     # Claude Code は Python プロセス → "Python" / シェルゾンビは "zsh"/"bash" 等
     _SHELL_PROCS = {"zsh", "bash", "sh", "fish", "csh", "tcsh", "dash"}
-    pane_cmd_r = _tmux_run(['display-message', '-t', selector, '-p', '#{pane_current_command}'], capture_output=True, text=True)
+    pane_cmd_r = _tmux_run(['display-message', '-t', pane, '-p', '#{pane_current_command}'], capture_output=True, text=True)
     pane_cmd = pane_cmd_r.stdout.strip().lower()
 
     # build_agents() resolves Codex liveness from the shared process snapshot
@@ -11278,43 +11286,27 @@ def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
     # still classified from pane_current_command plus the title glyph, and on
     # macOS every Claude session is `zsh > claude` (the pane leader is the
     # shell), so a Claude whose title carries no glyph is "finished" while its
-    # REPL is alive. The descendant walk stays as the last guard: a shell
-    # `exit` is typed only when nothing agent-like runs below the pane.
+    # REPL is alive. The descendant walk keeps those wrapped agents eligible.
     agent_proc = ""
     if pane_cmd in _SHELL_PROCS and target["category"] == "finished":
-        agent_proc = _pane_agent_process(selector)
+        agent_proc = _pane_agent_process(pane)
         if agent_proc:
             actions.append(f"wrapper-shell:{pane_cmd}>{agent_proc}")
 
-    shell_exit = pane_cmd in _SHELL_PROCS and target["category"] == "finished" and not agent_proc
-    def send_exit(*keys):
-        if sessions is not None and _tmux(["display-message", "-t", selector, "-p",
-                                           "#{session_name}|#{session_created}|#{pid}"]).strip() != expected:
-            raise RuntimeError("The agent's tmux session changed before exit")
-        r = _tmux_run(['send-keys', '-t', selector, *keys], capture_output=True, text=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"tmux send-keys failed: {r.stderr.strip()}")
-    try:
-        if verified_program in harness_runtime.HARNESSES and not shell_exit:
-            pane = _tmux(["capture-pane", "-p", "-t", selector])
-            if harness_activity.parse_activity(pane, program) in {"work", "ask", "question"}:
-                send_exit("C-c" if program == "hermes" else "Escape")
-                deadline = time.monotonic() + 6
-                while time.monotonic() < deadline:
-                    pane = _tmux(["capture-pane", "-p", "-t", selector])
-                    if harness_activity.parse_activity(pane, program) == "wait":
-                        break
-                    time.sleep(0.2)
-                else:
-                    raise RuntimeError("The terminal did not return to its input prompt after interrupt")
-                actions.append("interrupted")
-        actions.append(_MODE_API['request_provider_exit'](
-            send=send_exit, interrupt=None, shell_exit=shell_exit, pause=time.sleep))
-    except RuntimeError as exc:
-        return {"ok": False, "error": str(exc)}
-    if shell_exit:
-        actions.append(f"zombie-pane:{pane_cmd}")
-
+    if pane_cmd in _SHELL_PROCS and target["category"] == "finished" and not agent_proc:
+        return {"ok": False, "error": "The agent has already exited. Close the remaining shell from its terminal."}
+    interrupt_key = None
+    if verified_program in harness_runtime.HARNESSES:
+        interrupt_key = "C-c" if program == "hermes" else "Escape"
+    error, interrupted = _MODE_API['runtime_tmux_api']()['submit_terminal_exit'](
+        lambda *args, **kwargs: _tmux_run(list(args), timeout=3, capture_output=True, text=True, **kwargs),
+        lambda: observed_target() == observed, pane, interrupt_key=interrupt_key,
+        activity=lambda screen: harness_activity.parse_activity(screen, program))
+    if error:
+        return {"ok": False, "error": error}
+    if interrupted:
+        actions.append("interrupted")
+    actions.append("exit-sent")
     return {"ok": True, "session": session, "actions": actions}
 
 
