@@ -1263,7 +1263,7 @@ maybe_create_worktree() {
 
     echo "[spawn_child] Creating git worktree: $worktree_dir (branch: $branch_name, base: $base_label)" >&2
     # set -u 下で空配列展開を許容する慣用句: ${base_args[@]+"${base_args[@]}"}
-    if ! git -C "$source_dir" worktree add "$worktree_dir" -b "$branch_name" ${base_args[@]+"${base_args[@]}"} >&2; then
+    if ! agentstack_add_child_worktree "$source_dir" "$worktree_dir" "$branch_name" ${base_args[@]+"${base_args[@]}"} >&2; then
         echo "Error: git worktree add failed" >&2
         return 1
     fi
@@ -1279,6 +1279,7 @@ cleanup_worktree() {
     [[ "${CODEX_UPDATE_LEFT_RUNNING:-false}" == true ]] && return 0
     if [[ -n "${WORKTREE_DIR:-}" && -d "$WORKTREE_DIR" && -n "${WORKTREE_SOURCE:-}" ]]; then
         echo "[spawn_child] cleanup: removing worktree $WORKTREE_DIR" >&2
+        agentstack_unlock_child_worktree "$WORKTREE_DIR" "$CHILD_NAME" || true
         git -C "$WORKTREE_SOURCE" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
         if [[ -n "${CHILD_NAME:-}" ]]; then
             git -C "$WORKTREE_SOURCE" branch -D "exp/${CHILD_NAME}" 2>/dev/null || true
@@ -2577,6 +2578,7 @@ codex_update_watch() {
             "Codex update finished in session $session; stopped after preregistered startup rollback." >> "$log" 2>/dev/null || true
     fi
     if [[ -n "$worktree" && -d "$worktree" && -n "$source" ]]; then
+        agentstack_unlock_child_worktree "$worktree" "$child" || true
         git -C "$source" worktree remove --force "$worktree" 2>/dev/null || true
         git -C "$source" branch -D "exp/${child}" 2>/dev/null || true
     fi

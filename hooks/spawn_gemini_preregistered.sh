@@ -393,6 +393,7 @@ cleanup_failure() {
         --token-file "$CHILD_TOKEN_FILE" >/dev/null 2>&1 || true
     fi
     if [[ "$WORKTREE_CREATED" == true ]]; then
+      agentstack_unlock_child_worktree "$WORKTREE_DIR" "$CHILD_NAME" || true
       git -C "$SOURCE_REPO" worktree remove --force "$WORKTREE_DIR" >/dev/null 2>&1 || true
       git -C "$SOURCE_REPO" branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
     fi
@@ -430,7 +431,7 @@ if [[ "$USE_WORKTREE" == true ]]; then
     echo "$PROG: child branch already exists: $BRANCH_NAME" >&2
     exit 1
   fi
-  git -C "$SOURCE_REPO" worktree add -b "$BRANCH_NAME" "$WORKTREE_DIR" "$BASE_REV" >/dev/null
+  agentstack_add_child_worktree "$SOURCE_REPO" "$WORKTREE_DIR" "$BRANCH_NAME" "$BASE_REV" >/dev/null
   WORKTREE_CREATED=true
   WORKSPACE_DIR="$WORKTREE_DIR"
   agentstack_apply_workspace_context "$WORKSPACE_DIR" "$PROJECT_KEY" || exit 1

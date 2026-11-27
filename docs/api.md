@@ -930,6 +930,8 @@ Codex のモデル省略または `sol` で既定を変更した場合、preview
 
 API 50 の `gemini` は、macOS で `/api/spawn-names` に `capabilities.standalone: true` を返します。親なしでは `dir` が作業フォルダになり、`worktree: true` を選んだ場合だけ Git が必要です。親付きの起動には従来どおり worktree と `resources` が必要です。
 
+WSL で Git の管理領域が Windows drive（DrvFs）にある場合、ORRERY は作成時に子の worktree をロックし、Windows 側の Git の prune から保護します。子が終了すると ORRERY のロックを解除し、worktree は変更確認用に残します。
+
 Claude provider に `effort` を渡すと拒否します。Codex は正式な `gpt-*` IDをcacheにないという理由では拒否せず、明示 `AGENTSTACK_CODEX_MODELS` がある場合だけmembershipを制限します。UI はモデル別 effort 情報を候補表示と無指定時の既定に使い、明示 effort はそのまま Codex CLI へ渡して最終判定を任せます。無指定の model と effort は設定された既定を使い、未設定なら従来規則に従います。系統別の短縮名は新鮮な catalog の候補の最新版に追従し、新鮮な catalog に該当がなければ拒否し、未取得・期限切れでは同梱値を使います。Claude は local catalog の有無や期限とは独立して、正しい形式の正式IDを受け付けます。明示的な `AGENTSTACK_CLAUDE_MODELS` は厳格な許可リストとして扱い、不正な設定ではClaudeの起動を拒否します。Claude の固定既定は `claude-opus-5-5` で、許可リストから除外した状態でモデルを省略すると拒否します。別モデルへは置き換えません。詳細は [Claude model catalog](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md#claude-model-catalog) を参照してください。
 
 non-git directory では Codex が trust dialog を出すことがあります。spawner は `C-m` で受理し、3秒ごと・最大10回を超えて dialog が残る場合は fail-fast します。server は launcher readiness を最大120秒待ち、失敗時は tmux session と token / child credential file を cleanup します。

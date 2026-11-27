@@ -106,6 +106,16 @@ if [[ ! "$AGENT_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     exit 0
 fi
 
+# The provider has exited. Unlock this child's checkout even if Mail cleanup
+# cannot reach the server. A dashboard-triggered exit may run outside the checkout.
+WORKTREE_ROOT="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME:-$HOME/.agentstack}/worktrees}"
+case "$WORKTREE_ROOT" in
+    "~") WORKTREE_ROOT="$HOME" ;;
+    "~/"*) WORKTREE_ROOT="$HOME/${WORKTREE_ROOT#\~/}" ;;
+esac
+agentstack_unlock_child_worktree "$(pwd -P)" "$AGENT_NAME" || true
+agentstack_unlock_child_worktree "$WORKTREE_ROOT/$AGENT_NAME" "$AGENT_NAME" || true
+
 confirm_cleanup_rpc() {
     "${AGENTSTACK_PYTHON:-python3}" -c '
 import json,sys

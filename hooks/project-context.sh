@@ -534,6 +534,59 @@ agentstack_resolve_protected_roots() {
     printf '%s\n' "${installed:-$resolved_project_key}"
 }
 
+# Windows Git can see metadata on DrvFs while its WSL checkout path is
+# invisible. Identify the common Git directory, including from a linked tree.
+agentstack_git_common_is_wsl_drvfs() {
+    [[ "$(uname -s)" == Linux && "$(uname -r)" =~ [Mm]icrosoft ]] || return 1
+    local common mount filesystem options drvfs_option='(^|,)aname=drvfs([;,]|$)'
+    common="$(git -C "$1" rev-parse --git-common-dir)" || return 1
+    [[ "$common" == /* ]] || common="$1/$common"
+    mount="$(findmnt --target "$common" --noheadings --raw --output FSTYPE,FS-OPTIONS 2>/dev/null)" || return 1
+    read -r filesystem options <<< "$mount"
+    [[ "$filesystem" == drvfs || ( "$filesystem" == 9p && "$options" =~ $drvfs_option ) ]]
+}
+
+agentstack_wsl_worktree_lock_reason() {
+    printf 'ORRERY WSL child %s: protect from Windows Git prune\n' "$1"
+}
+
+agentstack_add_child_worktree() {
+    local source="$1" checkout="$2" branch="$3"
+    shift 3
+    if ! agentstack_git_common_is_wsl_drvfs "$source"; then
+        git -C "$source" worktree add -b "$branch" "$checkout" "$@"
+        return $?
+    fi
+    local reason help
+    reason="$(agentstack_wsl_worktree_lock_reason "${branch#exp/}")"
+    help="$(git -C "$source" worktree add -h 2>&1 || true)"
+    if [[ "$help" == *--reason* ]]; then
+        # Lock as part of add, before Git for Windows can observe it as prunable.
+        git -C "$source" worktree add --lock --reason "$reason" -b "$branch" "$checkout" "$@"
+        return $?
+    fi
+
+    # Older Git accepts a reason only on the separate lock command.
+    git -C "$source" worktree add -b "$branch" "$checkout" "$@" || return 1
+    if git -C "$source" worktree lock --reason "$reason" -- "$checkout"; then
+        return 0
+    fi
+    if git -C "$source" worktree remove --force "$checkout"; then
+        git -C "$source" branch -D "$branch" >&2 || true
+    fi
+    return 1
+}
+
+agentstack_unlock_child_worktree() {
+    local checkout="$1" child="$2" gitdir expected
+    [[ "${checkout##*/}" == "$child" && -f "$checkout/.git" && ! -L "$checkout/.git" ]] || return 0
+    gitdir="$(git -C "$checkout" rev-parse --absolute-git-dir 2>/dev/null)" || return 0
+    [[ -f "$gitdir/locked" && ! -L "$gitdir/locked" ]] || return 0
+    expected="$(agentstack_wsl_worktree_lock_reason "$child")"
+    [[ "$(cat -- "$gitdir/locked")" == "$expected" ]] || return 0
+    git -C "$checkout" worktree unlock -- "$checkout"
+}
+
 if [ -n "${BASH_SOURCE:-}" ] && [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
         resolve-invocation-context)
