@@ -483,13 +483,20 @@ def test_policy_reaches_every_first_prompt(tmp_path, mode):
     assert f"report it to {report_to}" in log
 
 
-def test_without_a_device_the_child_holds_all_browser_actions(tmp_path):
+def test_without_a_device_the_child_defaults_to_this_machines_browser(tmp_path):
     env, workdir = _launch_env(tmp_path)
     result = _spawn(tmp_path, env, workdir, "NoDevice", "--claude-chrome")
     assert result.returncode == 0, result.stderr
     log = _log_text(env)
-    assert "no target browser was specified" in log
-    assert "do not select or switch browsers, open tabs, navigate, read pages or click" in log
+    expected_os = _load_policy().local_browser_os()
+    assert expected_os in ("macOS", "Windows", "Linux")
+    assert f"use this machine's {expected_os} browser" in log
+    assert f"If exactly one connected browser matches {expected_os}, call select_browser" in log
+    assert (
+        f"If zero or more than one connected browser matches {expected_os}, "
+        "do not select or switch browsers, open tabs, navigate, read pages or click"
+    ) in log
+    assert "Never fall back to a browser on another OS or machine" in log
 
 
 def test_default_prompt_has_no_browser_policy(tmp_path):
