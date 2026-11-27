@@ -858,9 +858,16 @@ def mark_retired(
                 workspace = _codex_workspace(codex_work_dir)
                 decisions = config.get("projects", {})
                 if workspace and isinstance(decisions, dict):
+                    trust = {"workspace": workspace}
                     entry = decisions.get(workspace["path"], decisions.get(os.fspath(codex_work_dir)))
                     if isinstance(entry, dict) and entry.get("trust_level") == "trusted":
-                        state["codex_workspace_trust"] = workspace
+                        trust["cwd"] = True
+                    repo = _codex_linked_repo(Path(workspace["path"]))
+                    entry = decisions.get(repo["path"]) if repo else None
+                    if isinstance(entry, dict) and entry.get("trust_level") == "trusted":
+                        trust["repo"] = repo
+                    if "cwd" in trust or "repo" in trust:
+                        state["codex_workspace_trust"] = trust
         retired = _utc_now(now)
         state["retired_at"] = _timestamp(retired)
         state["resume_expires_at"] = _timestamp(
@@ -2061,20 +2068,42 @@ def _codex_workspace(path: Path) -> dict | None:
     return None
 
 
+def _codex_linked_repo(work_dir: Path) -> dict | None:
+    linked = _linked_worktree(work_dir)
+    if linked and linked[1].name == ".git":
+        common = _codex_workspace(linked[1])
+        root = _codex_workspace(linked[1].parent)
+        if common and root:
+            return {**root, "git_file_id": common["file_id"]}
+    return None
+
+
 def _restore_codex_workspace_trust(config: dict, work_dir: Path | None, retained: dict | None) -> None:
-    if work_dir is None or retained is None or _codex_workspace(work_dir) != retained:
+    if work_dir is None or not isinstance(retained, dict):
+        return
+    workspace = _codex_workspace(work_dir)
+    if workspace is None or workspace != retained.get("workspace", retained):
         return
     projects = config.setdefault("projects", {})
     if not isinstance(projects, dict):
         return
-    restored_path = Path(retained["path"])
-    for path in (work_dir, restored_path, *restored_path.parents):
+    restored_path = Path(workspace["path"])
+    repo = _codex_linked_repo(restored_path)
+    revoked_keys = [work_dir, restored_path, *restored_path.parents]
+    if repo:
+        repo_path = Path(repo["path"])
+        revoked_keys.extend((repo_path, *repo_path.parents))
+    for path in revoked_keys:
         entry = projects.get(os.fspath(path))
         if isinstance(entry, dict) and entry.get("trust_level") == "untrusted":
             return
-    entry = projects.setdefault(os.fspath(restored_path), {})
-    if isinstance(entry, dict):
-        entry.setdefault("trust_level", "trusted")
+    approved = [workspace["path"]] if workspace == retained or retained.get("cwd") is True else []
+    if repo and retained.get("repo") == repo:
+        approved.append(repo["path"])
+    for key in approved:
+        entry = projects.setdefault(key, {})
+        if isinstance(entry, dict):
+            entry.setdefault("trust_level", "trusted")
 
 
 def _inherit_parent_hook_trust(

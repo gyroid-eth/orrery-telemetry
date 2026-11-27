@@ -538,3 +538,31 @@ def test_resume_carries_only_the_same_childs_workspace_trust(parent_case, tmp_pa
                 "revoked": {str(workspace): {"trust_level": "untrusted"}}}.get(scenario, {})
     assert projects == expected
     assert (source / "config.toml").read_bytes() == baseline
+
+
+@pytest.mark.parametrize("scenario", ["same", "revoked", "different-workdir"])
+def test_worktree_resume_carries_the_childs_existing_source_repo_trust(parent_case, tmp_path, scenario):
+    case = parent_case
+    root, worktree = _checkouts(tmp_path)
+    root, worktree = root.resolve(), worktree.resolve()
+    runtime, source = case["runtime"], case["source"]
+    runner = tmp_path / "run-mcp.sh"
+    home = runtime / "child-agents" / f"{NAME}.codex-home"
+    case["build"](NAME, source, work_dir=worktree)
+    _set_case_config(home / "config.toml", lambda config: config.update(
+        projects={str(root): {"trust_level": "trusted"}}))
+    assert child_resume.mark_retired(runtime, NAME, retention_days=30,
+                                     codex_work_dir=worktree, codex_runner=runner)
+    child_resume.discard_generated(runtime, NAME)
+    if scenario == "revoked":
+        _set_case_config(source / "config.toml", lambda config: config.update(
+            projects={str(root): {"trust_level": "untrusted"}}))
+    original = (source / "config.toml").read_bytes()
+    child_resume.build_home(home=home, source=source, runner=runner, child=NAME, project_key="/p",
+        token_file=runtime / f"agent_token_{NAME}", mcp_url="http://127.0.0.1:9/mcp", mail_env="",
+        runtime_dir=runtime, bearer_mode="disabled", python_bin="", mcp_profile="inherit",
+        work_dir=worktree / "sub" if scenario == "different-workdir" else worktree)
+    projects = tomllib.loads((home / "config.toml").read_text()).get("projects", {})
+    level = {"same": "trusted", "revoked": "untrusted"}.get(scenario)
+    assert projects == ({str(root): {"trust_level": level}} if level else {})
+    assert (source / "config.toml").read_bytes() == original
