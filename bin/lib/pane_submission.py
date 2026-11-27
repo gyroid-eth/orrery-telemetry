@@ -16,7 +16,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, replace
-from unicodedata import east_asian_width
+from unicodedata import category, east_asian_width
 
 
 METADATA = ('#{socket_path}\t#{pid}\t#{pane_id}\t#{pane_pid}\t#{cursor_y}\t#{pane_in_mode}'
@@ -55,6 +55,7 @@ COLLAPSED = re.compile(r'\[Pasted text #\d+(?: \+\d+ lines?)?\]')
 HERMES_PASTE = re.compile(r'\[Pastedtext#(\d+):(\d+)lines→/.+/pastes/paste_\1_\d{6}\.txt\]')
 HERMES_HINT = re.compile(r'^(?:msg=[\w-]+ · /queue · /bg · /steer · Ctrl\+C cancel|cli\.tui\.placeholder_busy)$')
 HERMES_STATUS = re.compile(r'^(?:[^│]+ │ )?☤ \S')
+HERMES_EDITOR_ROWS = 8
 ITALIC_CHANGE = re.compile(r'\x1b\[(0|3|23)m')
 HERMES_TOOL_PROGRESS = re.compile(
     r'^  [^ \t┊│].* {2}\(\s*(?:\d+\.\ds|\d+m[0-5]\ds|cli\.shared\.duration_(?:s|ms_compact))'
@@ -66,6 +67,8 @@ AGY_MODE = re.compile(
     r'^(?:(?:\? for shortcuts|esc to cancel)\s{2,})?(?:auto|plan|accept[- ]edits)\s+·\s+', re.I)
 AGY_MODE_ONLY = re.compile(r'^(?:(?:\? for shortcuts|esc to cancel)\s{2,})?(?:auto|plan|accept[- ]edits)$', re.I)
 AGY_MODEL_FOOTER = re.compile(r'^Gemini(?:[ -][^·]+)?\s+·\s+(?:low|medium|high)$', re.I)
+AGY_SCROLL_MARKER = re.compile(
+    rf'(?:{SGR.pattern}|[ \t])*\x1b\[90m↑ [1-9]\d* more lines?(?:{SGR.pattern})*[ \t]*')
 AGY_PLACEHOLDER = {
     'Auto mode: edits & safe commands auto-approved (shift+tab to cycle)',
     'Plan mode: research & plan only (shift+tab to cycle)',
@@ -170,10 +173,16 @@ def _editor_process(editor, pid, executable):
         return True
     if editor == 'codex' and re.fullmatch(r'codex-(?:aarch64|x86_64)-[\w-]+', executable):
         return True
+    if editor == 'agy' and sys.platform == 'linux':
+        try:
+            if os.readlink(f'/proc/{pid}/exe').endswith('/agy'):
+                return True
+        except OSError:
+            pass
     node = executable in {'node', 'nodejs', 'mainthread'}
     python = re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', executable)
     claude_version = editor == 'claude' and re.fullmatch(r'\d+\.\d+\.\d+', executable)
-    if not (node or claude_version or editor == 'hermes' and python):
+    if not (node or claude_version or editor == 'agy' or editor == 'hermes' and python):
         return False
     if claude_version:
         if sys.platform == 'linux':
@@ -184,6 +193,11 @@ def _editor_process(editor, pid, executable):
         argv = _process_argv(pid)
         return bool(argv and argv[0].endswith('/claude/versions/' + executable))
     argv = _process_argv(pid)
+    if editor == 'agy':
+        if argv and argv[0].endswith('/agy'):
+            return True
+        if not node:
+            return False
     if len(argv) < 2:
         return False
     script = argv[1]
@@ -394,6 +408,12 @@ def _hermes_running(lines, plain, start):
             and HERMES_TOOL_PROGRESS.fullmatch(plain[index].rstrip()) is not None)
 
 
+def _cursor_before_end(row, column):
+    width = sum(2 if east_asian_width(c) in ('F', 'W') else 1
+                for c in row.rstrip() if category(c) not in ('Mn', 'Me', 'Cf'))
+    return column < width
+
+
 def frame(metadata, lines, pane):
     fields = metadata.split('\t')
     if (len(fields)!=9 or fields[2]!=pane or not re.fullmatch(r'%[0-9]+',pane)
@@ -427,6 +447,20 @@ def frame(metadata, lines, pane):
     for start in range(cursor,-1,-1):
         line=plain[start].rstrip()
         if BORDER.fullmatch(line.strip()):
+            # The classic Hermes input scrolls within eight rows. When its
+            # first row scrolls out, the status and both rules stay visible.
+            if (start and cursor - start == HERMES_EDITOR_ROWS
+                    and HERMES_STATUS.match(plain[start-1].strip())
+                    and cursor+1 < len(plain) and BORDER.fullmatch(plain[cursor+1].strip())
+                    and not any(row.strip() for row in plain[cursor+2:])):
+                draft = '\n'.join(row.strip() for row in plain[start+1:cursor+1]).strip()
+                if draft and plain[cursor].strip():
+                    busy = _hermes_running(lines, plain, start+1)
+                    return Frame(*base, draft, False, hermes=True, bracketed=bracketed,
+                                 foreground_command=command, scrolled=True, editor='hermes',
+                                 hermes_busy=busy, running=busy,
+                                 draft_continues=_cursor_before_end(plain[cursor], column),
+                                 slash_view=slash_view)
             break
         if CLAUDE_SCROLLED_BORDER.fullmatch(line.strip()):
             # A tall Claude draft scrolls inside its frame: the prompt glyph
@@ -476,6 +510,11 @@ def frame(metadata, lines, pane):
         body=[first,*plain[start+1:cursor+1]]
         scrolled = False
         more_below = False
+        if agy and not left and start < cursor and AGY_SCROLL_MARKER.fullmatch(lines[start].partition('>')[2]):
+            # Antigravity draws the scroll indicator in place of the first row.
+            body.pop(0)
+            scrolled = True
+            more_below = _cursor_before_end(plain[cursor], column)
         if glyph == '›':
             top_arrow = CODEX_SCROLL_ARROW.search(lines[start])
             last_arrow = CODEX_SCROLL_ARROW.search(lines[cursor])
@@ -489,6 +528,8 @@ def frame(metadata, lines, pane):
         if boxed:
             body=[part.rstrip().removesuffix('⛶').removesuffix('│').rstrip() for part in body]
         draft='\n'.join(body).strip()
+        if agy and scrolled and not draft:
+            return replace(unavailable, slash_view=slash_view)
         if boxed and start==cursor and column<=len(prefix)+2:
             placeholder=draft.removesuffix('…')
             if (placeholder and DSH_PLACEHOLDER.startswith(placeholder)
@@ -641,6 +682,8 @@ def ready(observed, text, *, operator=False):
     shown = ''.join(observed.draft.split())
     expected = ''.join(text.split())
     if observed.scrolled:
+        if observed.hermes or observed.editor == 'agy':
+            return same_notice(observed, text)
         # Only the end of a tall draft is visible, so it must end the text.
         return not observed.draft_continues and len(shown)>=16 and expected.endswith(shown)
     if shown == expected:
