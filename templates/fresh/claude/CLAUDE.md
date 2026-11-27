@@ -75,6 +75,8 @@ Follow the shared instruction consent contract: review changes to existing
 content with the human; new files follow that contract's separate rule. Human
 approval governs hook trust, deployment, and cutover.
 On an OS/tool approval refusal, report the verbatim refusal to the parent and
-stop that action. Do not change settings, checksums, or approval receipts to
-get past it. See `__AGENTSTACK_HOME__/docs/fresh-global-update.md` for the
+stop that action.
+Do not use another tool, a shell command, or another application to carry out
+the refused action. Do not change settings, checksums, or approval receipts
+to get past it. See `__AGENTSTACK_HOME__/docs/fresh-global-update.md` for the
 agent/operator procedure and outstanding acceptance boundaries.

@@ -107,6 +107,15 @@ def harness_template(shared):
     return re.sub(rb'^<!-- include: (.+) UNTIL (.+) -->$', include, template, flags=re.M)
 
 
+def tool_refusal_block():
+    """The same neutral rule for launchers that supply only the refusal section."""
+    template = Path(__file__).with_name('harness_instructions.md').read_bytes()
+    heading = b'## Tool refusals\n'
+    if template.splitlines().count(heading.rstrip()) != 1:
+        raise Refused('INSTRUCTION_SHARED_SECTION_INVALID', heading.decode().strip())
+    return template[template.index(heading):]
+
+
 @cache
 def render(provider, template, install, project, renderer='literal-v2'):
     if provider == 'harness':

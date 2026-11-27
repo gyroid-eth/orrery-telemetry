@@ -81,6 +81,7 @@ WORKTREE_ROOT_SETTING="${AGENTSTACK_WORKTREE_ROOT:-}"
 # writable roots). Children run unattended, so the defaults avoid prompts
 # nobody is there to answer.
 CODEX_SANDBOX_SETTING="${AGENTSTACK_CODEX_SANDBOX:-}"
+CHILD_SANDBOX_SETTING="${AGENTSTACK_CHILD_SANDBOX:-}"
 CODEX_CHILD_APPROVAL_SETTING="${AGENTSTACK_CODEX_CHILD_APPROVAL:-}"
 CODEX_CHILD_CONFIG_OVERLAY_SETTING="${AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY:-}"
 CODEX_NETWORK_SETTING="${AGENTSTACK_CODEX_NETWORK:-}"
@@ -210,6 +211,8 @@ Options:
                          existing env.sh, else disabled)
   --child-default-tools SPEC  default child tools (same grammar as --tools; empty by default).
                          Append ;claude=SPEC, ;codex=SPEC, ;dsh=SPEC or ;hermes=SPEC to override.
+  --child-sandbox MODE   on or off: use provider sandbox settings for delegated children
+                         (default: existing env.sh, else off)
   --codex-network MODE   on or off: sandbox network access for Codex children
                          (default: existing env.sh, else on)
   --codex-bin PATH       Codex CLI executable used by the dashboard and child
@@ -380,6 +383,15 @@ while [[ $# -gt 0 ]]; do
       fi
       CHILD_DEFAULT_TOOLS_SETTING="$2"
       OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CHILD_DEFAULT_TOOLS"
+      shift 2
+      ;;
+    --child-sandbox)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --child-sandbox requires on or off" >&2
+        exit 2
+      fi
+      CHILD_SANDBOX_SETTING="$2"
+      OPTION_GIVEN="$OPTION_GIVEN AGENTSTACK_CHILD_SANDBOX"
       shift 2
       ;;
     --codex-network)
@@ -759,6 +771,7 @@ resolve_setting SPAWN_DIRS_SETTING AGENTSTACK_SPAWN_DIRS
 resolve_setting SPAWN_ROOTS_SETTING AGENTSTACK_SPAWN_ROOTS
 resolve_setting WORKTREE_ROOT_SETTING AGENTSTACK_WORKTREE_ROOT "$INSTALL_DIR/worktrees"
 resolve_setting CODEX_SANDBOX_SETTING AGENTSTACK_CODEX_SANDBOX workspace-write
+resolve_setting CHILD_SANDBOX_SETTING AGENTSTACK_CHILD_SANDBOX off
 resolve_setting CODEX_CHILD_APPROVAL_SETTING AGENTSTACK_CODEX_CHILD_APPROVAL never
 resolve_setting CODEX_CHILD_CONFIG_OVERLAY_SETTING AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY
 resolve_setting CODEX_NETWORK_SETTING AGENTSTACK_CODEX_NETWORK on
@@ -885,6 +898,7 @@ fi
 AUTO_OPEN_CHILD_SETTING="${AUTO_OPEN_CHILD_SETTING:-1}"
 CODEX_CHILD_APPROVAL_SETTING="${CODEX_CHILD_APPROVAL_SETTING:-never}"
 CODEX_NETWORK_SETTING="${CODEX_NETWORK_SETTING:-on}"
+CHILD_SANDBOX_SETTING="${CHILD_SANDBOX_SETTING:-off}"
 CHILD_RESUME_RETENTION_DAYS_SETTING="${CHILD_RESUME_RETENTION_DAYS_SETTING:-30}"
 resolve_setting PORTRAITS_DIR_SETTING AGENTSTACK_PORTRAITS_DIR
 resolve_setting CUSTOM_PORTRAITS_SETTING AGENTSTACK_CUSTOM_PORTRAITS
@@ -1094,6 +1108,10 @@ esac
 case "$CODEX_SANDBOX_SETTING" in
   read-only|workspace-write|danger-full-access) ;;
   *) die "AGENTSTACK_CODEX_SANDBOX must be read-only, workspace-write or danger-full-access" ;;
+esac
+case "$CHILD_SANDBOX_SETTING" in
+  on|off) ;;
+  *) die "AGENTSTACK_CHILD_SANDBOX must be on or off" ;;
 esac
 case "$CODEX_CHILD_APPROVAL_SETTING" in
   never|on-request|on-failure|untrusted) ;;
@@ -3255,6 +3273,7 @@ values = {
     "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
     "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
     "AGENTSTACK_CODEX_SANDBOX": "$CODEX_SANDBOX_SETTING",
+    "AGENTSTACK_CHILD_SANDBOX": "$CHILD_SANDBOX_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -4982,6 +5001,7 @@ render_launchd_plist() {
       __SPAWN_DIRS__ "$SPAWN_DIRS_SETTING"
       __SPAWN_ROOTS__ "$SPAWN_ROOTS_SETTING"
       __WORKTREE_ROOT__ "$WORKTREE_ROOT_SETTING"
+      __CHILD_SANDBOX__ "$CHILD_SANDBOX_SETTING"
       __CODEX_CHILD_APPROVAL__ "$CODEX_CHILD_APPROVAL_SETTING"
       __CODEX_NETWORK__ "$CODEX_NETWORK_SETTING"
       __CHILD_DEFAULT_TOOLS__ "$CHILD_DEFAULT_TOOLS_SETTING"
@@ -5085,6 +5105,7 @@ env = {
     "AGENTSTACK_SPAWN_DIRS": "$SPAWN_DIRS_SETTING",
     "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
     "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
+    "AGENTSTACK_CHILD_SANDBOX": "$CHILD_SANDBOX_SETTING",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
     "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
     "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -5588,6 +5609,7 @@ manifest = {
         "AGENTSTACK_SPAWN_ROOTS": "$SPAWN_ROOTS_SETTING",
         "AGENTSTACK_WORKTREE_ROOT": "$WORKTREE_ROOT_SETTING",
         "AGENTSTACK_CODEX_SANDBOX": "$CODEX_SANDBOX_SETTING",
+        "AGENTSTACK_CHILD_SANDBOX": "$CHILD_SANDBOX_SETTING",
         "AGENTSTACK_CODEX_CHILD_APPROVAL": "$CODEX_CHILD_APPROVAL_SETTING",
         "AGENTSTACK_CODEX_CHILD_CONFIG_OVERLAY": "$CODEX_CHILD_CONFIG_OVERLAY_SETTING",
         "AGENTSTACK_CODEX_NETWORK": "$CODEX_NETWORK_SETTING",
@@ -5748,6 +5770,7 @@ main() {
   say "worktree root: $WORKTREE_ROOT_SETTING"
   say "automatically open child terminals: $AUTO_OPEN_CHILD_SETTING (set AGENTSTACK_AUTO_OPEN_CHILD=0 on reinstall to disable auto-open while keeping Deck Open tmux)"
   report_setting_changes
+  say "child sandbox: $CHILD_SANDBOX_SETTING"
   say "codex child approval: $CODEX_CHILD_APPROVAL_SETTING"
   say "codex child config overlay: ${CODEX_CHILD_CONFIG_OVERLAY_SETTING:-(disabled)}"
   say "codex network: $CODEX_NETWORK_SETTING"

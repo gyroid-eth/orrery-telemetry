@@ -111,9 +111,11 @@ def provider_setup(client, root, provider, *, persistent=None):
     return home, binary, plan
 
 
-def command(root, home, binary, provider, plan, run, cwd, session_id, *, persistent=None, client=None):
+def command(root, home, binary, provider, plan, run, cwd, session_id, *,
+            persistent=None, client=None, child=False):
     proxy = ['/bin/bash', str(root / 'bin/agentstack-runtime-client'), 'proxy']
     policy = runpy.run_path(str(root / 'hooks/child_tools.py'))
+    child_sandbox = os.environ.get('AGENTSTACK_CHILD_SANDBOX') == 'on'
     if provider == 'claude':
         saved = policy['_load_claude_settings'](str(home / '.claude.json'))
         extra = {}
@@ -138,7 +140,10 @@ def command(root, home, binary, provider, plan, run, cwd, session_id, *, persist
             args = claude_command(api, client, root, home, binary, run, cwd, persistent)
             _write_private(settings, {'hooks': hooks})
             return [*args, '--settings', str(settings)]
-        _write_private(settings, {'hooks': hooks})
+        values = {'hooks': hooks}
+        if child:
+            values['sandbox'] = {'enabled': child_sandbox}
+        _write_private(settings, values)
         args = [binary, '--mcp-config', str(config), '--strict-mcp-config', '--settings', str(settings)]
         if session_id is not None:args += ['--resume', session_id]
         return args
@@ -161,8 +166,11 @@ def command(root, home, binary, provider, plan, run, cwd, session_id, *, persist
     # Codex 0.163 drops root -c values when resume also has -c overrides.
     # Keep every native option at the same level, including later skills.
     args = [binary] + (['resume', session_id] if session_id is not None else [])
+    sandbox = os.environ.get('AGENTSTACK_CODEX_SANDBOX', 'workspace-write')
+    if child:
+        sandbox = 'workspace-write' if child_sandbox else 'danger-full-access'
     args += ['-C', str(cwd), '-c', 'check_for_update_on_startup=false',
-            '--sandbox', os.environ.get('AGENTSTACK_CODEX_SANDBOX', 'workspace-write'),
+            '--sandbox', sandbox,
             '--ask-for-approval', os.environ.get('AGENTSTACK_CODEX_APPROVAL', 'on-request'),
             '-c', 'mcp_servers.orrery-mail.command=' + json.dumps(proxy[0]),
             '-c', 'mcp_servers.orrery-mail.args=' + json.dumps(proxy[1:]),
@@ -277,6 +285,7 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None, persistent=N
     owner = asyncio.run(verified_owner(client))
     from .fresh_child import family, launch_task
     task, prompt = launch_task(client)
+    child = task is not None and not task.get('standalone')
     if persistent is not None and (task is not None or provider not in {'claude', 'hermes'} or session_id is not None):
         raise B1Error('FRESH_PERSISTENT_PROFILE_INVALID')
     if task is not None and (task['provider'] != provider or task['cwd'] != str(cwd) or task['wrapper_root'] != str(root)):
@@ -322,10 +331,11 @@ def launch(client, wrapper_root, provider, cwd, *, session_id=None, persistent=N
         if managed:
             from .fresh_harness import plan as native_plan
             managed_plan = native_plan(client, root, provider, plan, run, cwd,
-                                       prompt if session_id is None else '', session_id, persistent=persistent)
+                                       prompt if session_id is None else '', session_id,
+                                       persistent=persistent, child=child)
             args = managed_plan['argv']
         else:args = command(root, home, binary, provider, plan, run, cwd, session_id,
-                           persistent=persistent, client=client)
+                           persistent=persistent, client=client, child=child)
         config_args = [args[0], *args[3:]] if provider == 'codex' and session_id is not None else list(args)
         if task is not None:
             _, _, child_record = family(client)

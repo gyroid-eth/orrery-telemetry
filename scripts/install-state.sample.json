@@ -52,6 +52,7 @@
     "AGENTSTACK_CHILD_RESUME_RETENTION_DAYS": "30",
     "AGENTSTACK_CLAUDE_JSON": "/home/alice/.claude.json",
     "AGENTSTACK_CLAUDE_MODELS": "",
+    "AGENTSTACK_CHILD_SANDBOX": "off",
     "AGENTSTACK_CODEX_ADD_DIRS": "",
     "AGENTSTACK_CODEX_BIN": "/home/alice/.local/bin/codex",
     "AGENTSTACK_CODEX_CHILD_APPROVAL": "never",

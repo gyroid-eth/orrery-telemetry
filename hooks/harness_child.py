@@ -210,6 +210,8 @@ def fresh_instructions(state_dir, root):
     body = shared[:shared.index(boundaries[0])] + shared[shared.index(boundaries[1]):shared.index(boundaries[2])]
     body += b'Native managed launch uses this prepared owner and private HOME. Registration and file guards remain mandatory.\n'
     body += b'Completion of a native process is not completion of its task; report the result to the specified parent through Mail.\n'
+    renderer = runpy.run_path(str(Path(root) / 'bin/lib/instruction_blocks.py'))
+    body += b'\n' + renderer['tool_refusal_block']()
     target = Path(state_dir) / 'instructions.md'
     child_resume._atomic_bytes(target, body.replace(b'__AGENTSTACK_HOME__', str(root).encode()))
     return target
@@ -275,6 +277,8 @@ def generate_plan(document, runner, *, tools=None):
     # children get it; Hermes keeps its product skill links unchanged.
     home, reason = personal_skill_home(document.get('program'))
     document['personal_skills_home'], document['personal_skills_reason'] = home, reason
+    if document.get('parent_agent'):
+        document['child_sandbox'] = os.environ.get('AGENTSTACK_CHILD_SANDBOX') == 'on'
     managed_screen = None
     if 'project_key' in document:
         generation = document.setdefault('screen_generation', uuid.uuid4().hex)

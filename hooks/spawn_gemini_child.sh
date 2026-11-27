@@ -36,6 +36,8 @@ PROJECT_CONTEXT_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-co
 [[ -f "$PROJECT_CONTEXT_HELPER" ]] || PROJECT_CONTEXT_HELPER="$HOOKS_DIR/project-context.sh"
 . "$PROJECT_CONTEXT_HELPER" || { echo "$PROG: workspace context helper is unavailable" >&2; exit 1; }
 agentstack_load_top_level_env "$AGENTSTACK_HOME_DIR/env.sh"
+CHILD_SANDBOX="$(agentstack_resolve_setting AGENTSTACK_CHILD_SANDBOX \
+  "${AGENTSTACK_CHILD_SANDBOX:-}" off "$AGENTSTACK_HOME_DIR/env.sh")"
 
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
@@ -45,6 +47,7 @@ RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
 GEMINI_BIN="${AGENTSTACK_GEMINI_BIN:-agy}"
+INTERACTIVE_HELPER="$HOOKS_DIR/gemini_interactive.py"
 MODEL="${AGENTSTACK_GEMINI_MODEL:-gemini-3.8-flash-high}"
 EFFORT="${AGENTSTACK_GEMINI_EFFORT:-high}"
 PRINT_TIMEOUT="${AGENTSTACK_GEMINI_PRINT_TIMEOUT:-30m}"
@@ -292,7 +295,8 @@ agentstack_apply_workspace_context "$WORKTREE_DIR" "$PROJECT_KEY" || exit 1
 # this ignore rule in a child-owned file instead and inject it only into Git
 # processes descended from the Antigravity runner via GIT_CONFIG_COUNT.
 GIT_EXCLUDES_FILE="$RUNTIME_DIR/gemini-git-excludes-$CHILD_NAME"
-( umask 077 && printf '%s\n' '.agents/mcp_config.json' > "$GIT_EXCLUDES_FILE" )
+( umask 077 && printf '%s\n' '.agents/mcp_config.json' \
+  '.agents/rules/orrery-tool-refusals.md' > "$GIT_EXCLUDES_FILE" )
 
 if [[ -n "$RESOURCES" ]]; then
   mail_helper reserve --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
@@ -305,6 +309,7 @@ if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev
   exit 1
 fi
 mkdir -p "$WORKTREE_DIR/.agents"
+"$PYTHON_BIN" "$INTERACTIVE_HELPER" tool-refusal-rule "$WORKTREE_DIR"
 MCP_CONFIG="$WORKTREE_DIR/.agents/mcp_config.json"
 if [[ "$(uname -s)" == Darwin ]]; then
   "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" agy-config \
@@ -397,6 +402,7 @@ export PARENT_AGENT=$(printf '%q' "$PARENT_NAME")
 export AGENTSTACK_RESERVED_IDENTITY=1
 export AGENTSTACK_PROJECT_KEY=$(printf '%q' "$PROJECT_KEY")
 export AGENTSTACK_HOME=$(printf '%q' "$AGENTSTACK_HOME_DIR")
+export AGENTSTACK_CHILD_SANDBOX=$(printf '%q' "$CHILD_SANDBOX")
 export AGENTSTACK_HOOKS_DIR=$(printf '%q' "$HOOKS_DIR")
 export AGENTSTACK_RUNTIME_DIR=$(printf '%q' "$RUNTIME_DIR")
 export AGENTSTACK_MCP_URL=$(printf '%q' "$MCP_URL")
@@ -422,7 +428,8 @@ export GIT_CONFIG_COUNT="\$((git_config_count + 1))"
 
 set +e
 cat $(printf '%q' "$TASK_EVENT_FILE") | \
-  $(printf '%q' "$GEMINI_BIN") --input-format stream-json --output-format stream-json \
+  $(printf '%q' "$PYTHON_BIN") $(printf '%q' "$INTERACTIVE_HELPER") exec-headless \
+    $(printf '%q' "$GEMINI_BIN") --input-format stream-json --output-format stream-json \
     --model $(printf '%q' "$MODEL") --effort $(printf '%q' "$EFFORT") \
     --print-timeout $(printf '%q' "$PRINT_TIMEOUT") \
     2> >(tee $(printf '%q' "$STDERR_LOG") >&2) | \

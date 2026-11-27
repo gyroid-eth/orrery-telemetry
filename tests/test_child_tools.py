@@ -387,6 +387,29 @@ def test_codex_browser_read_only_through_the_screen_form():
     assert set(config["mcp_servers"]["chrome-devtools"]["enabled_tools"]) == set(table["read"])
 
 
+def test_codex_temporary_browser_works_with_noninteractive_approval(monkeypatch):
+    monkeypatch.setattr(child_tools.shutil, "which", lambda _name: "/fixture/npx")
+    config = {"approval_policy": "never", "mcp_servers": {"other": {"command": "/fixture/mcp"}}}
+    child_tools.codex_apply(config, _spec("mail-only", {"browser_mode": "temporary"}))
+    server = config["mcp_servers"]["chrome-devtools"]
+    assert "--isolated" in server["args"]
+    assert config["approval_policy"] == "never"
+    known = set(child_tools.TOOL_TABLE["chrome-devtools-mcp"]["1.10.1"]["all"])
+    assert set(server["enabled_tools"]) == set(server["tools"]) == known
+    assert all(tool["approval_mode"] == "approve" for tool in server["tools"].values())
+    assert "default_tools_approval_mode" not in server
+    assert "tools" not in config["mcp_servers"]["other"]
+
+
+@pytest.mark.parametrize("sandbox", [False, True])
+def test_claude_sandbox_setting_merges_with_the_native_screen_filter(sandbox):
+    flags = child_tools.claude_native_screen_flags(platform="darwin")
+    result = child_tools.claude_sandbox_flags(flags, sandbox=sandbox)
+    assert result.count("--settings") == 1
+    assert result[2:] == flags[2:]
+    assert json.loads(result[1]) == {**json.loads(flags[1]), "sandbox": {"enabled": sandbox}}
+
+
 def test_browser_read_cannot_approve_host_file_output_arguments():
     config = {"mcp_servers": {"chrome-devtools": dict(CHROME_DEVTOOLS)}}
     child_tools.codex_apply(config, _spec(None, {
@@ -715,18 +738,21 @@ def _inner(env) -> str:
 
 def _launched(extra: str = "") -> str:
     """The launch command with tool flags ``extra`` and the first prompt."""
+    args = shlex.split(extra)
+    chrome = bool(args and args[-1] == "--chrome")
+    if chrome:
+        args.pop()
+    settings = {"sandbox": {"enabled": False}}
     if sys.platform == "darwin":
-        settings = '{"deniedMcpServers":[{"serverName":"computer-use"}]}'
-        args = shlex.split(extra)
-        chrome = bool(args and args[-1] == "--chrome")
-        if chrome:
-            args.pop()
+        settings = {"deniedMcpServers": [{"serverName": "computer-use"}], **settings}
         if "--disallowed-tools" in args:
             index = args.index("--disallowed-tools") + 1
             args[index] = "mcp__computer-use," + args[index]
         else:
             args += ["--disallowed-tools", "mcp__computer-use"]
-        extra = " " + shlex.join(["--settings", settings, *args, *(["--chrome"] if chrome else [])])
+    settings_args = ["--settings", json.dumps(settings, separators=(",", ":"))]
+    args = [*settings_args, *args] if sys.platform == "darwin" else [*args, *settings_args]
+    extra = " " + shlex.join([*args, *(["--chrome"] if chrome else [])])
     return PRE_CHROME_INNER.replace(
         '"${MCP_ARGS[@]}";', '"${MCP_ARGS[@]}"' + extra + ARGV_PROMPT + ";")
 
@@ -735,7 +761,7 @@ def _no_launch(env) -> bool:
     return all(c[0] != "new-session" for c in _calls(env))
 
 
-def test_launcher_default_is_the_command_used_before(tmp_path):
+def test_launcher_default_disables_the_claude_sandbox(tmp_path):
     env, workdir = _env(tmp_path)
     result = _launch(tmp_path, env, workdir, "PlainChild")
     assert result.returncode == 0, result.stderr

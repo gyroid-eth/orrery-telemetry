@@ -22,6 +22,8 @@ AGENTSTACK_HOME_DIR="${AGENTSTACK_HOME:-$(cd "$HOOKS_DIR/.." && pwd)}"
 PROJECT_CONTEXT_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-context.sh"
 [[ -f "$PROJECT_CONTEXT_HELPER" ]] || PROJECT_CONTEXT_HELPER="$HOOKS_DIR/project-context.sh"
 . "$PROJECT_CONTEXT_HELPER" || { echo "$PROG: workspace context helper is unavailable" >&2; exit 1; }
+CHILD_SANDBOX="$(agentstack_resolve_setting AGENTSTACK_CHILD_SANDBOX \
+  "${AGENTSTACK_CHILD_SANDBOX:-}" off "$AGENTSTACK_HOME_DIR/env.sh")"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-${PROJECT_KEY:-}}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
@@ -441,7 +443,8 @@ if [[ "$STANDALONE" != true ]]; then
 # injected only into the Antigravity runner instead of mutating shared repo
 # metadata, so overlapping delegated children cannot remove each other's rule.
 GIT_EXCLUDES_FILE="$RUNTIME_DIR/gemini-git-excludes-$CHILD_NAME"
-( umask 077 && printf '%s\n' '.agents/mcp_config.json' '.agents/hooks.json' > "$GIT_EXCLUDES_FILE" )
+( umask 077 && printf '%s\n' '.agents/mcp_config.json' '.agents/hooks.json' \
+  '.agents/rules/orrery-tool-refusals.md' > "$GIT_EXCLUDES_FILE" )
 
 # The worktree is what the child sees; check it before reserving anything.
 RESOURCES="$(validate_resources "$WORKTREE_DIR")" || exit 2
@@ -456,6 +459,7 @@ if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev
 fi
 mkdir -p "$WORKTREE_DIR/.agents"
 if [[ "$INTERACTIVE" == 0 ]]; then
+"$PYTHON_BIN" "$INTERACTIVE_HELPER" tool-refusal-rule "$WORKTREE_DIR"
 MCP_CONFIG="$WORKTREE_DIR/.agents/mcp_config.json"
 AGS_GEMINI_MCP_PATH="$MCP_CONFIG" \
 AGS_GEMINI_MCP_COMMAND="$MCP_WRAPPER" \
@@ -533,6 +537,7 @@ export PARENT_AGENT=$(printf '%q' "$PARENT_AGENT")
 export AGENTSTACK_RESERVED_IDENTITY=1
 export AGENTSTACK_PROJECT_KEY=$(printf '%q' "$PROJECT_KEY")
 export AGENTSTACK_HOME=$(printf '%q' "$AGENTSTACK_HOME_DIR")
+export AGENTSTACK_CHILD_SANDBOX=$(printf '%q' "$CHILD_SANDBOX")
 export AGENTSTACK_HOOKS_DIR=$(printf '%q' "$HOOKS_DIR")
 export AGENTSTACK_RUNTIME_DIR=$(printf '%q' "$RUNTIME_DIR")
 export AGENTSTACK_WORKTREE_ROOT=$(printf '%q' "$WORKTREE_ROOT")
@@ -563,7 +568,8 @@ fi
 
 set +e
 cat $(printf '%q' "$TASK_EVENT_FILE") | \
-  $(printf '%q' "$GEMINI_BIN") --input-format stream-json --output-format stream-json \
+  $(printf '%q' "$PYTHON_BIN") $(printf '%q' "$INTERACTIVE_HELPER") exec-headless \
+    $(printf '%q' "$GEMINI_BIN") --input-format stream-json --output-format stream-json \
     --model $(printf '%q' "$MODEL") $EFFORT_OPTION \
     --print-timeout $(printf '%q' "$PRINT_TIMEOUT") \
     2> >(tee $(printf '%q' "$STDERR_LOG") >&2) | \
