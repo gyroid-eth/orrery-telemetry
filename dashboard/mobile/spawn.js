@@ -305,8 +305,11 @@
       browser.setAttribute('aria-disabled', String(!modes.length));
       const extra = next.launch_blocked ? 'Antigravity needs a parent agent and declared resources.'
         : !modes.length ? 'Browser modes are unavailable for this harness.' : '';
+      const limited = next.computer_use_transport === 'orrery-screen' && !modes.includes('temporary')
+        ? '. Install Google Chrome or Chromium and Node.js inside WSL to use Temporary Chrome.'
+        : '. Other modes need a compatible Chrome setup.';
       browser.title = extra || 'Browser: ' + browserLabels[browserMode]
-        + (modes.length < browserChoices.length ? '. Other modes need a compatible Chrome setup.' : '');
+        + (modes.length < browserChoices.length ? limited : '');
       browser.setAttribute('aria-label', browser.title);
       for (const [mode, button] of browserChoices) {
         button.hidden = !modes.includes(mode);

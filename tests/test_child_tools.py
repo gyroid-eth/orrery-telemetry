@@ -1164,6 +1164,8 @@ def test_user_service_finds_node_for_codex_and_linux_antigravity(tmp_path, monke
     monkeypatch.setenv("PATH", str(service_path))
     # WSL can expose Windows npm's shell script without a Linux Node.
     _executable(service_path / "npx", "#!/bin/sh\nexit 1\n")
+    linux_chrome = service_path / "google-chrome"
+    _executable(linux_chrome, "#!/bin/sh\nexit 0\n")
     nvm = tmp_path / ".nvm/versions/node"
     for version in ("v9.0.0", "v20.0.0", "v24.0.0"):
         directory = nvm / version / "bin"
@@ -1186,6 +1188,7 @@ def test_user_service_finds_node_for_codex_and_linux_antigravity(tmp_path, monke
         assert server["command"] == str(selected / "npx")
         assert server["env"]["PATH"].split(os.pathsep) == [str(selected), str(service_path)]
         assert "--isolated" in server["args"]
+        assert server["args"][server["args"].index("--executablePath") + 1] == str(linux_chrome)
 
 
 @pytest.mark.parametrize("platform", ["darwin", "linux"])
@@ -1206,7 +1209,7 @@ def test_antigravity_browser_catalog_handles_empty_login_config(tmp_path, monkey
         with pytest.raises(child_tools.ToolsError, match="Cannot check Antigravity"):
             child_tools.agy_validate_selection(spec)
     else:
-        assert modes == (["off", "temporary", "personal"] if platform == "darwin" else ["off", "temporary"])
+        assert modes == ["off", "temporary", "personal"]
         child_tools.agy_validate_selection(spec)
     assert config.read_text() == content
 
@@ -1216,6 +1219,22 @@ def test_api_preserves_explicit_screen_off_in_launcher_arguments():
     args, error = server._spawn_tools_args({"tools": tools}, "claude", False, "")
     assert error is None
     assert child_tools.normalize(tools=child_tools.parse_cli(list(args[1::2])))["tools"] == tools
+
+
+def test_wsl_node_without_linux_chrome_does_not_offer_temporary_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr(child_tools.sys, "platform", "linux")
+    monkeypatch.setattr(child_tools, "running_in_wsl", lambda: True)
+    monkeypatch.setattr(child_tools, "_browser_npx", lambda home=None: {"command": "/fixture/npx"})
+    monkeypatch.setattr(child_tools, "_windows_browser_npx", lambda: {
+        "command": "/fixture/node.exe",
+        "args": [r"C:\fixture\node_modules\npm\bin\npx-cli.js"],
+    })
+    monkeypatch.setattr(child_tools.shutil, "which", lambda name: "/fixture/chrome.exe" if name == "google-chrome" else None)
+    choices = child_tools.launch_browser_modes({}, home=tmp_path)
+    assert choices == {key: ["off", "personal"] for key in
+                       ("claude-code", "codex", "dsh", "hermes", "antigravity")}
+    with pytest.raises(child_tools.ToolsError, match="inside WSL"):
+        child_tools._browser_mcp("temporary")
 
 
 def test_wsl_personal_chrome_uses_windows_node_and_autoconnect(tmp_path, monkeypatch):

@@ -843,6 +843,19 @@ def _windows_browser_npx():
     raise ToolsError("My Chrome requires Windows Node.js with npm when running in WSL")
 
 
+def _temporary_browser_runtime(home=None):
+    runtime = _browser_npx(home)
+    if sys.platform != "linux" or not running_in_wsl():
+        return runtime, []
+    # Node runs in WSL for this mode. Pin a Linux executable so Puppeteer
+    # cannot choose a Windows browser and cross the WSL debugging boundary.
+    for name in ("google-chrome-stable", "google-chrome", "chromium", "chromium-browser"):
+        command = shutil.which(name)
+        if command and Path(command).resolve().suffix.lower() != ".exe":
+            return runtime, ["--executablePath", command]
+    raise ToolsError("Install Google Chrome or Chromium inside WSL to use Temporary Chrome")
+
+
 def _browser_mcp(mode, codex_config=None):
     if mode == "personal" and codex_config is not None:
         configured = _native_codex_browser(codex_config, explicit=True)
@@ -850,21 +863,24 @@ def _browser_mcp(mode, codex_config=None):
             if not _personal_chrome(configured[1]):
                 raise ToolsError("My Chrome requires Chrome DevTools with autoConnect")
             return configured
-    runtime = (_windows_browser_npx() if mode == "personal" and sys.platform == "linux" and running_in_wsl()
-               else _browser_npx())
-    switch = "--isolated" if mode == "temporary" else "--autoConnect"
-    args = [*runtime.get("args", ()), "-y", "chrome-devtools-mcp@latest", switch, "--no-usage-statistics"]
+    if mode == "temporary":
+        runtime, browser_args = _temporary_browser_runtime()
+        options = ["--isolated", *browser_args]
+    else:
+        runtime = (_windows_browser_npx() if sys.platform == "linux" and running_in_wsl() else _browser_npx())
+        options = ["--autoConnect"]
+    args = [*runtime.get("args", ()), "-y", "chrome-devtools-mcp@latest", *options, "--no-usage-statistics"]
     return "chrome-devtools", {**runtime, "args": args}
 
 
 def launch_browser_modes(codex_config, *, home=None):
     choices = {key: ["off"] for key in ("claude-code", "codex", "dsh", "hermes")}
     try:
-        _browser_npx(home)
+        _temporary_browser_runtime(home)
     except ToolsError:
-        have_npx = False
+        have_temporary = False
     else:
-        have_npx = True
+        have_temporary = True
         for modes in choices.values():
             modes.append("temporary")
     choices["claude-code"].append("personal")
@@ -887,7 +903,7 @@ def launch_browser_modes(codex_config, *, home=None):
             return choices
         if not _agy_managed_browser_conflict(inherited):
             choices["antigravity"] = ["off"]
-            if have_npx:
+            if have_temporary:
                 choices["antigravity"].append("temporary")
             try:
                 _browser_mcp("personal")
