@@ -27,6 +27,16 @@ def test_antigravity_model_only_footer_requires_the_framed_editor(lines, draft):
     assert frame(METADATA, lines, "%1").draft == draft
 
 
+def test_antigravity_accept_edits_hint_is_empty_at_the_starting_caret():
+    hint = "Accept-edits mode: file edits auto-approved (shift+tab to cycle)"
+    lines = [BORDER, f"> {hint}", BORDER, "accept-edits · Gemini 3.8 Flash (Low) · low"]
+    view = frame(METADATA, lines, "%1")
+    assert view.editor == "agy" and view.empty
+
+    caret_at_end = METADATA.replace("\t1\t0\t2\t", f"\t1\t0\t{len(lines[1])}\t")
+    assert frame(caret_at_end, lines, "%1").draft == hint
+
+
 HERMES_IDLE_HINT = "Ask anything, or type / for commands…"
 HERMES_BUSY_HINT = "msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel"
 
