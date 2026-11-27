@@ -2,14 +2,20 @@
 from functools import lru_cache
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
+import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 
 try:
-    from dashboard.http_operator import Admission
+    from dashboard.http_operator import Admission, AdmissionError, read_capability
+    from dashboard.wsl_anchor import interop_env
 except ModuleNotFoundError:
-    from http_operator import Admission
+    from http_operator import Admission, AdmissionError, read_capability
+    from wsl_anchor import interop_env
 
 
 OPERATOR = "/api/computer-use"
@@ -17,6 +23,7 @@ CHILD = OPERATOR + "/child"
 CHILD_EVENTS = CHILD + "/events"
 EVENTS = OPERATOR + "/events"
 PATHS = {OPERATOR, CHILD, CHILD_EVENTS, EVENTS}
+_probe_lock = threading.Lock()
 
 
 @lru_cache(maxsize=4)
@@ -28,6 +35,54 @@ def state_module(hooks_dir):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@lru_cache(maxsize=4)
+def _windows_driver_reason(hooks_dir, path, interop, distro, driver, interval):
+    state = state_module(hooks_dir)
+    try:
+        binary = state._python(None, deadline=time.monotonic() + 4)
+    except state.ScreenStateError:
+        return "The installed ORRERY Mail does not provide a working screen relay."
+    keys = ("SYSTEMROOT", "TMP", "TEMP", "HOME", "USER", "LOGNAME")
+    env = {key: os.environ[key] for key in keys if key in os.environ}
+    env.update(PATH=path, WSL_INTEROP=interop, WSL_DISTRO_NAME=distro)
+    if driver:
+        env["AGENTSTACK_CUA_DRIVER"] = driver
+    try:
+        # Include the stdio relay's termination grace after a handshake or call times out.
+        result = subprocess.run([binary, "-I", str(Path(__file__).with_name("screen_driver_probe.py"))],
+                                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=10)
+        if result.returncode == 0:
+            return ""
+        if result.returncode == 2:
+            return "Windows Cua Driver executable was not found or is not executable."
+        if result.returncode == 4:
+            return "Install the Windows Cua Driver version supported by ORRERY."
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "Windows Cua Driver did not answer. Check that its daemon is running."
+
+
+def wsl_launch_interop():
+    try:
+        return interop_env().get("WSL_INTEROP", "")
+    except OSError:
+        # An interop socket may disappear while the anchor enumerates them.
+        return os.environ.get("WSL_INTEROP", "")
+
+
+def wsl_computer_use_reason(home, hooks_dir):
+    try:
+        read_capability(home)
+    except AdmissionError:
+        return "Configure the ORRERY HTTP operator for Computer use."
+    path = os.pathsep.join((os.path.expanduser("~/.local/bin"), os.environ.get("PATH", ""))).rstrip(os.pathsep)
+    interop = wsl_launch_interop()
+    with _probe_lock:
+        return _windows_driver_reason(hooks_dir, path, interop, os.environ.get("WSL_DISTRO_NAME", ""),
+                                      os.environ.get("AGENTSTACK_CUA_DRIVER", ""), int(time.monotonic() // 15))
 
 
 def admit(handler, path, home):

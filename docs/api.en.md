@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":57}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":58}
 ```
 
 See [Installation](https://github.com/gyroid-eth/orrery/blob/master/docs/en/telemetry-install.md#version) for version resolution order.
@@ -216,6 +216,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 ## GET `/api/spawn-names`
 
 API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
+
+API 58 can return a `personal_browser_status` entry `{reason, unavailable}` per harness that uses Chrome DevTools MCP for My Chrome on macOS or WSL. `unavailable: true` means Chrome is stopped or its debugging endpoint is unreachable. The launch form then defaults to Temporary Chrome when offered and to Off otherwise.
 
 On macOS, the API 53 catalog lists `off`, `view`, and `control` in `computer_modes`. View uses `tools.screen.access: "read"` and Control uses `tools.screen.access: "operate"`. For Off, omit the screen selection from the explicit `tools` object. Mobile `/view/spawn` sends one of the modes as `computer` and still accepts the boolean from older clients. See `browser_modes.antigravity` for the available Antigravity browser modes.
 

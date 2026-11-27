@@ -76,7 +76,9 @@ def _catalog_choices(value):
         raise SpawnError('catalog_unavailable', 503)
     models = []
     browser_modes = value.get('browser_modes')
+    personal_browser_status = value.get('personal_browser_status')
     computer_modes = value.get('computer_modes')
+    managed_screen = value.get('computer_use_transport') == 'orrery-screen'
     for provider in value['providers']:
         if not isinstance(provider, dict) or not _text(provider.get('id'), 96):
             continue
@@ -114,8 +116,19 @@ def _catalog_choices(value):
                     modes = browser_modes.get(key)
                     routes[-1]['browser_modes'] = [mode for mode in _BROWSER_MODES
                                                     if isinstance(modes, list) and mode in modes]
+                if isinstance(personal_browser_status, dict):
+                    status = personal_browser_status.get(key)
+                    if isinstance(status, dict) and _text(status.get('reason'), 240):
+                        routes[-1]['personal_browser_status'] = {
+                            'reason': status['reason'], 'unavailable': status.get('unavailable') is True,
+                        }
                 if isinstance(computer_modes, list):
                     routes[-1]['computer_modes'] = [mode for mode in _COMPUTER_MODES if mode in computer_modes]
+                if managed_screen:
+                    routes[-1]['computer_use_transport'] = 'orrery-screen'
+                    reason = value.get('computer_use_reason')
+                    if value.get('computer_use') is not True:
+                        routes[-1]['computer_use_reason'] = reason if _text(reason, 160) else 'Computer use is unavailable.'
                 if antigravity:
                     if not isinstance(capabilities, dict) or capabilities.get('standalone') is not True:
                         routes[-1]['launch_blocked'] = True
@@ -163,10 +176,13 @@ def _options(model, route, directory, task, role, effort, computer, browser, con
     antigravity = route['key'] == 'antigravity'
     native = route['key'] in _NATIVE_HARNESSES
     browser = browser and (not native or directory.get('native_browser') is True)
-    mcp = ['cua-driver'] if computer is True else []
+    managed_screen = route.get('computer_use_transport') == 'orrery-screen'
+    mcp = ['cua-driver'] if computer is True and not managed_screen else []
     tools = {}
-    if computer in ('view', 'control'):
+    if computer in ('view', 'control') or computer is True and managed_screen:
         tools['screen'] = {'access': 'read' if computer == 'view' else 'operate'}
+        if managed_screen:
+            tools['screen']['server'] = 'orrery-screen'
     if browser_mode is not None:
         tools['browser_mode'] = browser_mode
     elif browser:
@@ -301,6 +317,7 @@ class MobileSpawn:
             if (route is None or route.get('launch_blocked') or (effort is None and route['effort_required'])
                     or (effort is not None and effort not in route['efforts'])
                     or (route['key'] == 'antigravity' and (computer is True or browser))
+                    or (route.get('computer_use_reason') and (computer is True or computer in ('view', 'control')))
                     or (type(computer) is not bool and computer not in route.get('computer_modes', ()))
                     or (mode is not None and mode not in route.get('browser_modes', ()))
                     or (not configurable and (role or computer or browser or mode is not None))):

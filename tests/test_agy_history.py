@@ -86,6 +86,28 @@ def test_new_launch_invalidates_the_old_receipt(launch):
     assert result["history_binding"] == "unbound" and result["transcript_path"] is None
 
 
+def test_first_task_is_exact_and_consumed_once_for_the_bound_invocation(launch):
+    runtime, _, _, nonce, _, payload = launch
+    folder = runtime / "agy-first-task-fixture"
+    folder.mkdir(mode=0o700)
+    task = "First line.\n\n次の行も最初の依頼です。\n"
+    original = folder / "payload"
+    original.write_text(task, encoding="utf-8")
+    original.chmod(0o600)
+    trigger = "Begin the ORRERY task fixture"
+    environment = {"AGENTSTACK_AGY_FIRST_TASK_TRIGGER": trigger, "AGENTSTACK_AGY_FIRST_TASK_DIR": str(folder)}
+    event = dict(payload, invocationNum=0, lastUserInput=trigger)
+    assert agy_history.first_task(runtime, NAME, nonce, dict(event, lastUserInput="other"), environment) is None
+    assert agy_history.first_task(runtime, NAME, nonce, dict(event, invocationNum=1), environment) is None
+    with pytest.raises(ValueError, match="does not match this launch"):
+        agy_history.first_task(runtime, NAME, "stale", event, environment)
+    assert original.is_file()
+    output, receipt = agy_history.first_task(runtime, NAME, nonce, event, environment)
+    assert output == {"injectSteps": [{"userMessage": task}]}
+    assert receipt == folder / "acknowledged"
+    assert agy_history.first_task(runtime, NAME, nonce, event, environment) is None
+
+
 def test_dashboard_binding_rejects_a_symlink_and_protected_mode(monkeypatch, launch):
     from dashboard import server
     runtime, generation, _, nonce, transcript, payload = launch
