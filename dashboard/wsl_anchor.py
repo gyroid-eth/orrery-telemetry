@@ -48,6 +48,7 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 
 TICK_SECONDS = 5.0
 # Nothing to hold for this long before letting the anchor go.
@@ -281,38 +282,108 @@ def hold(directory: pathlib.Path, nonce: str, poll: float = ANCHOR_POLL_SECONDS)
 # --------------------------------------------------------------------------- #
 # Starting the Windows client (from inside WSL, through interop).
 # --------------------------------------------------------------------------- #
-def _powershell() -> str | None:
-    found = shutil.which("powershell.exe")
+def _windows_system_program(relative_path: str) -> str | None:
+    found = shutil.which(os.path.basename(relative_path))
     if found:
         return found
     for root in ("/mnt/c", "/c"):
-        candidate = f"{root}/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+        candidate = f"{root}/Windows/System32/{relative_path}"
         if os.access(candidate, os.X_OK):
             return candidate
     return None
 
 
-def interop_env(run_dir: str = "/run/WSL") -> dict:
-    """Environment whose WSL_INTEROP points at a live interop socket.
+def _powershell() -> str | None:
+    return _windows_system_program("WindowsPowerShell/v1.0/powershell.exe")
 
-    A background process inherits WSL_INTEROP from the shell that started it,
-    and that socket goes away with the shell's window. Running a Windows
-    program then fails, although other sessions (the anchor's own among them)
-    still have working sockets. Prefer the inherited one while it exists,
-    else the newest one present.
-    """
-    env = dict(os.environ)
-    current = env.get("WSL_INTEROP", "")
-    if current and os.path.exists(current):
-        return env
+
+class InteropUnavailable(OSError):
+    """No candidate completed a Windows command."""
+
+
+INTEROP_PROBE_SECONDS = 1.5
+INTEROP_CACHE_SECONDS = 120.0
+INTEROP_RETRY_SECONDS = 5.0
+_interop_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class _InteropSelection:
+    source: tuple[str, str]
+    expires_at: float
+    path: str = ""
+    identity: tuple[int, int, int] | None = None
+    error: str = ""
+
+
+_interop_selection: _InteropSelection | None = None
+
+
+def _socket_stat(path: str):
     try:
-        candidates = [os.path.join(run_dir, name) for name in os.listdir(run_dir) if name.endswith("_interop")]
+        return os.stat(path)
     except OSError:
+        # A WSL client can close while the candidates are being enumerated.
+        return None
+
+
+def _socket_identity(info):
+    return (info.st_dev, info.st_ino, info.st_ctime_ns) if info else None
+
+
+def invalidate_interop(path: str) -> None:
+    """A failed Windows operation must not leave its socket cached."""
+    global _interop_selection
+    with _interop_lock:
+        if _interop_selection is not None and path and _interop_selection.path == path:
+            _interop_selection = None
+
+
+def _probe_interop(run_dir: str, inherited: str, env: dict) -> _InteropSelection:
+    source = (run_dir, inherited)
+    cmd = _windows_system_program("cmd.exe")
+    if not cmd:
+        return _InteropSelection(source, time.monotonic() + INTEROP_RETRY_SECONDS,
+                                 error="cmd.exe is not reachable from WSL.")
+    try:
+        candidates = {os.path.join(run_dir, name) for name in os.listdir(run_dir)
+                      if name.endswith("_interop")}
+    except OSError:
+        candidates = set()
+    if inherited:
+        candidates.add(inherited)
+    live = [(info.st_mtime_ns, path, _socket_identity(info))
+            for path in candidates if (info := _socket_stat(path)) is not None]
+    for _, path, identity in sorted(live, reverse=True):
+        try:
+            result = subprocess.run(
+                [cmd, "/d", "/c", "exit"], cwd="/", env={**env, "WSL_INTEROP": path},
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=INTEROP_PROBE_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0 and _socket_identity(_socket_stat(path)) == identity:
+            return _InteropSelection(source, time.monotonic() + INTEROP_CACHE_SECONDS, path, identity)
+    return _InteropSelection(source, time.monotonic() + INTEROP_RETRY_SECONDS,
+                             error="No usable Windows interop socket. Open a WSL terminal and try again.")
+
+
+def interop_env(run_dir: str = "/run/WSL") -> dict:
+    """Select the newest socket that can launch a Windows process."""
+    global _interop_selection
+    env = dict(os.environ)
+    inherited = env.get("WSL_INTEROP", "")
+    with _interop_lock:
+        selected = _interop_selection
+        if (selected is None or selected.source != (run_dir, inherited)
+                or time.monotonic() >= selected.expires_at
+                or (selected.path and _socket_identity(_socket_stat(selected.path)) != selected.identity)):
+            selected = _interop_selection = _probe_interop(run_dir, inherited, env)
+        if selected.error:
+            raise InteropUnavailable(selected.error)
+        env["WSL_INTEROP"] = selected.path
         return env
-    live = [path for path in candidates if os.path.exists(path)]
-    if live:
-        env["WSL_INTEROP"] = max(live, key=lambda path: os.stat(path).st_mtime)
-    return env
 
 
 def start_script(distro: str, argv: list[str]) -> str:
@@ -357,20 +428,29 @@ def start_windows_client(distro: str, argv: list[str], timeout: float = WINDOWS_
         return None, "powershell.exe is not reachable (Windows interop off?)"
     encoded = base64.b64encode(start_script(distro, argv).encode("utf-16-le")).decode("ascii")
     try:
+        env = interop_env()
+    except InteropUnavailable as exc:
+        return None, str(exc)
+    interop = env.get("WSL_INTEROP", "")
+    try:
         result = subprocess.run(
             [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-            cwd="/", capture_output=True, timeout=timeout, env=interop_env(),
+            cwd="/", capture_output=True, timeout=timeout, env=env,
         )
     except subprocess.TimeoutExpired as exc:
         # PowerShell or the interop bridge can linger after WMI succeeds.
         # Keep the PID if it was already written to the pipe.
         pid = _windows_client_pid(exc.stdout or b"")
+        if pid is None:
+            invalidate_interop(interop)
         return (pid, "") if pid else (None, f"powershell.exe printed no PID within {timeout:g}s")
     except OSError as exc:
+        invalidate_interop(interop)
         return None, f"powershell.exe failed: {exc}"
     pid = _windows_client_pid(result.stdout)
     if pid is not None:
         return pid, ""
+    invalidate_interop(interop)
     out = result.stdout.decode("utf-8", errors="replace").strip()
     if result.returncode != 0:
         err = result.stderr.decode("utf-8", errors="replace").strip().splitlines()

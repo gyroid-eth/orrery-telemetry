@@ -3647,8 +3647,15 @@ def _open_terminal_tmux(tmux_args: list[str], title: str) -> dict:
                 "wt.exe", "-w", "0", "new-tab", "--title", title,
                 "wsl.exe", "-d", _wsl_distro(), "--exec", "bash", script,
             ]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=8,
-                               env=_wsl_anchor_module().interop_env())
+            anchor = _wsl_anchor_module()
+            env = anchor.interop_env()
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=8, env=env)
+            except (OSError, subprocess.TimeoutExpired):
+                anchor.invalidate_interop(env.get("WSL_INTEROP", ""))
+                raise
+            if r.returncode != 0:
+                anchor.invalidate_interop(env.get("WSL_INTEROP", ""))
         else:
             shell_cmd = _shell_join(
                 ["env", "-u", "TMUX", "-u", "TMUX_PANE"] + tmux_args
@@ -10909,6 +10916,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     env.update(_spawn_env_overrides(payload, spec))
     if _is_wsl() and {"screen:read:orrery-screen", "screen:operate:orrery-screen", "browser-mode:personal"}.intersection(
             spec.provider_args):
+        env.pop("WSL_INTEROP", None)
         if interop := _screen_http().wsl_launch_interop():
             env["WSL_INTEROP"] = interop
     # A dashboard request states Claude in Chrome explicitly (spec.provider_args);
@@ -12505,10 +12513,12 @@ def _start_child_resume_maintenance() -> None:
 
 
 def _wsl_anchor_module():
-    if HERE not in sys.path:
-        sys.path.insert(0, HERE)
-    import wsl_anchor  # noqa: PLC0415
-
+    try:
+        from dashboard import wsl_anchor
+    except ModuleNotFoundError:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import wsl_anchor
     return wsl_anchor
 
 

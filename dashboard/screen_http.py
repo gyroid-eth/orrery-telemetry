@@ -12,10 +12,10 @@ from urllib.parse import parse_qs, urlsplit
 
 try:
     from dashboard.http_operator import Admission, AdmissionError, read_capability
-    from dashboard.wsl_anchor import interop_env
+    from dashboard.wsl_anchor import interop_env, invalidate_interop
 except ModuleNotFoundError:
     from http_operator import Admission, AdmissionError, read_capability
-    from wsl_anchor import interop_env
+    from wsl_anchor import interop_env, invalidate_interop
 
 
 OPERATOR = "/api/computer-use"
@@ -24,6 +24,7 @@ CHILD_EVENTS = CHILD + "/events"
 EVENTS = OPERATOR + "/events"
 PATHS = {OPERATOR, CHILD, CHILD_EVENTS, EVENTS}
 _probe_lock = threading.Lock()
+_WINDOWS_NO_ANSWER = "Windows Cua Driver did not answer. Check that its daemon is running."
 
 
 @lru_cache(maxsize=4)
@@ -62,15 +63,15 @@ def _windows_driver_reason(hooks_dir, path, interop, distro, driver, interval):
             return "Install the Windows Cua Driver version supported by ORRERY."
     except (OSError, subprocess.TimeoutExpired):
         pass
-    return "Windows Cua Driver did not answer. Check that its daemon is running."
+    invalidate_interop(interop)
+    return _WINDOWS_NO_ANSWER
 
 
 def wsl_launch_interop():
     try:
         return interop_env().get("WSL_INTEROP", "")
     except OSError:
-        # An interop socket may disappear while the anchor enumerates them.
-        return os.environ.get("WSL_INTEROP", "")
+        return ""
 
 
 def wsl_computer_use_reason(home, hooks_dir):
@@ -80,9 +81,18 @@ def wsl_computer_use_reason(home, hooks_dir):
         return "Configure the ORRERY HTTP operator for Computer use."
     path = os.pathsep.join((os.path.expanduser("~/.local/bin"), os.environ.get("PATH", ""))).rstrip(os.pathsep)
     interop = wsl_launch_interop()
+    if not interop:
+        return _WINDOWS_NO_ANSWER
+    distro = os.environ.get("WSL_DISTRO_NAME", "")
+    driver = os.environ.get("AGENTSTACK_CUA_DRIVER", "")
     with _probe_lock:
-        return _windows_driver_reason(hooks_dir, path, interop, os.environ.get("WSL_DISTRO_NAME", ""),
-                                      os.environ.get("AGENTSTACK_CUA_DRIVER", ""), int(time.monotonic() // 15))
+        reason = _windows_driver_reason(hooks_dir, path, interop, distro, driver, int(time.monotonic() // 15))
+        if reason == _WINDOWS_NO_ANSWER:
+            replacement = wsl_launch_interop()
+            if replacement and replacement != interop:
+                return _windows_driver_reason(hooks_dir, path, replacement, distro, driver,
+                                              int(time.monotonic() // 15))
+        return reason
 
 
 def admit(handler, path, home):
