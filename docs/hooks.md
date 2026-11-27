@@ -40,6 +40,7 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 
 - **発火:** `SessionStart`。さらに `mark-agent-registered.sh` が現在 session 自身の canonical name を取得した後にも background で呼びます。
 - **動作:** `AGENT_NAME` または引数を使い、`TMUX_PANE` ごとの identity metadata を runtime directory へ書きます。tmux rename は `pending-*` session にだけ許し、確立済みの親 session を child 名で上書きしません。
+- **再起動後:** 名前の記録は socket ごとに保存し、サーバーの PID と起動時刻を照合します。同じ pane 番号を次に確認するときに、以前のサーバーの記録を片付けます。旧形式の記録も更新時刻が現行サーバーの起動より前なら片付けます。
 - **衝突時:** 同名 tmux session を kill せず、rename を拒否して fail-closed にします。名前が未解決なら何もしません。
 
 ### `session-start-reminder.sh`

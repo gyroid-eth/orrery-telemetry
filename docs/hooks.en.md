@@ -35,6 +35,7 @@ The installer distributes the endpoint and transport credential selector in the 
 
 - **Trigger:** `SessionStart`. It is also called in the background after `mark-agent-registered.sh` obtains the current session's own canonical name.
 - **Behavior:** Uses `AGENT_NAME` or an argument and writes identity metadata for each `TMUX_PANE` to the runtime directory. tmux rename is allowed only for `pending-*` sessions, so an established parent session is not overwritten with a child name.
+- **After a restart:** Each socket has its own pane-name records. The hooks verify the server PID and start time and discard records from the previous server when they next check the same pane number. Older unscoped records are also discarded when their modification time predates the current server.
 - **On collision:** Does not kill a same-name tmux session; it refuses the rename and fails closed. If the name cannot be resolved, it does nothing.
 
 ### `session-start-reminder.sh`
