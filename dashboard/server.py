@@ -35,6 +35,7 @@ import asyncio
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -9895,6 +9896,7 @@ def spawn_launch_status(name: str) -> dict:
         "error": result.get("error"),
         "detail": result.get("detail"),
         "result": result if entry["state"] != "launching" else None,
+        **({"phase": result["phase"]} if result.get("phase") else {}),
     }
 
 
@@ -9948,6 +9950,9 @@ class SpawnLaunchSpec:
 
 # How long a launcher may take to report readiness before it is signalled.
 _SPAWN_READINESS_TIMEOUT_SECONDS = 120
+# A checkout can spend minutes materializing a large tree before a CLI starts.
+_SPAWN_WORKTREE_TIMEOUT_SECONDS = 900
+_SPAWN_PHASE_POLL_SECONDS = 0.25
 # Canonical Claude/Codex launchers have no cleanup of their own: TERM, then
 # KILL shortly after.
 _SPAWN_TERMINATE_GRACE_SECONDS = 5.0
@@ -9977,7 +9982,7 @@ def _spawn_termination_grace(spec: SpawnLaunchSpec) -> float:
     return _SPAWN_TERMINATE_GRACE_SECONDS
 
 
-def _spawn_verdict_deadline_seconds(spec: SpawnLaunchSpec) -> int:
+def _spawn_verdict_deadline_seconds(spec: SpawnLaunchSpec, *, worktree: bool = False) -> int:
     """Seconds the page should wait for an asynchronous launch verdict.
 
     Derived only from server constants and the trusted spec: readiness timeout,
@@ -9987,7 +9992,41 @@ def _spawn_verdict_deadline_seconds(spec: SpawnLaunchSpec) -> int:
     worst = (_SPAWN_READINESS_TIMEOUT_SECONDS + _spawn_termination_grace(spec)
              + _SPAWN_KILL_REAP_SECONDS + _SPAWN_FAILURE_CLEANUP_SECONDS
              + _SPAWN_WATCH_MARGIN_SECONDS)
+    if worktree:
+        worst += _SPAWN_WORKTREE_TIMEOUT_SECONDS + _SPAWN_READINESS_TIMEOUT_SECONDS
     return max(_SPAWN_DEFAULT_WATCH_SECONDS, math.ceil(worst))
+
+
+def _wait_spawn_with_checkout(proc, phase_file: Path, set_phase):
+    """Pause CLI readiness while git is checking out the worktree."""
+    stage = None
+    deadline = time.monotonic() + _SPAWN_READINESS_TIMEOUT_SECONDS
+
+    def observe():
+        nonlocal stage, deadline
+        try:
+            observed = phase_file.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            return
+        if ((observed == "checkout" and stage is None)
+                or (observed == "startup" and stage != "startup")):
+            stage = observed
+            seconds = (_SPAWN_WORKTREE_TIMEOUT_SECONDS if stage == "checkout"
+                       else _SPAWN_READINESS_TIMEOUT_SECONDS)
+            deadline = time.monotonic() + seconds
+            set_phase(stage)
+
+    while True:
+        observe()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("spawn launcher", 0)
+        try:
+            code = proc.wait(timeout=min(remaining, _SPAWN_PHASE_POLL_SECONDS))
+        except subprocess.TimeoutExpired:
+            continue
+        observe()
+        return code
 
 
 # Credential states that are a copy interrupted midway (or never started) and
@@ -10450,7 +10489,7 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
     def discard_handoff() -> None:
         if payload.get("dry_run") is True or handoff.get('cleanup_unknown'):
             return
-        for path in spec.handoff_paths:
+        for path in (*spec.handoff_paths, *handoff.get("phase_paths", ())):
             try:
                 os.unlink(path)
             except FileNotFoundError:
@@ -10945,7 +10984,17 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     current_path = env.get("PATH", "")
     if home_local not in current_path.split(":"):
         env["PATH"] = f"{home_local}:{current_path}" if current_path else home_local
+    env.pop("AGENTSTACK_SPAWN_PHASE_FILE", None)
+    phase_file = None
+    phase = None
+    pending = None
     try:
+        if worktree:
+            fd, phase_path = tempfile.mkstemp(prefix="checkout-", dir=token_dir)
+            os.close(fd)
+            phase_file = Path(phase_path)
+            handoff["phase_paths"] = [phase_path]
+            env["AGENTSTACK_SPAWN_PHASE_FILE"] = phase_path
         log_dir = os.path.join(HERE, "logs")
         os.makedirs(log_dir, exist_ok=True)
         log_fh = open(os.path.join(log_dir, "spawn.log"), "ab", buffering=0)
@@ -10964,8 +11013,8 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         # The launcher performs readiness/death detection and consumes the
         # one-shot token before returning.  Wait for that verdict instead of
         # treating a briefly-created tmux session as success.
-        def signal_launcher(signum: int) -> None:
-            if spec.signal_process_group:
+        def signal_launcher(signum: int, *, process_group: bool) -> None:
+            if process_group:
                 # start_new_session made the launcher its group leader, so the
                 # group also reaches whichever helper it is waiting on.
                 os.killpg(proc.pid, signum)
@@ -10976,16 +11025,16 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
 
         grace = _spawn_termination_grace(spec)
 
-        def stop_launcher() -> bool:
+        def stop_launcher(*, process_group: bool) -> bool:
             """TERM the launcher; True when it exited within its grace."""
             try:
-                signal_launcher(signal.SIGTERM)
+                signal_launcher(signal.SIGTERM, process_group=process_group)
                 proc.wait(timeout=grace)
                 return True
             except Exception:  # noqa: BLE001
                 pass
             try:
-                signal_launcher(signal.SIGKILL)
+                signal_launcher(signal.SIGKILL, process_group=process_group)
             except Exception:  # noqa: BLE001
                 pass
             try:
@@ -10994,18 +11043,29 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                 pass
             return False
 
+        def set_phase(value):
+            nonlocal phase
+            phase = value
+            if pending is not None:
+                _spawn_launch_record(child_name, {**pending, "phase": value})
+
         def settle() -> dict:
             if hasattr(proc, "wait"):
                 try:
-                    returncode = proc.wait(timeout=_SPAWN_READINESS_TIMEOUT_SECONDS)
+                    returncode = (_wait_spawn_with_checkout(proc, phase_file, set_phase) if phase_file
+                                  else proc.wait(timeout=_SPAWN_READINESS_TIMEOUT_SECONDS))
                 except subprocess.TimeoutExpired:
-                    stopped = stop_launcher()
+                    process_group = spec.signal_process_group or phase == "checkout"
+                    stopped = stop_launcher(process_group=process_group)
                     kill_spawn_session()
-                    error = ("spawn launcher did not finish readiness checks "
-                             f"within {_SPAWN_READINESS_TIMEOUT_SECONDS:g}s")
-                    if stopped or not spec.signal_process_group:
+                    if phase == "checkout":
+                        error = f"worktree checkout did not finish within {_SPAWN_WORKTREE_TIMEOUT_SECONDS:g}s"
+                    else:
+                        error = ("spawn launcher did not finish readiness checks "
+                                 f"within {_SPAWN_READINESS_TIMEOUT_SECONDS:g}s")
+                    if stopped or not process_group:
                         return failed_spawn_result(
-                            error, registration_may_remain=spec.signal_process_group)
+                            error, registration_may_remain=process_group)
                     # The launcher's own cleanup was killed midway, so nothing
                     # it created is known to be gone.  Say so, and keep a
                     # credential that can still release and retire it.
@@ -11019,7 +11079,8 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                 if returncode != 0:
                     kill_spawn_session()
                     tail, reason = _spawn_log_tail_and_reason(log_path, log_start_offset)
-                    error = f"spawn launcher exited with status {returncode}"
+                    action = "worktree checkout" if phase == "checkout" else "spawn launcher"
+                    error = f"{action} exited with status {returncode}"
                     return failed_spawn_result(
                         f"{reason} ({error})" if reason else error,
                         detail=tail)
@@ -11068,7 +11129,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                 "effort": effort or None,
                 # How long the page waits for the verdict; from the spec and
                 # server constants only, never from the payload.
-                "verdict_deadline_seconds": _spawn_verdict_deadline_seconds(spec),
+                "verdict_deadline_seconds": _spawn_verdict_deadline_seconds(spec, worktree=worktree),
             }
             _spawn_launch_record(child_name, pending)
             owned_log = log_fh

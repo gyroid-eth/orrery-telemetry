@@ -1348,6 +1348,38 @@ def test_killed_cleanup_without_a_usable_copy_says_so(monkeypatch, tmp_path):
     assert list((runtime / "spawn-tokens").iterdir()) == []
 
 
+@pytest.mark.parametrize("failure_stage", [None, "checkout", "startup"])
+def test_worktree_checkout_does_not_consume_cli_readiness(monkeypatch, tmp_path, failure_stage):
+    import types
+
+    phase_file = tmp_path / "phase"
+    phase_file.write_text("checkout\n")
+    now = 0.0
+    phases = []
+    monkeypatch.setattr(server, "time", types.SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(server, "_SPAWN_READINESS_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(server, "_SPAWN_WORKTREE_TIMEOUT_SECONDS", 8)
+
+    class Launcher:
+        def wait(self, *, timeout):
+            nonlocal now
+            now += timeout
+            if now >= 5 and failure_stage != "checkout":
+                phase_file.write_text("startup\n")
+            if now >= 6 and failure_stage is None:
+                return 0
+            raise subprocess.TimeoutExpired("fixture", timeout)
+
+    if failure_stage is None:
+        assert server._wait_spawn_with_checkout(Launcher(), phase_file, phases.append) == 0
+        assert phases == ["checkout", "startup"] and now == 6
+    else:
+        with pytest.raises(subprocess.TimeoutExpired):
+            server._wait_spawn_with_checkout(Launcher(), phase_file, phases.append)
+        assert phases[-1] == failure_stage
+        assert now == (8 if failure_stage == "checkout" else 7)
+
+
 def test_async_killed_cleanup_reports_recovery_credential_via_spawn_status(monkeypatch, tmp_path):
     launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path, _KILLED_CLEANUP_LAUNCHER)
     spec = _killed_cleanup_spec(launcher, tmp_path, "before-copy")

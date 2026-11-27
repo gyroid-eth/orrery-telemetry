@@ -38748,6 +38748,7 @@ function spawnWatchLimitMs(pending){
 // Poll the background verdict of an async spawn and report it as a toast.
 async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS,wslWarning=''){
   const started=Date.now();
+  let phase=null;
   while(Date.now()-started<limitMs){
     await new Promise(r=>setTimeout(r,2000));
     let j=null;
@@ -38755,6 +38756,11 @@ async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS,wslWarni
       const r=await fetch('/api/spawn-status?name='+encodeURIComponent(name),{cache:'no-store'});
       j=await r.json();
     }catch(e){continue;}
+    if(j?.state==='launching'&&j.phase&&j.phase!==phase){
+      phase=j.phase;
+      if(phase==='checkout')toast('▸ CHECKING OUT WORKTREE','> '+name,false,8000);
+      else if(phase==='startup')toast('▸ STARTING','> '+name,false);
+    }
     if(!j||!j.ok||j.state==='launching')continue;
     if(j.state==='ready'){
       clearSpawnTaskDraft(dir);
