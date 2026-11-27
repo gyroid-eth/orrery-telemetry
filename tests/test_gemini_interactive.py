@@ -1,4 +1,4 @@
-"""Managed macOS Antigravity child handoff, permissions, roster and resume."""
+"""Managed Antigravity child handoff, permissions, roster and resume."""
 
 import json
 import subprocess
@@ -781,9 +781,14 @@ def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch, standalone):
 
 
 @pytest.mark.parametrize("standalone", [True, False], ids=["standalone", "delegated"])
-@pytest.mark.parametrize("change", [{"computer_use": "view"}, {"browser_mode": "temporary"}])
+@pytest.mark.parametrize("host,change", [
+    pytest.param("mac", {"computer_use": "view"}, id="mac-view"),
+    pytest.param("mac", {"browser_mode": "temporary"}, id="mac-temp"),
+    pytest.param("wsl", {"computer_use": "view"}, id="wsl-view"),
+    pytest.param("wsl", {"browser_mode": "personal"}, id="wsl-personal"),
+])
 def test_permission_restart_uses_bound_conversation_and_projects_only_selected_tools(
-        managed, monkeypatch, standalone, change):
+        managed, monkeypatch, standalone, host, change):
     runtime, cwd, state = managed
     state_path = child_resume._paths(runtime, NAME)[0]
     mcp_path = cwd / ".agents/mcp_config.json"
@@ -814,6 +819,16 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     monkeypatch.setattr(server, "_persistent_profiles", lambda: {})
     monkeypatch.setattr(server, "_mcp_tool_parameters", lambda _: {"existing_agent_id"})
     monkeypatch.setattr(agy, "saved_conversation", lambda *args: SID)
+    if host == "wsl":
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(server, "_is_wsl", lambda: True)
+        monkeypatch.setattr(server, "_spawn_computer_catalog", lambda: {"computer_use": True})
+        monkeypatch.setattr(server, "_screen_http", lambda: SimpleNamespace(
+            wsl_launch_interop=lambda: "/run/WSL/fixture"))
+        monkeypatch.setattr(agy.child_tools, "_windows_browser_npx", lambda: {
+            "command": "/mnt/c/fixture/node.exe", "args": [r"C:\fixture\npx-cli.js"]})
+        monkeypatch.setenv("WSL_DISTRO_NAME", "FixtureWSL")
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/fixture")
     live = {"session_id": "$8", "created": 1000, "server_pid": 123, "tmux_pid": 123}
     monkeypatch.setattr(server, "tmux_state", lambda: {NAME: live})
     monkeypatch.setattr(server, "_child_session_live", lambda *args: True)
@@ -860,9 +875,15 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
         if "computer_use" in change:
             assert set(servers) == {"orrery-mail", "orrery-screen"}
             assert grants == [f"mcp(orrery-screen/{tool})" for tool in screen_state.VIEW_TOOLS]
+            if host == "wsl":
+                assert servers["orrery-screen"]["env"]["WSL_INTEROP"] == "/run/WSL/fixture"
         else:
             assert set(servers) == {"orrery-mail", "chrome-devtools"}
-            assert "--isolated" in servers["chrome-devtools"]["args"]
+            browser = servers["chrome-devtools"]
+            if host == "wsl":
+                assert browser["command"] == "/mnt/c/fixture/node.exe" and "--autoConnect" in browser["args"]
+            else:
+                assert "--isolated" in browser["args"]
             assert grants == []
         observed.append(argv[-1])
         return SimpleNamespace(returncode=0)
@@ -870,6 +891,8 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     def launch(argv, **kwargs):
         assert kwargs["include_identity"] and f"--conversation {SID}" in argv[-1]
         assert any(arg.startswith("AGENTSTACK_TOOLS_CHANGE_GENERATION=") for arg in argv)
+        if host == "wsl":
+            assert "WSL_INTEROP=/run/WSL/fixture" in argv
         assert agy.run(runtime, NAME, conversation=SID) == 0
         child_resume._atomic_json(runtime / "child-agents" / f"{NAME}.agy-status.json",
                                   {"tmux": IDENTITY, "activity": "wait"})

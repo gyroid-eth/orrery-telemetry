@@ -5782,7 +5782,7 @@ def _gemini_resume_material(session, *, live=None):
     runtime = Path(RUNTIME_DIR)
     helper = Path(HOOKS_DIR) / "gemini_interactive.py"
     registration = _resume_registration(session, {"antigravity"})
-    if sys.platform != "darwin" or not registration or not helper.is_file():
+    if not (sys.platform == "darwin" or _is_wsl()) or not registration or not helper.is_file():
         raise _ResumeCapabilityError("unsupported_provider", "Managed Antigravity resume is unavailable")
     try:
         state = module.inspect_retained(runtime, session, agent_id=registration["agent_id"],
@@ -8499,8 +8499,8 @@ def _permission_resume_material(session, sid, *, live=None):
     directory = runtime / "child-agents"
     module = _child_resume_module()
     if program == "antigravity":
-        if sys.platform != "darwin":
-            raise ValueError("Managed Antigravity permissions require macOS")
+        if not (sys.platform == "darwin" or _is_wsl()):
+            raise ValueError("Managed Antigravity permissions require macOS or WSL")
         if not os.path.lexists(directory / f"{session}.json"):
             registration = _resume_registration(session, {"antigravity"})
             if registration is None or registration["program"] != program:
