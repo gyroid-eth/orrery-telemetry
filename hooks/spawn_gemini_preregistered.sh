@@ -492,7 +492,9 @@ prefix = (
     "If a declared resource is absent from this worktree, report that exact failure instead of searching elsewhere. "
     "Any matching path mentioned in the canonical task refers to the worktree-anchored path below. "
     "Do not register another ORRERY identity. "
-    + (f"Report to {parent} using the ORRERY Mail MCP send_message tool, then stay available for follow-up Mail. "
+    + (f"Report to {parent} using the ORRERY Mail MCP send_message tool. "
+       "After sending your completion report or a question that blocks your work, end your turn and keep the session open. "
+       "Replies arrive as ORRERY Mail notifications. Do not wait in a sleep loop. "
        "Use the native file edit tools and hold a file reservation for every edit. "
        "After a resume, obtain any needed reservations again.\n"
        if interactive == "1" else "The launcher will report your final result to the parent automatically.\n")

@@ -234,7 +234,7 @@ Codex plugin の対象 hook だけを承認する API と未確認時の `/hooks
 
 明示的な隔離起動・配送と operator の復旧は [global delivery client](global-delivery-client.md) を参照してください。既定は旧 mode のままです。
 
-SessionStart は旧 block の件数だけを案内します。bare session の Mail 登録は行わず、編集 guard の方針は保持します。 [Details](https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md#legacy-blocks).
+ORRERY に参加する Claude Code の SessionStart は、指示ファイルの移行で確認が必要なファイル、警告の種類、利用者が行う確認手順を表示します。bare session の Mail 登録は行わず、編集 guard の方針は保持します。[指示ファイルの移行](https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md#legacy-blocks)
 
 ## ローカルモデルの鍵をagentのshellから読まない
 
