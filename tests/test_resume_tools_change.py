@@ -181,6 +181,7 @@ def test_restart_with_computer_off_reports_off_on_linux(stopped, monkeypatch):
 @pytest.mark.parametrize("mode", ["off", "temporary", "personal"])
 def test_permission_resumes_same_conversation_with_explicit_browser_mode(stopped, monkeypatch, mode):
     _, record, provider, _ = stopped
+    monkeypatch.setattr(server.chrome_readiness, "personal_browser_reason", lambda **_: ("", False))
     monkeypatch.setattr(child_tools.shutil, "which", lambda name: "/usr/bin/npx" if name == "npx" else None)
     screen = {"server": "orrery-screen", "access": "read"}
     old = {"screen": screen, "mcp": ["reader"], "browser_mode": "off" if mode == "personal" else "temporary"}
@@ -203,6 +204,25 @@ def test_permission_resumes_same_conversation_with_explicit_browser_mode(stopped
     if provider == "claude":
         assert saved["claude_chrome"] is (mode == "personal")
         assert saved.get("browser_disabled", False) is (mode == "off")
+
+
+@pytest.mark.parametrize("wsl", [False, True], ids=["mac", "wsl"])
+def test_my_chrome_preflight_reports_debugging_before_a_codex_restart(stopped, monkeypatch, wsl):
+    _, record, provider, _ = stopped
+    if provider != "codex":
+        pytest.skip("Claude's personal mode uses its own extension")
+    monkeypatch.setattr(sys, "platform", "linux" if wsl else "darwin")
+    monkeypatch.setattr(server, "_is_wsl", lambda: wsl)
+    monkeypatch.setattr(server.chrome_readiness, "_mac_state", lambda: "debugging")
+    monkeypatch.setattr(server.chrome_readiness, "_windows_state", lambda: "debugging")
+    monkeypatch.setattr(server, "do_resume", lambda *a, **k: pytest.fail("must leave the tools in place"))
+    baseline = record.read_bytes()
+    request = {"history_session_id": SID, "browser_mode": "personal"}
+    result = server.do_jump(NAME, permission=request, check_only=True)
+    assert not result["ok"]
+    assert ("Windows" if wsl else "this Mac") in result["error"]
+    assert "chrome://inspect/#remote-debugging" in result["error"]
+    assert record.read_bytes() == baseline
 
 
 def test_claude_explicit_browser_off_survives_a_computer_change(stopped, monkeypatch):

@@ -819,6 +819,7 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     monkeypatch.setattr(server, "_persistent_profiles", lambda: {})
     monkeypatch.setattr(server, "_mcp_tool_parameters", lambda _: {"existing_agent_id"})
     monkeypatch.setattr(agy, "saved_conversation", lambda *args: SID)
+    monkeypatch.setattr(server.chrome_readiness, "personal_browser_reason", lambda **_: ("", False))
     if host == "wsl":
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setattr(server, "_is_wsl", lambda: True)

@@ -8778,6 +8778,11 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
                 raise ValueError(reason)
         spec = selection.normalize(old["base"], selection.change_permission(
             old["tools"], permission, servers, managed_screen=wsl_agy))
+        if (permission.get("browser_mode") == "personal"
+                and provider in {"codex", "dsh", "hermes", "antigravity"}):
+            status = _personal_browser_status({provider}, selection, config if provider == "codex" else {})
+            if provider in status:
+                raise ValueError(status[provider]["reason"])
         if provider == "claude":
             selection.check_provider(spec, provider)
             if "browser_mode" in permission:
@@ -9513,22 +9518,26 @@ def _spawn_browser_catalog():
     config = tools.native_codex_config(resume=_child_resume_module())
     modes = tools.launch_browser_modes(config)
     catalog = {"browser_modes": modes}
-    wsl = _is_wsl()
     harnesses = {key for key in ("codex", "dsh", "hermes", "antigravity") if "personal" in modes.get(key, ())}
-    if harnesses and (sys.platform == "darwin" or wsl):
-        # Claude's personal mode uses Claude in Chrome. An explicit Codex
-        # channel can likewise connect to a different Chrome installation.
-        if "codex" in harnesses:
-            custom = tools._native_codex_browser(config, explicit=True)
-            if custom and any(arg.split("=", 1)[0] == "--channel" for arg in custom[1].get("args", ())):
-                harnesses.discard("codex")
-        if harnesses:
-            reason, unavailable = chrome_readiness.personal_browser_reason(wsl=wsl)
-            if reason:
-                catalog["personal_browser_status"] = {
-                    key: {"reason": reason, "unavailable": unavailable} for key in sorted(harnesses)
-                }
+    if status := _personal_browser_status(harnesses, tools, config):
+        catalog["personal_browser_status"] = status
     return catalog
+
+
+def _personal_browser_status(harnesses, tools, config):
+    wsl = _is_wsl()
+    if sys.platform != "darwin" and not wsl:
+        return {}
+    # Claude uses its extension. An explicit Codex channel may target a
+    # different Chrome installation than the default-profile probe.
+    if "codex" in harnesses:
+        custom = tools._native_codex_browser(config, explicit=True)
+        if custom and any(arg.split("=", 1)[0] == "--channel" for arg in custom[1].get("args", ())):
+            harnesses = harnesses - {"codex"}
+    if not harnesses:
+        return {}
+    reason, unavailable = chrome_readiness.personal_browser_reason(wsl=wsl)
+    return {key: {"reason": reason, "unavailable": unavailable} for key in sorted(harnesses)} if reason else {}
 
 
 def _spawn_computer_catalog():
