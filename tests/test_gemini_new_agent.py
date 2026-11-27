@@ -238,6 +238,7 @@ def test_gemini_mac_spawn_passes_managed_screen_to_the_adapter(monkeypatch, gemi
 @pytest.mark.parametrize("platform", ["darwin", "linux"])
 def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
     monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform=platform))
+    monkeypatch.setenv("AGENTSTACK_GEMINI_BIN", "/fixture/missing-agy")
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
     monkeypatch.setattr(
         server,
@@ -250,6 +251,8 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
         "id": "gemini",
         "label": "Antigravity",
         "program": "antigravity",
+        "harnesses": [{"id": "antigravity", "label": "Antigravity", "available": False,
+                       "default": False, "reason": "runtime_not_prepared"}],
         "models": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"],
         "default_model": "gemini-3.8-flash-high",
         "efforts": ["low", "medium", "high", "xhigh"],
@@ -830,7 +833,8 @@ def test_preflight_failures_do_not_register_junk_identities(gemini_env, monkeypa
     assert [label for label, error in checks if not error] == []
     errors = dict(checks)
     assert errors["helper"].startswith("Gemini provider helper is not installed")
-    assert errors["agy"] == "Antigravity CLI not found for provider gemini (expected agy)"
+    assert errors["agy"] == ("Antigravity CLI not found for provider gemini (expected agy). "
+                             "See https://github.com/gyroid-eth/orrery/blob/master/docs/antigravity.md")
     assert errors["git"] == "provider gemini requires a git repository"
     assert errors["base"] == "could not resolve worktree base for provider gemini: no-such-rev"
     assert errors["base-option"].startswith("worktree base must not start with '-'")
@@ -1267,6 +1271,7 @@ def _extract_ui_script(rendered: str) -> str:
 def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
     monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(gemini_runtime, "_gemini_cli", lambda: "/fixture/bin/agy")
     catalog = {"providers": [
         {"id": "claude", "label": "Claude", "program": "claude-code",
          "models": ["claude-sonnet-5"], "default_model": "claude-sonnet-5", "efforts": None},

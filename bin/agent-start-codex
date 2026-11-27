@@ -44,7 +44,7 @@ APPROVAL="${AGENTSTACK_CODEX_APPROVAL:-on-request}"
 
 TMUX_BIN="$(ags_resolve_tmux)"
 [[ -n "$TMUX_BIN" ]] || ags_die "tmux not found (install tmux first)"
-command -v "$CODEX_BIN" >/dev/null 2>&1 || ags_die "codex not found on PATH (set AGENTSTACK_CODEX_BIN)"
+command -v "$CODEX_BIN" >/dev/null 2>&1 || ags_die "Codex CLI (codex) not found on PATH (set AGENTSTACK_CODEX_BIN for an existing install). See https://github.com/gyroid-eth/orrery/blob/master/docs/install.md"
 [[ -f "$BOOTSTRAP" ]] || ags_die "missing $BOOTSTRAP"
 
 DIR="$(ags_choose_dir "$@")" || { echo "$AGS_PROG: cancelled" >&2; exit 0; }
