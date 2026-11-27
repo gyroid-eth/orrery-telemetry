@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -211,10 +212,22 @@ def test_pinned_platform_tool_definitions_and_command(monkeypatch, platform, bin
     monkeypatch.setenv("AGENTSTACK_CUA_DRIVER", "/fixture/" + binary)
     monkeypatch.setenv("AGENTSTACK_SCREEN_BINDING_FILE", "/fixture/private")
     monkeypatch.setenv("WSL_INTEROP", "/fixture/interop")
+    monkeypatch.setenv("WSLENV", "AGENTSTACK_SCREEN_BINDING_FILE/w")
+    monkeypatch.setenv("CUA_DRIVER_RS_TELEMETRY_ENABLED", "true")
+    monkeypatch.setenv("CUA_DRIVER_RS_UPDATE_CHECK", "true")
     params = driver_parameters(platform)
     assert params.command == "/fixture/" + binary
     assert params.args == args and params.env["WSL_INTEROP"] == "/fixture/interop"
     assert "AGENTSTACK_SCREEN_BINDING_FILE" not in params.env
+    assert params.env["CUA_DRIVER_RS_TELEMETRY_ENABLED"] == "false"
+    assert params.env["CUA_DRIVER_RS_UPDATE_CHECK"] == "false"
+    if platform == "windows":
+        assert set(params.env["WSLENV"].split(":")) == {
+            "CUA_DRIVER_RS_TELEMETRY_ENABLED/w",
+            "CUA_DRIVER_RS_UPDATE_CHECK/w",
+        }
+    else:
+        assert "WSLENV" not in params.env
     definitions = SCHEMAS[platform]
     assert set(definitions) == set(contract.TOOLS)
     read = public_schema(definitions["get_window_state"], "get_window_state")
@@ -222,3 +235,25 @@ def test_pinned_platform_tool_definitions_and_command(monkeypatch, platform, bin
     assert read["properties"]["max_image_dimension"]["maximum"] == 1280
     check = public_schema(definitions["check_permissions"], "check_permissions")
     assert check["properties"]["prompt"]["const"] is False
+
+
+@pytest.mark.parametrize("version", ["0.55.0", "0.56.0"])
+@pytest.mark.parametrize(("platform", "name"), [("darwin", "cua-driver"), ("windows", "cua-driver.exe")])
+def test_driver_receives_opt_outs_after_executable_change(monkeypatch, tmp_path, version, platform, name):
+    binary = tmp_path / version / name
+    binary.parent.mkdir()
+    binary.write_text(
+        "#!/bin/sh\n"
+        f"echo {version}\n"
+        'echo "$CUA_DRIVER_RS_TELEMETRY_ENABLED"\n'
+        'echo "$CUA_DRIVER_RS_UPDATE_CHECK"\n'
+    )
+    binary.chmod(0o755)
+    monkeypatch.setenv("AGENTSTACK_CUA_DRIVER", str(binary))
+    monkeypatch.setenv("CUA_DRIVER_RS_TELEMETRY_ENABLED", "true")
+    monkeypatch.setenv("CUA_DRIVER_RS_UPDATE_CHECK", "true")
+
+    params = driver_parameters(platform)
+    output = subprocess.check_output([params.command, *params.args], env=params.env, text=True)
+
+    assert output.splitlines() == [version, "false", "false"]
