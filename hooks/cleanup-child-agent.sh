@@ -347,7 +347,6 @@ rm -f "$MCP_CONFIG_FILE"
 if [[ -d "$CODEX_HOME_DIR/sessions" && ! -L "$CODEX_HOME_DIR/sessions" ]]; then
     echo "[cleanup-child-agent] WARNING: deleting unshared Codex sessions at $CODEX_HOME_DIR/sessions; conversation history may be lost (expected a symlink to the user's Codex home)." >&2
 fi
-rm -rf "$CODEX_HOME_DIR"
 rm -rf "$STATE_DIR/$AGENT_NAME.agy-config"
 case "$CHILD_RESUME_RETENTION_DAYS" in
     ''|*[!0-9]*)
@@ -358,11 +357,13 @@ esac
 RESUME_HELPER="${AGENTSTACK_CHILD_RESUME_HELPER:-$HOOKS_DIR/child_resume.py}"
 RETENTION_ACTION="delete"
 if [[ -f "$RESUME_HELPER" ]]; then
+    codex_runner="${AGENTSTACK_MCP_PROXY:-${AGENTSTACK_HOME:-$(dirname "$HOOKS_DIR")}/integrations/codex_app/plugin/scripts/run-mcp.sh}"
     if RETENTION_ACTION=$(
         "${AGENTSTACK_PYTHON:-python3}" "$RESUME_HELPER" mark-retired \
             --runtime-dir "$RUNTIME_DIR" \
             --agent-name "$AGENT_NAME" \
-            --retention-days "$CHILD_RESUME_RETENTION_DAYS"
+            --retention-days "$CHILD_RESUME_RETENTION_DAYS" \
+            --codex-work-dir "$(pwd -P)" --codex-runner "$codex_runner"
     ); then
         :
     else
@@ -370,6 +371,7 @@ if [[ -f "$RESUME_HELPER" ]]; then
         exit 1
     fi
 fi
+rm -rf "$CODEX_HOME_DIR"
 if [[ "$RETENTION_ACTION" != "retained" ]]; then
     rm -f "$STATE_FILE" "$TOKEN_FILE"
 fi

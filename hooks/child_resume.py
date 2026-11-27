@@ -789,6 +789,8 @@ def mark_retired(
     *,
     retention_days: int,
     now: datetime | None = None,
+    codex_work_dir: Path | None = None,
+    codex_runner: Path | None = None,
 ) -> bool:
     """Retain modern children, or preserve known legacy material without migration."""
 
@@ -846,6 +848,19 @@ def mark_retired(
             )
         ):
             return False
+        if state.get("provider") == "codex" and not state.get("retired_at"):
+            state.pop("codex_workspace_trust", None)
+        if state.get("provider") == "codex" and codex_work_dir and codex_runner:
+            config = _checked_home_config(runtime_dir, agent_name, state["project_key"], codex_runner,
+                                          active=False)
+            if config is not None:
+                state.pop("codex_workspace_trust", None)
+                workspace = _codex_workspace(codex_work_dir)
+                decisions = config.get("projects", {})
+                if workspace and isinstance(decisions, dict):
+                    entry = decisions.get(workspace["path"], decisions.get(os.fspath(codex_work_dir)))
+                    if isinstance(entry, dict) and entry.get("trust_level") == "trusted":
+                        state["codex_workspace_trust"] = workspace
         retired = _utc_now(now)
         state["retired_at"] = _timestamp(retired)
         state["resume_expires_at"] = _timestamp(
@@ -1957,10 +1972,10 @@ def _worktree_hook_trust(config_text: str, work_dir: Path | None) -> list[str]:
     return lines
 
 
-def _checked_home_hook_state(
+def _checked_home_config(
     runtime: Path, name: str, project_key: str, runner: Path, *, active: bool
-) -> dict[str, dict] | None:
-    """Read approval metadata from an owned canonical home, never its credentials."""
+) -> dict | None:
+    """Read the generated config only after confirming its private owner binding."""
     state_path, token_path, home, _mcp, lock = _paths(runtime, name)
     config_path = home / "config.toml"
     paths = (runtime, state_path.parent, home, state_path, token_path, config_path, lock)
@@ -2002,27 +2017,64 @@ def _checked_home_hook_state(
                     or not isinstance(proxy.get("env"), dict)
                     or any(proxy["env"].get(k) != v for k, v in expected.items())):
                 return None
-        hooks = config.get("hooks", {})
-        approvals = hooks.get("state", {}) if isinstance(hooks, dict) else None
-        if not isinstance(approvals, dict):
-            return None
-        result = {}
-        for key, entry in approvals.items():
-            if (not isinstance(entry, dict) or ("enabled" in entry and type(entry["enabled"]) is not bool)
-                    or ("trusted_hash" in entry and (not isinstance(entry["trusted_hash"], str)
-                        or re.fullmatch(r"sha256:[0-9a-f]{64}", entry["trusted_hash"]) is None))):
-                return None
-            if "trusted_hash" in entry or entry.get("enabled") is False:
-                result[key] = {k: entry[k] for k in ("trusted_hash", "enabled") if k in entry}
         for path, original in before.items():
             current = path.lstat()
             if any(getattr(current, k) != getattr(original, k) for k in (
                 "st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"
             )):
                 return None
-        return result
+        return config
     except (OSError, ValueError, UnicodeError):
         return None
+
+
+def _checked_home_hook_state(
+    runtime: Path, name: str, project_key: str, runner: Path, *, active: bool
+) -> dict[str, dict] | None:
+    config = _checked_home_config(runtime, name, project_key, runner, active=active)
+    if config is None:
+        return None
+    hooks = config.get("hooks", {})
+    approvals = hooks.get("state", {}) if isinstance(hooks, dict) else None
+    if not isinstance(approvals, dict):
+        return None
+    result = {}
+    for key, entry in approvals.items():
+        if (not isinstance(entry, dict) or ("enabled" in entry and type(entry["enabled"]) is not bool)
+                or ("trusted_hash" in entry and (not isinstance(entry["trusted_hash"], str)
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", entry["trusted_hash"]) is None))):
+            return None
+        if "trusted_hash" in entry or entry.get("enabled") is False:
+            result[key] = {k: entry[k] for k in ("trusted_hash", "enabled") if k in entry}
+    return result
+
+
+def _codex_workspace(path: Path) -> dict | None:
+    try:
+        if path.is_absolute():
+            resolved = path.resolve(strict=True)
+            info = resolved.stat()
+            if stat.S_ISDIR(info.st_mode):
+                return {"path": os.fspath(resolved), "file_id": [info.st_dev, info.st_ino]}
+    except (OSError, RuntimeError):
+        pass
+    return None
+
+
+def _restore_codex_workspace_trust(config: dict, work_dir: Path | None, retained: dict | None) -> None:
+    if work_dir is None or retained is None or _codex_workspace(work_dir) != retained:
+        return
+    projects = config.setdefault("projects", {})
+    if not isinstance(projects, dict):
+        return
+    restored_path = Path(retained["path"])
+    for path in (work_dir, restored_path, *restored_path.parents):
+        entry = projects.get(os.fspath(path))
+        if isinstance(entry, dict) and entry.get("trust_level") == "untrusted":
+            return
+    entry = projects.setdefault(os.fspath(restored_path), {})
+    if isinstance(entry, dict):
+        entry.setdefault("trust_level", "trusted")
 
 
 def _inherit_parent_hook_trust(
@@ -2089,6 +2141,7 @@ def _build_home_unlocked(
     parent_agent: str = "",
     work_dir: Path | None = None,
     screen_generation: str = "",
+    workspace_trust: dict | None = None,
 ) -> Path:
     if not SAFE_NAME.fullmatch(child) or mcp_profile not in MCP_PROFILES:
         raise ValueError("invalid child identity or MCP profile")
@@ -2280,6 +2333,7 @@ def _build_home_unlocked(
                     plugin["enabled"] = False
             config_text = _emit_toml(config)
         config = _toml().loads(config_text)
+        _restore_codex_workspace_trust(config, work_dir, workspace_trust)
         try:
             selection = tools_spec or tools.normalize()
             managed_screen = tools.screen_definition(
@@ -2345,8 +2399,14 @@ def build_home(
     if home.absolute() != expected_home.absolute():
         raise ValueError("generated Codex home is not canonical for this child")
     with _AgentLock(lock_path, exclusive=True):
+        workspace_trust = None
         if _state.exists():
-            _check_tools_change(_load_state(_state), _state)
+            state = _load_state(_state)
+            _check_tools_change(state, _state)
+            if (state.get("agent_name") == child and state.get("project_key") == project_key
+                    and state.get("provider") == "codex" and state.get("retired_at")
+                    and _retained_shape(state)):
+                workspace_trust = state.get("codex_workspace_trust")
         if not parent_agent:
             # A resume rebuilds the home without being told the parent; the
             # launcher recorded it in the child's state.
@@ -2368,6 +2428,7 @@ def build_home(
             parent_agent=parent_agent,
             work_dir=work_dir,
             screen_generation=screen_generation,
+            workspace_trust=workspace_trust,
         )
 
 
@@ -2429,6 +2490,8 @@ def main() -> int:
     retired.add_argument("--runtime-dir", required=True)
     retired.add_argument("--agent-name", required=True)
     retired.add_argument("--retention-days", type=int, required=True)
+    retired.add_argument("--codex-work-dir", type=Path)
+    retired.add_argument("--codex-runner", type=Path)
     begin = sub.add_parser("begin-resume")
     begin.add_argument("--runtime-dir", required=True)
     begin.add_argument("--agent-name", required=True)
@@ -2527,6 +2590,8 @@ def main() -> int:
                     runtime,
                     args.agent_name,
                     retention_days=args.retention_days,
+                    codex_work_dir=args.codex_work_dir,
+                    codex_runner=args.codex_runner,
                 )
                 else "delete"
             )

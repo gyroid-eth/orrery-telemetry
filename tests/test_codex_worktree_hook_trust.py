@@ -496,3 +496,45 @@ def test_overlay_project_disable_applies_before_worktree_aliases(parent_case, tm
 def test_rebuild_uses_the_parent_in_the_existing_child_record(parent_case):
     result = parent_case["build"](NAME, parent_case["source"], PARENT, use_recorded_parent=True)
     assert result["hooks"]["state"][PARENT_HOOK] == {"trusted_hash": TRUSTED}
+
+
+@pytest.mark.parametrize("scenario", ["approved", "unapproved", "replaced", "different", "revoked", "foreign"])
+def test_resume_carries_only_the_same_childs_workspace_trust(parent_case, tmp_path, scenario):
+    case = parent_case
+    workspace = (tmp_path / "workspace").resolve()
+    workspace.mkdir()
+    other = (tmp_path / "other workspace").resolve()
+    other.mkdir()
+    runtime = case["runtime"]
+    source = case["source"]
+    runner = tmp_path / "run-mcp.sh"
+    home = runtime / "child-agents" / f"{NAME}.codex-home"
+    case["build"](NAME, source, work_dir=workspace)
+    if scenario != "unapproved":
+        _set_case_config(home / "config.toml", lambda config: config.update(projects={
+            str(workspace): {"trust_level": "trusted"},
+            str(other): {"trust_level": "trusted"},
+        }))
+    if scenario == "foreign":
+        _set_case_config(home / "config.toml", lambda config:
+                         config["mcp_servers"]["orrery-mail"]["env"].update(AGENTSTACK_PROXY_AGENT_NAME=PARENT))
+    assert child_resume.mark_retired(runtime, NAME, retention_days=30,
+                                     codex_work_dir=workspace, codex_runner=runner)
+    child_resume.discard_generated(runtime, NAME)
+    if scenario == "replaced":
+        workspace.rename(workspace.with_name("old workspace"))
+        workspace.mkdir()
+    if scenario == "revoked":
+        _set_case_config(source / "config.toml", lambda config: config.update(projects={
+            str(workspace): {"trust_level": "untrusted"},
+        }))
+    baseline = (source / "config.toml").read_bytes()
+    child_resume.build_home(home=home, source=source, runner=runner, child=NAME, project_key="/p",
+        token_file=runtime / f"agent_token_{NAME}", mcp_url="http://127.0.0.1:9/mcp", mail_env="",
+        runtime_dir=runtime, bearer_mode="disabled", python_bin="", mcp_profile="inherit",
+        work_dir=other if scenario == "different" else workspace)
+    projects = tomllib.loads((home / "config.toml").read_text()).get("projects", {})
+    expected = {"approved": {str(workspace): {"trust_level": "trusted"}},
+                "revoked": {str(workspace): {"trust_level": "untrusted"}}}.get(scenario, {})
+    assert projects == expected
+    assert (source / "config.toml").read_bytes() == baseline
