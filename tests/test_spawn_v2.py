@@ -1965,6 +1965,53 @@ def test_all_failed_candidates_keep_windows_and_node_notes_in_order(tmp_path):
         [*notes, "Error: no usable Codex CLI found"])
 
 
+def test_overlapping_launches_report_only_their_own_details(monkeypatch, tmp_path):
+    launcher, _ = _prepare_real_spawn(monkeypatch, tmp_path)
+    spec = _cleanup_spec(launcher, tmp_path, cleanup_seconds=0)
+    first_waiting, second_finished = threading.Event(), threading.Event()
+    results = {}
+
+    def mcp(method, args, **kwargs):
+        data = dict(id=73, name=args["name"], registration_token="fixture-token") if method == "register_agent" else {}
+        return {"ok": True, "data": data}
+
+    def popen(argv, *, stdout, **kwargs):
+        name = argv[2]
+
+        class Process:
+            def wait(self, timeout):
+                if name == "QuietCurie":
+                    first_waiting.set()
+                    assert second_finished.wait(10)
+                stdout.write(f"Error: diagnostic for {name}\n".encode())
+                return 1
+
+        return Process()
+
+    def launch(name):
+        results[name] = server.spawn_with_launch_spec(
+            {"standalone": True, "name": name, "task": "work", "dir": str(tmp_path)}, spec)
+
+    monkeypatch.setattr(server, "_mcp_call", mcp)
+    monkeypatch.setattr(server.subprocess, "Popen", popen)
+    worker = threading.Thread(target=launch, args=("QuietCurie",))
+    worker.start()
+    try:
+        assert first_waiting.wait(10)
+        launch("CleverNewton")
+    finally:
+        second_finished.set()
+        worker.join(10)
+    assert not worker.is_alive()
+    for name, other in (("QuietCurie", "CleverNewton"), ("CleverNewton", "QuietCurie")):
+        result = results[name]
+        assert result["error"].startswith(f"Error: diagnostic for {name}")
+        assert f"diagnostic for {name}" in result["detail"]
+        assert other not in result["detail"]
+    history = (tmp_path / "logs/spawn.log").read_text()
+    assert all(f"diagnostic for {name}" in history for name in results)
+
+
 def test_all_failed_candidates_report_omitted_count_within_limit(tmp_path):
     log = tmp_path / "spawn.log"
     notes = [f"note: skipping codex /synthetic/{index}: " + "x" * 130 for index in range(8)]
