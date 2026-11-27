@@ -394,6 +394,8 @@ def test_the_launch_says_who_started_the_session_in_the_system_prompt(tmp_path):
     # person asked for this task, so it must not say so.
     assert "at the request" not in system and "person who runs both" not in system
     assert "using your usual judgment" in system
+    assert "include_bodies set to true" in system
+    assert 'call fetch_inbox with {"include_bodies": true}' in log
     assert '--append-system-prompt "$CLAUDE_CHILD_SYSTEM_PROMPT"' in args[-1]
 
 
