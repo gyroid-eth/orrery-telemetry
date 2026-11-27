@@ -2949,17 +2949,22 @@ claude_argv_prompt() {
 # than claimed inside the conversation, where a careful model treats an identity
 # and a "no registration needed" as an injection (2026-10-01).
 claude_child_system_prompt() {
-    local child_name="$1" parent_name="$2" mcp_config="${3:-}" mail
+    local child_name="$1" parent_name="$2" mcp_config="${3:-}" embedded_task="$4" mail initial_task
     # Say how this session really reaches ORRERY Mail: only a per-child proxy
     # is "bound", and only it answers runtime_status.
     if [[ -n "$mcp_config" ]]; then
-        mail="Your ORRERY Mail connection is already bound to the name ${child_name} (mcp__orrery-mail__runtime_status shows it), so no registration or inbox check is needed first."
+        mail="Your ORRERY Mail connection is already bound to the name ${child_name} (mcp__orrery-mail__runtime_status shows it). Use this identity without registering again."
     else
         mail="The ORRERY Mail identity ${child_name} is already registered. This session has no per-child Mail proxy and reaches ORRERY Mail directly, so use the coordination route for an already-registered identity on a raw/direct connection instead of registering again."
     fi
     if [[ -n "$parent_name" ]]; then
-        printf 'This Claude Code session is the ORRERY child agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine because its parent agent %s delegated a task to it; ORRERY delegation is set up on this machine by the person who runs it. The first user message is the task %s delegated. Carry it out, using your usual judgment. %s Report to %s with mcp__orrery-mail__send_message, not with any other messaging tool.' \
-            "$child_name" "$parent_name" "$parent_name" "$mail" "$parent_name"
+        if [[ "$embedded_task" == true ]]; then
+            initial_task="The first user message contains the task from ${parent_name}. Start it directly."
+        else
+            initial_task="The first user message tells you how to fetch the task from ${parent_name}. Fetch the task with include_bodies set to true, then carry it out."
+        fi
+        printf 'This Claude Code session is the ORRERY child agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine because its parent agent %s delegated a task to it; ORRERY delegation is set up on this machine by the person who runs it. %s %s Report to %s with mcp__orrery-mail__send_message, not with any other messaging tool.' \
+            "$child_name" "$parent_name" "$initial_task" "$mail" "$parent_name"
     else
         printf 'This Claude Code session is the standalone ORRERY agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine; ORRERY is set up on this machine by the person who runs it. The first user message is its task. Carry it out, using your usual judgment. %s' \
             "$child_name" "$mail"
@@ -3180,11 +3185,17 @@ discard_claude_launch_record() {
     fi
 }
 
-build_codex_mail_task_prompt() {
+build_mail_task_prompt() {
     local child_name="$1"
     local parent_name="$2"
-    printf 'You are %s. The parent agent is %s. The child name %s is already reserved, so do not register under another name. The canonical task is in your ORRERY Mail inbox. Use only the first matching coordination route in the managed instructions. If the provided tool descriptions and argument schema show a bound ORRERY proxy, do not run a helper, register again, or read a token file; call fetch_inbox with only the arguments accepted by that schema to retrieve the canonical task. Only when the actual provided schema is confirmed raw/direct should you follow the managed raw/direct authentication or recovery route before fetching. A proxy failure is not evidence to switch to raw or a helper. Do not infer the task from this prompt; treat the inbox request as authoritative.' \
-        "$child_name" "$parent_name" "$child_name"
+    if [[ "${3:-}" == claude ]]; then
+        printf 'Child agent startup. AGENT_NAME=%s; parent=%s. Follow the child-agent startup procedure in CLAUDE.md. ' \
+            "$child_name" "$parent_name"
+    else
+        printf 'You are %s. The parent agent is %s. The child name %s is already reserved, so do not register under another name. ' \
+            "$child_name" "$parent_name" "$child_name"
+    fi
+    printf '%s' 'The canonical task is in your ORRERY Mail inbox. Use only the first matching coordination route in the managed instructions. For a bound ORRERY proxy, call fetch_inbox with {"include_bodies": true} to read the task. The proxy already has your identity and does not need a helper or token file. If the provided schema is confirmed raw/direct, follow the managed raw/direct authentication or recovery route before calling fetch_inbox with include_bodies set to true. A proxy failure is not evidence to switch to raw or a helper. Treat the inbox request as authoritative.'
 }
 
 append_codex_mcp_profile_notice() {
@@ -3215,7 +3226,7 @@ start_harness_child() {
     local native_args=()
     if [[ "$EMBED_TASK" == true ]]; then prompt="$EMBEDDED_TASK_PROMPT"; fi
     if [[ "$STANDALONE" != true && "$EMBED_TASK" != true ]]; then
-        prompt="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
+        prompt="$(build_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
     fi
     tools_prompt="$(child_tools_prompt_block)" || return 1
     prompt+="$tools_prompt"
@@ -3655,7 +3666,7 @@ ${TASK}"
         elif [[ "$EMBED_TASK" == true ]]; then
             CODEX_PROMPT="$EMBEDDED_TASK_PROMPT"
         else
-            CODEX_PROMPT="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
+            CODEX_PROMPT="$(build_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
         fi
         CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
         if ! CODEX_PROMPT_FILE="$(write_codex_prompt_file "$CHILD_NAME" "$CODEX_PROMPT")"; then
@@ -3770,7 +3781,7 @@ ${TASK}"
         elif [[ "$EMBED_TASK" == true ]]; then
             CHILD_PROMPT="$EMBEDDED_TASK_PROMPT"
         else
-            CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
+            CHILD_PROMPT="$(build_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME" claude)"
         fi
         if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then
             echo "[spawn_child/pre-reg] Aborting: could not build the Claude in Chrome browser policy." >&2
@@ -3823,7 +3834,7 @@ ${TASK}"
             fi
             CLAUDE_CHILD_ARGV_PROMPT=true
             CLAUDE_READY_PROMPT_ECHO="$(claude_prompt_echo_head "$CHILD_PROMPT" "$CHILD_NAME")"
-            CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME" "$CHILD_MCP_CONFIG")"
+            CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME" "$CHILD_MCP_CONFIG" "$EMBED_TASK")"
             CLAUDE_LAUNCH_EPOCH="$(date +%s)"
             tmux new-session -d -s "$CHILD_NAME" \
                 -c "$WORK_DIR" \
@@ -4558,7 +4569,7 @@ elif [[ "$USE_CODEX" == true ]]; then
         echo "[spawn_child] No MCP proxy available; Codex child uses the shared ORRERY Mail endpoint" >&2
     fi
     # Codex startup: inject a bootstrap prompt that points the child to inbox.
-    CODEX_PROMPT="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
+    CODEX_PROMPT="$(build_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
     CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
     if ! CODEX_PROMPT_FILE="$(write_codex_prompt_file "$CHILD_NAME" "$CODEX_PROMPT")"; then
         echo "Error: could not prepare the Codex task for $CHILD_NAME" >&2
@@ -4634,7 +4645,7 @@ else
         echo "[spawn_child] Aborting: could not write the Claude in Chrome launch record in $CHILD_STATE_DIR." >&2
         exit 1
     fi
-    CHILD_PROMPT="Child agent startup. AGENT_NAME=${CHILD_NAME}; parent=${PARENT_NAME}. Follow the child-agent startup procedure in CLAUDE.md and start the task immediately."
+    CHILD_PROMPT="$(build_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME" claude)"
     if ! CHROME_PROMPT_BLOCK="$(claude_chrome_prompt_block)"; then
         echo "[spawn_child] Aborting: could not build the Claude in Chrome browser policy." >&2
         exit 1
@@ -4659,7 +4670,7 @@ else
     fi
     CLAUDE_CHILD_ARGV_PROMPT=true
     CLAUDE_READY_PROMPT_ECHO="$(claude_prompt_echo_head "$CHILD_PROMPT" "$CHILD_NAME")"
-    CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME" "$CHILD_MCP_CONFIG")"
+    CLAUDE_CHILD_SYSTEM_PROMPT="$(claude_child_system_prompt "$CHILD_NAME" "$PARENT_NAME" "$CHILD_MCP_CONFIG" "$EMBED_TASK")"
     CHILD_SESSION_START_PENDING=true
     CLAUDE_LAUNCH_EPOCH="$(date +%s)"
     tmux new-session -d -s "$CHILD_NAME" \

@@ -369,7 +369,7 @@ def test_the_launcher_never_pastes_or_submits_a_cold_codex_task():
         section = text[text.index(start):text.index(end)]
         codex = section[section.index('if [[ "$USE_CODEX" == true ]]; then'):section.index("# Claude Code startup (--pre-registered mode).")]
         assert "send_prompt_to_pane" not in codex and "verify_injection" not in codex
-    legacy = text[text.rindex('CODEX_PROMPT="$(build_codex_mail_task_prompt'):text.rindex("# Claude Code 起動")]
+    legacy = text[text.rindex('CODEX_PROMPT="$(build_mail_task_prompt'):text.rindex("# Claude Code 起動")]
     assert "send_prompt_to_pane" not in legacy and "verify_injection" not in legacy
     assert text.count('codex_watch_initial_task "$CHILD_NAME" "$CODEX_PROMPT"') == 2
     assert text.count('TMUX_ENV_ARGS+=(-e "AGENTSTACK_CODEX_PROMPT_FILE=$CODEX_PROMPT_FILE")') == 2

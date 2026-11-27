@@ -431,13 +431,17 @@ def test_the_system_prompt_says_bound_only_with_a_proxy():
     start = text.index("claude_child_system_prompt() {")
     builder = text[start:text.index("\n}\n", start) + 3]
 
-    def render(config: str) -> str:
-        return subprocess.run(["/bin/bash", "-c", builder + 'claude_child_system_prompt Kid Dad "$1"', "_", config],
+    def render(config: str, embed: str = "true") -> str:
+        return subprocess.run(["/bin/bash", "-c", builder + 'claude_child_system_prompt Kid Dad "$1" "$2"', "_", config, embed],
                               text=True, capture_output=True, check=True).stdout
 
     with_proxy, without = render("/tmp/kid-mcp.json"), render("")
     assert "already bound to the name Kid" in with_proxy and "runtime_status" in with_proxy
     assert "already bound" not in without and "runtime_status" not in without
+    assert "The first user message contains the task" in with_proxy
+    by_mail = render("/tmp/kid-mcp.json", "false")
+    assert "The first user message tells you how to fetch the task" in by_mail
+    assert "include_bodies set to true" in by_mail
 
 
 def test_the_watch_counts_from_the_launch_not_from_its_own_start(tmp_path, mail):

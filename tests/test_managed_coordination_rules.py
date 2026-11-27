@@ -188,7 +188,7 @@ def test_claude_coordination_routes_are_ordered_and_keep_hook_contract():
     assert 'agentstack-reregister "$AGENT_NAME" claude-code' in claude
     assert "proxy use alone does not prove that a flag exists" in claude
     assert "Sessions with a resolved `AGENT_NAME` are separately exempt" in claude
-    assert spawn.count("Follow the child-agent startup procedure in CLAUDE.md") == 2
+    assert "Follow the child-agent startup procedure in CLAUDE.md" in spawn
     assert "A normal delegated child that was not given a separate" in claude
     assert "must fetch only its own inbox through the selected connection" in claude
     assert "whether embedded or standalone, takes" in claude
