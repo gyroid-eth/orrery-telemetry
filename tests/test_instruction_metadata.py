@@ -6,7 +6,133 @@ import subprocess
 import sys
 
 import pytest
-from test_instruction_blocks import env, engine, apply, m
+from test_instruction_blocks import env, engine, apply, legacy, m
+
+
+def simulate_wsl_mount(monkeypatch, tmp_path, mount, filesystem, options):
+    test_mountinfo = tmp_path / 'mountinfo'
+    st = mount.stat()
+    device = f'{os.major(st.st_dev)}:{os.minor(st.st_dev)}'
+    mountpoint = str(mount).replace(' ', r'\040')
+    test_mountinfo.write_text(f'17 1 {device} / {mountpoint} rw,noatime - {filesystem} C: {options}\n')
+    monkeypatch.setattr(m, 'MOUNTINFO', test_mountinfo)
+    monkeypatch.setattr(m, '_running_in_wsl', lambda: True)
+    return test_mountinfo
+
+
+@pytest.mark.parametrize(('filesystem', 'options', 'mode'), [
+    ('drvfs', 'rw,uid=1000,gid=1000', 0o777),
+    ('9p', 'rw,aname=drvfs;path=C:;uid=1000;gid=1000,trans=fd', 0o777),
+    ('9p', 'rw,aname=drvfs;path=C:;metadata,trans=fd', 0o644),
+])
+def test_drvfs_instruction_migration_keeps_the_original_inode_and_backup(
+        env, monkeypatch, tmp_path, filesystem, options, mode):
+    mount = tmp_path.resolve() / 'Windows ドライブ'
+    work = mount / 'Obsidian vault'
+    work.mkdir(parents=True)
+    simulate_wsl_mount(monkeypatch, tmp_path, mount, filesystem, options)
+    monkeypatch.chdir(work)
+    e = engine(env)
+    source = work / 'CLAUDE.md'
+    before = legacy(e, source)
+    source.chmod(mode)
+    inode = source.stat().st_ino
+
+    assert next(f for f in e.detect() if f['source_path'] == str(source))['kind'] == 'legacy'
+    result = apply(e)
+    record, = result['sources_progress']
+    assert result['stage'] == record['stage'] == 'complete'
+    assert source.stat().st_ino == inode
+    assert source.read_bytes() == b'\xef\xbb\xbfMy notes\r\n\r\n\r\nLast line'
+    assert Path(record['backup']).read_bytes() == before
+    assert not [f for f in e.detect() if f['source_path'] == str(source)]
+
+
+@pytest.mark.parametrize(('filesystem', 'options', 'mode', 'is_wsl'), [
+    ('ext4', 'rw', 0o777, True),
+    ('9p', 'rw,aname=other', 0o777, True),
+    ('9p', 'rw,aname=other;aname=drvfs', 0o777, True),
+    ('9p', 'rw,aname=drvfs;path=C:;metadata', 0o777, True),
+    ('9p', 'rw,aname=drvfs;path=C:', 0o664, True),
+    ('drvfs', 'rw', 0o777, False),
+])
+def test_writable_instruction_refusal_needs_proven_synthetic_drvfs_bits(
+        monkeypatch, tmp_path, filesystem, options, mode, is_wsl):
+    mount = tmp_path.resolve()
+    source = mount / 'CLAUDE.md'
+    source.write_bytes(b'ordinary instructions')
+    source.chmod(mode)
+    simulate_wsl_mount(monkeypatch, tmp_path, mount, filesystem, options)
+    monkeypatch.setattr(m, '_running_in_wsl', lambda: is_wsl)
+    with pytest.raises(m.Refused, match='INSTRUCTION_PATH_UNSAFE'):
+        m.snapshot(source)
+
+
+def test_drvfs_does_not_exempt_files_under_a_linux_submount_or_a_different_owner(monkeypatch, tmp_path):
+    mount = tmp_path.resolve()
+    submount = mount / 'linux'
+    submount.mkdir()
+    source = mount / 'CLAUDE.md'
+    source.write_bytes(b'ordinary instructions')
+    source.chmod(0o777)
+    nested = submount / source.name
+    nested.write_bytes(source.read_bytes())
+    nested.chmod(0o777)
+    mountinfo = simulate_wsl_mount(monkeypatch, tmp_path, mount, 'drvfs', 'rw')
+    mountpoint = str(submount).replace(' ', r'\040')
+    with mountinfo.open('a') as additions:
+        additions.write(f'18 17 99:99 / {mountpoint} rw - ext4 /dev/sda rw\n')
+    assert m.snapshot(source)[1] == b'ordinary instructions'
+    with pytest.raises(m.Refused, match='INSTRUCTION_PATH_UNSAFE'):
+        m.snapshot(nested)
+    uid = os.getuid()
+    monkeypatch.setattr(m.os, 'getuid', lambda: uid + 1)
+    with pytest.raises(m.Refused, match='INSTRUCTION_PATH_UNSAFE'):
+        m.snapshot(source)
+
+
+def test_drvfs_readback_mismatch_restores_the_backup_to_the_same_file(env, monkeypatch, tmp_path):
+    mount = tmp_path.resolve() / 'Windows ドライブ'
+    mount.mkdir()
+    simulate_wsl_mount(monkeypatch, tmp_path, mount, '9p', 'rw,aname=drvfs;path=C:')
+    monkeypatch.chdir(mount)
+    e = engine(env)
+    source = mount / 'CLAUDE.md'
+    before = legacy(e, source)
+    source.chmod(0o777)
+    inode = source.stat().st_ino
+    fsync = os.fsync
+    corrupted = False
+
+    def corrupt_once(fd):
+        nonlocal corrupted
+        if not corrupted and os.fstat(fd).st_ino == inode:
+            corrupted = True
+            os.pwrite(fd, b'corrupt', 0)
+        fsync(fd)
+
+    monkeypatch.setattr(m.os, 'fsync', corrupt_once)
+    with pytest.raises(OSError, match='written content did not match'):
+        apply(e)
+    assert corrupted
+    assert source.stat().st_ino == inode and source.read_bytes() == before
+    receipt = e.receipt()
+    record, = receipt['sources_progress']
+    assert Path(record['backup']).read_bytes() == before
+    assert e.resume(receipt['plan_id'])['stage'] == 'complete'
+
+
+def test_drvfs_refuses_to_write_before_a_backup_exists(monkeypatch, tmp_path):
+    mount = tmp_path.resolve()
+    simulate_wsl_mount(monkeypatch, tmp_path, mount, 'drvfs', 'rw')
+    target = mount / 'CLAUDE.md'
+    target.write_bytes(b'original instructions')
+    target.chmod(0o777)
+    entry, before = m.snapshot(target)
+    entry['before_sha256'] = m.sha(before)
+    with pytest.raises(m.Refused, match='INSTRUCTION_DRVFS_BACKUP_REQUIRED'):
+        m.atomic(target, b'new instructions', entry=entry)
+    assert target.read_bytes() == before
 
 
 @pytest.mark.skipif(sys.platform!='darwin',reason='macOS ACL preservation')
