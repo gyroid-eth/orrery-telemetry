@@ -1188,6 +1188,29 @@ def test_user_service_finds_node_for_codex_and_linux_antigravity(tmp_path, monke
         assert "--isolated" in server["args"]
 
 
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+@pytest.mark.parametrize("content", ["", " \n\t", "{broken"])
+def test_antigravity_browser_catalog_handles_empty_login_config(tmp_path, monkeypatch, platform, content):
+    monkeypatch.setattr(child_tools.sys, "platform", platform)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    monkeypatch.setattr(child_tools, "running_in_wsl", lambda: False)
+    monkeypatch.setattr(child_tools.shutil, "which", lambda name: "/fixture/npx" if name == "npx" else None)
+    config = tmp_path / ".gemini/config/mcp_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(content)
+    spec = child_tools.normalize(tools={"browser_mode": "temporary"})
+    modes = child_tools.launch_browser_modes({})["antigravity"]
+    if content.strip():
+        assert modes == []
+        with pytest.raises(child_tools.ToolsError, match="Cannot check Antigravity"):
+            child_tools.agy_validate_selection(spec)
+    else:
+        assert modes == (["off", "temporary", "personal"] if platform == "darwin" else ["off", "temporary"])
+        child_tools.agy_validate_selection(spec)
+    assert config.read_text() == content
+
+
 def test_api_preserves_explicit_screen_off_in_launcher_arguments():
     tools = {"screen_off": True, "mcp": ["reader"]}
     args, error = server._spawn_tools_args({"tools": tools}, "claude", False, "")

@@ -1037,7 +1037,10 @@ def agy_launch_config(mail_command, spec, *, runtime, project, child, mail_env, 
 
 def _agy_inherited_servers(path, scope):
     try:
-        inherited = json.loads(path.read_text()).get("mcpServers", {})
+        raw = path.read_text()
+        if not raw.strip():
+            return {}
+        inherited = json.loads(raw).get("mcpServers", {})
     except FileNotFoundError:
         inherited = {}
     except (ValueError, AttributeError) as exc:
