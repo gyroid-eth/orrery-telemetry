@@ -241,9 +241,20 @@ class ThinTests(unittest.TestCase):
                 self.assertTrue((Path(plan['env']['DSH_HOME']) / 'skills/delegate').is_symlink())
                 self.assertEqual(thin.read(self.state / 'personal-skills.json')['reason'], reason)
 
+    def test_child_sandbox_uses_the_native_tui_launch_permission(self):
+        for enabled, expected in ((False, 'danger-full-access'), (True, 'workspace-write')):
+            with self.subTest(enabled=enabled):
+                plan = thin.generate({**self.doc, 'child_sandbox': enabled})
+                self.assertEqual(plan['env']['DSH_PERMISSION_MODE'], expected)
+        self.assertNotIn('DSH_PERMISSION_MODE', thin.generate(self.doc)['env'])
+
     def test_native_plan_omits_trial_policy_preserves_proxy_and_instructions(self):
+        from hooks import harness_child
+
+        source = harness_child.write_instructions(self.state, '/fixture/project')
+        document = {**self.doc, 'instructions_file': str(source)}
         with patch('subprocess.run', side_effect=AssertionError('subprocess forbidden')):
-            plan = thin.generate(self.doc)
+            plan = thin.generate(document)
         self.assertEqual(plan['argv'][:2], [str(self.node), str(self.runtime / 'node_modules/@deepseek-ai/dsh/lib/bin.js')])
         self.assertEqual(set(plan['env']), {'DSH_HOME', 'DSH_TUI_DATA_DIR', 'DSH_TUI_LANG', 'AGENTSTACK_LLM_KEY_FILES', 'AGENTSTACK_LLM_KEY_DEFINITIONS'})
         rows = self.rows(plan)
@@ -258,9 +269,10 @@ class ThinTests(unittest.TestCase):
         proxy = next(r for row in rows for r in row.get('insert', []) if r['id'] == 'orrery-mcp-orrery-mail')
         self.assertEqual(proxy['config']['command'], '/canonical/proxy')
         self.assertEqual(proxy['config']['env']['AGENTSTACK_PROXY_PROGRAM'], 'dsh')
-        self.assertEqual((Path(plan['env']['DSH_HOME']) / 'AGENTS.md').read_text(), 'shared rendered instructions')
+        self.assertEqual((Path(plan['env']['DSH_HOME']) / 'AGENTS.md').read_bytes(), source.read_bytes())
+        self.assertIn(b'the refused action.', source.read_bytes())
         self.assertNotIn('HOME', plan['env'])
-        self.assertEqual(plan, thin.generate(self.doc))
+        self.assertEqual(plan, thin.generate(document))
 
     def test_inherited_codex_browser_becomes_native_mcp_client(self):
         from hooks import child_tools

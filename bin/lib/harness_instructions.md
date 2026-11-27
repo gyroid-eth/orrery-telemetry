@@ -52,6 +52,8 @@ for or deliver messages.
 ## Tool refusals
 
 Stop the affected step and report the exact failure and unfinished work.
+Do not use another tool, a shell command, or another application to carry out
+the refused action.
 For a tool refusal, send your parent:
 `MCP tool <tool-name> is blocked: <exact message>.`
 If standalone or sending also fails, report to the operator and stop.

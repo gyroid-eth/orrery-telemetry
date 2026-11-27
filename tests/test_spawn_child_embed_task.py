@@ -229,21 +229,24 @@ def test_orrery_only_stops_before_cli_when_profile_home_cannot_be_built(
     )
 
 
-@pytest.mark.parametrize("prompt_path,approval_override,full_access,expected_flags", [
-    ("embed", "untrusted", False, "--sandbox workspace-write --ask-for-approval untrusted"),
-    ("mail", None, False, "--sandbox workspace-write --ask-for-approval never"),
-    ("standalone", "never", False, "--sandbox workspace-write"),
-    ("embed", "on-request", True, "--sandbox danger-full-access --ask-for-approval never"),
-    ("standalone", None, True, "--sandbox danger-full-access --ask-for-approval never"),
+@pytest.mark.parametrize("prompt_path,approval_override,sandbox,full_access,expected_flags", [
+    ("embed", "untrusted", "on", False, "--sandbox workspace-write --ask-for-approval untrusted"),
+    ("mail", None, None, False, "--sandbox danger-full-access --ask-for-approval never"),
+    ("standalone", "never", None, False, "--sandbox workspace-write"),
+    ("embed", "on-request", None, True, "--sandbox danger-full-access --ask-for-approval on-request"),
+    ("embed", None, "on", True, "--sandbox workspace-write --ask-for-approval never"),
+    ("standalone", None, "on", True, "--sandbox danger-full-access --ask-for-approval never"),
 ])
 def test_orrery_only_notice_reaches_each_preregistered_codex_prompt(
     tmp_path: pathlib.Path, prompt_path: str, approval_override: str | None,
-    full_access: bool, expected_flags: str,
+    sandbox: str | None, full_access: bool, expected_flags: str,
 ) -> None:
     env, workdir = _fake_launch_env(tmp_path, codex=True)
     _enable_fake_codex_profile(tmp_path, env)
     if approval_override is not None:
         env["AGENTSTACK_CODEX_CHILD_APPROVAL"] = approval_override
+    if sandbox:
+        env["AGENTSTACK_CHILD_SANDBOX"] = sandbox
     if full_access:
         install_home = pathlib.Path(env["AGENTSTACK_HOME"])
         install_home.mkdir(exist_ok=True)

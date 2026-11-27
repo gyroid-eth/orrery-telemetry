@@ -79,6 +79,8 @@ approval governs hook trust, deployment, and cutover.
 Codex hooks require prior human review; ordinary launch only checks existing
 trust. Do not approve `/hooks`, manufacture a hook plan, or rewrite a trust
 receipt yourself. On an OS/tool approval refusal, report the verbatim refusal
-to the parent and stop that action. Do not change settings or checksums to get
-past it. See `__AGENTSTACK_HOME__/docs/fresh-global-update.md` for the
+to the parent and stop that action.
+Do not use another tool, a shell command, or another application to carry out
+the refused action. Do not change settings or checksums to get past it.
+See `__AGENTSTACK_HOME__/docs/fresh-global-update.md` for the
 agent/operator procedure and outstanding acceptance boundaries.

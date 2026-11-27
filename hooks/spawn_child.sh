@@ -1370,6 +1370,8 @@ PROJECT_CONTEXT_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/projec
 [[ -f "$PROJECT_CONTEXT_HELPER" ]] || PROJECT_CONTEXT_HELPER="$HOOKS_DIR/project-context.sh"
 # shellcheck disable=SC1090
 [[ -f "$PROJECT_CONTEXT_HELPER" ]] && . "$PROJECT_CONTEXT_HELPER"
+export AGENTSTACK_CHILD_SANDBOX="$(agentstack_resolve_setting AGENTSTACK_CHILD_SANDBOX \
+    "${AGENTSTACK_CHILD_SANDBOX:-}" off "${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/env.sh")"
 
 # A delegated child keeps its parent's Mail namespace, but its workspace is
 # always the directory it will actually launch in. Runtime roots from a parent
@@ -1489,6 +1491,13 @@ codex_approval_flags() {
 
 codex_permission_flags() {
     local sandbox approval
+    if [[ "$STANDALONE" != true ]]; then
+        approval="$(codex_approval_flags)"
+        sandbox=workspace-write
+        [[ "${AGENTSTACK_CHILD_SANDBOX:-off}" != off ]] || sandbox=danger-full-access
+        printf '%s\n' "--sandbox $sandbox${approval:+ $approval}"
+        return
+    fi
     sandbox="$(agentstack_resolve_setting AGENTSTACK_CODEX_SANDBOX \
         "${AGENTSTACK_CODEX_SANDBOX:-}" workspace-write "${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/env.sh")"
     if [[ "$sandbox" == danger-full-access ]]; then
@@ -3054,18 +3063,23 @@ claude_chrome_prompt_block() {
 # the selection cannot be honoured; the caller then stops before tmux.
 claude_tools_plan() {
     CLAUDE_CHILD_TOOL_FLAGS=""
-    if [[ "$CHILD_TOOLS_RESTRICTIVE" != true && "$CLAUDE_CHILD_CHROME" != true \
+    if [[ "$STANDALONE" == true && "$CHILD_TOOLS_RESTRICTIVE" != true && "$CLAUDE_CHILD_CHROME" != true \
           && "$(uname -s)" != Darwin ]]; then
         return 0
     fi
     local flags spec
+    local sandbox_args=()
+    if [[ "$STANDALONE" != true ]]; then
+        sandbox_args=(--child-sandbox "$AGENTSTACK_CHILD_SANDBOX")
+    fi
     spec="$CHILD_TOOLS_SPEC"
     # Legacy --claude-chrome requests have no parsed base/tools selection.
     [[ -n "$spec" ]] || spec='{"base":"default","tools":{}}'
     flags="$(python3 "$HOOKS_DIR/child_tools.py" claude-plan --spec "$spec" \
         --cwd "$WORK_DIR" \
         --chrome "$([[ "$CLAUDE_CHILD_CHROME" == true ]] && echo 1 || echo 0)" \
-        --claude-json "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}")" || return 1
+        --claude-json "${AGENTSTACK_CLAUDE_JSON:-$HOME/.claude.json}" \
+        ${sandbox_args[@]+"${sandbox_args[@]}"})" || return 1
     # child_tools emits a shell-quoted argv from a validated tool selection.
     CLAUDE_CHILD_TOOL_FLAGS="$flags"
 }

@@ -155,6 +155,9 @@ def test_child_launchers_keep_mcp_config_out_of_git_without_shared_exclude_mutat
         assert "git_excludes_file=$(printf '%q'" in text
         assert 'GIT_CONFIG_VALUE_\\${git_config_count}=\\$git_excludes_file' in text
         assert ".agents/mcp_config.json" in text
+        assert ".agents/rules/orrery-tool-refusals.md" in text
+        assert 'tool-refusal-rule "$WORKTREE_DIR"' in text
+        assert 'exec-headless' in text
         assert "rev-parse --git-path info/exclude" not in text
         assert "EXCLUDE_ADDED" not in text
         assert "remove_transient_exclude" not in text
@@ -174,13 +177,16 @@ def test_process_local_git_excludes_hide_mcp_config_without_mutating_repo(tmp_pa
     mcp = repo / ".agents" / "mcp_config.json"
     mcp.parent.mkdir()
     mcp.write_text('{"mcpServers": {}}\n', encoding="utf-8")
+    rule = mcp.parent / "rules" / "orrery-tool-refusals.md"
+    rule.parent.mkdir()
+    rule.write_text("fixture rule\n", encoding="utf-8")
     (repo / "visible.txt").write_text("visible\n", encoding="utf-8")
 
     shared_exclude = repo / ".git" / "info" / "exclude"
     shared_before = shared_exclude.read_bytes()
     local_exclude = tmp_path / "runtime with spaces" / "gemini excludes"
     local_exclude.parent.mkdir()
-    local_exclude.write_text(".agents/mcp_config.json\n", encoding="utf-8")
+    local_exclude.write_text(".agents/mcp_config.json\n.agents/rules/orrery-tool-refusals.md\n", encoding="utf-8")
 
     env = dict(os.environ)
     for key in list(env):
@@ -201,6 +207,7 @@ def test_process_local_git_excludes_hide_mcp_config_without_mutating_repo(tmp_pa
     assert status.returncode == 0, status.stderr
     assert "visible.txt" in status.stdout
     assert ".agents/mcp_config.json" not in status.stdout
+    assert str(rule.relative_to(repo)) not in status.stdout
     assert shared_exclude.read_bytes() == shared_before
 
 

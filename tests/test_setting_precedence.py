@@ -105,6 +105,7 @@ _CHOSEN_NAMES = {
     "DELIVERABLE_ROOTS": "AGENTSTACK_DELIVERABLE_ROOTS",
     "VAULT_SETTING": "AGENTSTACK_VAULT",
     "CODEX_ADD_DIRS_SETTING": "AGENTSTACK_CODEX_ADD_DIRS",
+    "CHILD_SANDBOX_SETTING": "AGENTSTACK_CHILD_SANDBOX",
     "MANAGED_AGENTS_FILE": "AGENTSTACK_MANAGED_AGENTS_FILE",
     "DASHBOARD_LOG": "AGENTSTACK_DASHBOARD_LOG",
     "DASHBOARD_LOG_MAX_BYTES": "AGENTSTACK_DASHBOARD_LOG_MAX_BYTES",
@@ -152,6 +153,7 @@ def _previous_install(
         "DASHBOARD_RESTART_DELAY": "11",
         "NATIVE_MAIL_MANAGEMENT_SOCKET": str(tmp_path / "mail.sock"),
         "CODEX_ADD_DIRS_SETTING": str(tmp_path / "secret"),
+        "CHILD_SANDBOX_SETTING": "off",
         **override,
     }
     chosen["CHOSEN_SETTINGS"] = " ".join(
@@ -243,6 +245,20 @@ def test_reinstall_preserves_codex_full_access(tmp_path):
     home, _ = _previous_install(tmp_path, CODEX_SANDBOX_SETTING="danger-full-access")
     assert _resolve_like_the_installer(home, "CODEX_SANDBOX_SETTING") == ["danger-full-access"]
     assert _resolve_like_the_installer(home, "CODEX_SANDBOX_SETTING", args=("--reset-settings",)) == ["workspace-write"]
+
+
+def test_child_sandbox_upgrade_defaults_off_and_preserves_an_opt_in(tmp_path):
+    home, chosen = _previous_install(tmp_path, not_chosen=("CHILD_SANDBOX_SETTING",),
+                                    CODEX_SANDBOX_SETTING="workspace-write")
+    env_file = home / ".agentstack/env.sh"
+    env_file.write_text("".join(line for line in env_file.read_text().splitlines(keepends=True)
+                                if not line.startswith("export AGENTSTACK_CHILD_SANDBOX=")))
+    assert _resolve_like_the_installer(home, "CHILD_SANDBOX_SETTING") == ["off"]
+    assert _resolve_like_the_installer(home, "CHILD_SANDBOX_SETTING", args=("--child-sandbox", "on")) == ["on"]
+    _write_env_sh_like_the_installer(home, {**chosen, "CHILD_SANDBOX_SETTING": "on"})
+    assert _resolve_like_the_installer(home, "CHILD_SANDBOX_SETTING") == ["on"]
+    assert _resolve_like_the_installer(home, "CHILD_SANDBOX_SETTING", args=("--reset-settings",)) == ["off"]
+    assert _resolve_like_the_installer(home, "CHILD_SANDBOX_SETTING", env={"AGENTSTACK_CHILD_SANDBOX": "off"}) == ["off"]
 
 
 def test_dashboard_origins_follow_setting_precedence_and_safe_env_writer(tmp_path):

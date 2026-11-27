@@ -687,6 +687,15 @@ def claude_native_screen_flags(platform=None) -> list[str]:
     return ["--settings", deny, "--disallowed-tools", f"mcp__{BUILTIN_SCREEN}"]
 
 
+def claude_sandbox_flags(flags: list[str], *, sandbox: bool) -> list[str]:
+    settings = {"sandbox": {"enabled": sandbox}}
+    if "--settings" not in flags:
+        return [*flags, "--settings", json.dumps(settings, separators=(",", ":"))]
+    index = flags.index("--settings") + 1
+    settings = {**json.loads(flags[index]), **settings}
+    return [*flags[:index], json.dumps(settings, separators=(",", ":")), *flags[index + 1:]]
+
+
 def claude_chrome_allowed_tools() -> list[str]:
     """Known Claude in Chrome tools approved only for a Chrome launch."""
     return [f"mcp__claude-in-chrome__{tool}" for tool in CLAUDE_CHROME_TOOLS]
@@ -1299,11 +1308,11 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
             config["mcp_servers"] = servers
     browser_server = None
     if mode == "temporary":
-        temp_name, definition = _browser_mcp(mode)
-        servers[temp_name] = definition
+        browser_server, definition = _browser_mcp(mode)
+        servers[browser_server] = definition
         config["mcp_servers"] = servers
-        names.append(temp_name)
-    if "browser" in tools or mode == "personal":
+        names.append(browser_server)
+    elif "browser" in tools or mode == "personal":
         if mode == "personal":
             try:
                 browser_server = codex_browser_server(servers)
@@ -1621,6 +1630,7 @@ def main(argv: list[str]) -> int:
     plan.add_argument("--cwd", required=True)
     plan.add_argument("--chrome", default="0")
     plan.add_argument("--claude-json", default=os.path.expanduser("~/.claude.json"))
+    plan.add_argument("--child-sandbox", choices=("on", "off"))
     cfg = sub.add_parser("claude-config")
     cfg.add_argument("--spec", default='{}')
     cfg.add_argument("--cwd", default="")
@@ -1677,7 +1687,10 @@ def main(argv: list[str]) -> int:
         if args.command == "claude-plan":
             result = claude_plan(_spec_arg(args.spec), cwd=args.cwd,
                                  chrome=args.chrome == "1", claude_json=args.claude_json)
-            sys.stdout.write(shlex.join(result["flags"]) + "\n")
+            flags = result["flags"]
+            if args.child_sandbox is not None:
+                flags = claude_sandbox_flags(flags, sandbox=args.child_sandbox == "on")
+            sys.stdout.write(shlex.join(flags) + "\n")
             return 0
         if args.command == "claude-config":
             spec = _spec_arg(args.spec)

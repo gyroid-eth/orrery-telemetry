@@ -1,6 +1,7 @@
 """Managed macOS Antigravity child handoff, permissions, roster and resume."""
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -72,14 +73,16 @@ def test_wsl_antigravity_uses_the_same_managed_screen_gate(tmp_path, monkeypatch
     argv = agy.command(plan, tmp_path, prompt="Fixture task", screen_mode=mode)
     grants = json.loads(argv[argv.index("--settings") + 1])["permissions"]["allow"]
     expected = screen_state.VIEW_TOOLS if mode == "view" else screen_state.TOOLS
-    assert grants == [f"mcp(orrery-screen/{tool})" for tool in expected]
+    assert grants == ["command(*)", *(f"mcp(orrery-screen/{tool})" for tool in expected)]
 
 
-def test_one_workspace_is_trusted_without_changing_global_settings(managed, monkeypatch, tmp_path):
+@pytest.mark.parametrize("sandbox", [False, True])
+def test_one_workspace_is_trusted_without_changing_global_settings(managed, monkeypatch, tmp_path, sandbox):
     _, cwd, state = managed
     settings = tmp_path / ".gemini/antigravity-cli/settings.json"
     settings.parent.mkdir(parents=True)
     configured = {"trustedWorkspaces": ["/fixture/other"],
+                  "enableTerminalSandbox": True, "agentMode": "auto",
                   "permissions": {"allow": ["read_file(.)"], "deny": ["mcp(orrery-mail/fetch_inbox)"],
                                   "ask": ["command(git)", "mcp(orrery-mail/whois)"]}}
     settings.write_text(json.dumps(configured))
@@ -88,17 +91,22 @@ def test_one_workspace_is_trusted_without_changing_global_settings(managed, monk
         "fixture-other": {"command": "/fixture/other"},
     }})
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    if sandbox:
+        monkeypatch.setenv("AGENTSTACK_CHILD_SANDBOX", "on")
     plan = state["gemini_launch"]
     assert agy.validate_plan(plan) == cwd
     args = agy.command(plan, cwd, prompt="First task")
     overlay = json.loads(args[args.index("--settings") + 1])
     assert args[-2] == "-i" and args[-1].endswith("\n\nFirst task")
-    assert "--sandbox" in args and overlay["enableTerminalSandbox"]
+    assert overlay["enableTerminalSandbox"] is sandbox
+    assert ("--sandbox" in args) is sandbox
+    assert args[args.index("--mode") + 1] == ("auto" if sandbox else "accept-edits")
     assert overlay["trustedWorkspaces"] == [str(cwd)]
     assert overlay["permissions"]["deny"] == configured["permissions"]["deny"]
     assert overlay["permissions"]["ask"] == configured["permissions"]["ask"]
     assert overlay["permissions"]["allow"] == [
-        "read_file(.)", *(f"mcp(orrery-mail/{tool})" for tool in agy.MAIL_TOOLS)]
+        "read_file(.)", *([] if sandbox else ["command(*)"]),
+        *(f"mcp(orrery-mail/{tool})" for tool in agy.MAIL_TOOLS)]
     assert json.loads(settings.read_text()) == configured
     resume = agy.command(plan, cwd, conversation=SID)
     assert resume[-2:] == ["--conversation", SID]
@@ -109,6 +117,30 @@ def test_one_workspace_is_trusted_without_changing_global_settings(managed, monk
     hook.write_text("{}")
     with pytest.raises(ValueError, match="reservation hook"):
         agy.validate_plan(plan)
+
+
+@pytest.mark.parametrize("sandbox", [False, True])
+def test_headless_uses_the_same_terminal_settings_and_forwards_stream_json(tmp_path, sandbox):
+    home = tmp_path / "home"
+    settings = home / ".gemini/antigravity-cli/settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"permissions": {"deny": ["command(test-deny)"]}}))
+    fake = tmp_path / "agy"
+    fake.write_text(f"#!{sys.executable}\n"
+                    "import json, sys\n"
+                    "print(json.dumps([sys.argv[1:], sys.stdin.read()]))\n")
+    fake.chmod(0o700)
+    event = '{"event":"user","message":{"content":"fixture"}}\n'
+    result = subprocess.run([sys.executable, str(agy.__file__), "exec-headless", str(fake),
+                             "--input-format", "stream-json"], input=event, text=True,
+                            env={"HOME": str(home), "AGENTSTACK_CHILD_SANDBOX": "on" if sandbox else "off"},
+                            capture_output=True, timeout=10, check=True)
+    argv, stdin = json.loads(result.stdout)
+    assert stdin == event
+    assert argv[-2:] == ["--input-format", "stream-json"]
+    assert ("--sandbox" in argv) is sandbox
+    overlay = json.loads(argv[argv.index("--settings") + 1])
+    assert overlay == agy.terminal_settings(home, sandbox)
 
 
 @pytest.mark.parametrize("scope", ["global", "workspace"])
@@ -125,7 +157,7 @@ def test_same_named_foreign_mail_server_gets_no_automatic_approval(
         "orrery-mail": {"command": "/fixture/foreign"},
     }})
     args = agy.command(state["gemini_launch"], cwd, prompt="First task", config_dir=config_dir)
-    assert json.loads(args[args.index("--settings") + 1])["permissions"] == {"allow": []}
+    assert json.loads(args[args.index("--settings") + 1])["permissions"] == {"allow": ["command(*)"]}
     assert args[-2:] == ["-i", "First task"]
 
 
@@ -173,6 +205,8 @@ def test_edit_uses_shared_reservation_and_shell_stays_in_the_worktree(managed, m
     event["toolCall"] = {"name": "run_command", "args": {"CommandLine": "printf OK"}}
     assert agy.guard(event, cwd, runtime=runtime) == {"decision": "allow", "overwrite": {"Cwd": str(cwd)}}
     event["toolCall"]["args"]["BypassSandbox"] = True
+    assert agy.guard(event, cwd, runtime=runtime)["decision"] == "allow"
+    monkeypatch.setenv("AGENTSTACK_CHILD_SANDBOX", "on")
     assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
 
 
@@ -606,8 +640,21 @@ def test_delegated_resume_preserves_the_workspace_mcp_and_adds_no_screen_grants(
     child_resume.begin_resume(runtime, NAME, agent_id=52, project_key=PROJECT, program="antigravity")
     assert agy.run(runtime, NAME, conversation=SID) == 0
     assert invocations == [["--conversation", SID]]
+    rule = cwd / agy.TOOL_REFUSAL_RULE
+    assert b"the refused action." in rule.read_bytes()
+    assert str(agy.TOOL_REFUSAL_RULE) in (runtime / f"gemini-git-excludes-{NAME}").read_text().splitlines()
     assert (mcp.read_bytes(), mcp.stat().st_ino) == (before, inode)
     assert store.list() == retained_launches
+
+
+def test_tool_refusal_rule_preserves_project_owned_file(tmp_path):
+    rule = tmp_path / agy.TOOL_REFUSAL_RULE
+    rule.parent.mkdir(parents=True)
+    rule.write_text("project rule")
+    rule.chmod(0o600)
+    with pytest.raises(ValueError, match="already has a tool refusal rule"):
+        agy.write_tool_refusal_rule(tmp_path)
+    assert rule.read_text() == "project rule"
 
 
 @pytest.mark.parametrize(("resume_from", "expected"), [("", "view"), ("e" * 32, "off")])

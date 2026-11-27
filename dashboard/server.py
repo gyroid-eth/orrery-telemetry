@@ -4486,6 +4486,8 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
                 session, registration, parent=child_state.get("parent_agent"),
                 servers=servers)
             tool_flags = tools_plan["flags"] if tools_plan is not None else tools.claude_native_screen_flags()
+            if child_state.get("parent_agent"):
+                tool_flags = tools.claude_sandbox_flags(tool_flags, sandbox=_child_sandbox_mode() == "on")
             flags = "".join(" " + shlex.quote(flag) for flag in tool_flags)
             inner = inner.replace(" --resume ", f" --mcp-config {shlex.quote(mcp_config)} --strict-mcp-config{flags} --resume ", 1)
         if not legacy:
@@ -4658,22 +4660,31 @@ def _codex_child_add_dirs(extra: list[str] | None = None) -> list[str]:
     return seen
 
 
-def _codex_child_launch_flags(extra_dirs: list[str] | None = None, *, standalone: bool = False) -> str:
+def _child_sandbox_mode() -> str:
+    return codex_models.read_launcher_setting(
+        "AGENTSTACK_CHILD_SANDBOX", install_home=os.path.dirname(HERE)
+    ) or "off"
+
+
+def _codex_child_launch_flags(extra_dirs: list[str] | None = None, *,
+                              standalone: bool = False, child: bool = True) -> str:
     """Sandbox / approval / network / --add-dir flags for a product-launched Codex.
 
-    Full Access uses approval policy `never`. With workspace-write, a recorded
-    standalone start uses Codex configuration. Other resumes use
-    AGENTSTACK_CODEX_CHILD_APPROVAL (default `never`). Network access follows
-    AGENTSTACK_CODEX_NETWORK (default on)."""
+    Parented starts use the common child sandbox setting and the configured child
+    approval policy. Other starts retain the standalone sandbox behavior."""
     approval = os.environ.get("AGENTSTACK_CODEX_CHILD_APPROVAL", "").strip() or "never"
     network = os.environ.get("AGENTSTACK_CODEX_NETWORK", "").strip().lower() or "on"
-    sandbox = codex_models.read_launcher_setting(
-        "AGENTSTACK_CODEX_SANDBOX", install_home=os.path.dirname(HERE)
-    )
-    parts = ["--sandbox workspace-write"]
-    if sandbox == "danger-full-access":
-        parts = ["--sandbox danger-full-access --ask-for-approval never"]
-    elif not standalone:
+    if child and not standalone:
+        sandbox = "workspace-write" if _child_sandbox_mode() == "on" else "danger-full-access"
+    else:
+        legacy_value = codex_models.read_launcher_setting(
+            "AGENTSTACK_CODEX_SANDBOX", install_home=os.path.dirname(HERE)
+        )
+        sandbox = "danger-full-access" if legacy_value == "danger-full-access" else "workspace-write"
+        if sandbox == "danger-full-access":
+            approval = "never"
+    parts = [f"--sandbox {sandbox}"]
+    if not standalone or sandbox == "danger-full-access":
         parts.append(f"--ask-for-approval {shlex.quote(approval)}")
     # No update screen in a product-launched Codex: its default choice runs
     # `npm install -g`, and nobody is there to decline it (#60).
@@ -5859,6 +5870,7 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expect
             "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
             "AGENT_NAME": session, "PARENT_AGENT": state.get("parent_agent", ""),
             "AGENTSTACK_RESERVED_IDENTITY": "1", "AGENTSTACK_GEMINI_INTERACTIVE": "1",
+            "AGENTSTACK_CHILD_SANDBOX": _child_sandbox_mode(),
         }
         if generation := module.tools_change_generation():
             environment["AGENTSTACK_TOOLS_CHANGE_GENERATION"] = generation
@@ -6381,7 +6393,7 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
         inner = (
             f'{launch_prefix}{src} && '
             f'exec env -u OPENAI_API_KEY codex resume {sid} '
-            f'-C {shlex.quote(cwd)} {_codex_child_launch_flags()}'
+            f'-C {shlex.quote(cwd)} {_codex_child_launch_flags(child=False)}'
         )
     resume_environment = {
         "AGENTSTACK_HOME": install_home,

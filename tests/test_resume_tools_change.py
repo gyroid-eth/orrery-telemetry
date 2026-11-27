@@ -776,7 +776,7 @@ def test_preflight_and_exit_verify_same_active_standalone(stopped, monkeypatch, 
     monkeypatch.setattr(server, "_child_session_live", lambda *a: True)
     monkeypatch.setattr(server, "_card_codex_provenance", lambda *a: {"launch_origin": "child"})
     monkeypatch.setattr(server, "_codex_resume_child_home", lambda *a, **k: (str(runtime), "orrery-only", True))
-    monkeypatch.setattr(server.shutil, "which", lambda command: "/bin/true")
+    monkeypatch.setattr(server.shutil, "which", lambda command: "/fixture/bin/npx" if command == "npx" else "/bin/true")
     monkeypatch.setenv("AGENTSTACK_HOME", str(ROOT))
     monkeypatch.setattr(server, "ABS_CLAUDE", sys.executable)
     monkeypatch.setattr(server, "HOOKS_DIR", str(ROOT / "hooks"))
