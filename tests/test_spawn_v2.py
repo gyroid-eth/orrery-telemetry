@@ -685,6 +685,22 @@ def test_suggest_name_refuses_exhausted_candidates(monkeypatch, tmp_path):
     assert server.suggest_spawn_name("Boltzmann") is None
 
 
+@pytest.mark.parametrize("requested", [False, True])
+def test_delegated_antigravity_explains_the_forced_worktree(requested, monkeypatch, tmp_path):
+    launcher = tmp_path / "launcher"
+    launcher.touch()
+    monkeypatch.setattr(server, "_project_key", lambda: "/fixture")
+    spec = server.SpawnLaunchSpec(provider="gemini", program="antigravity", model="fixture",
+                                  script=str(launcher), worktree_required=True)
+    result = server.spawn_with_launch_spec({"parent": "FixtureParent", "task": "work", "dir": str(tmp_path),
+                                          "worktree": requested, "dry_run": True}, spec)
+    assert result["ok"] and result["worktree"] and "--worktree" in result["argv"]
+    if requested:
+        assert "worktree_notice" not in result
+    else:
+        assert "managed .agents settings" in result["worktree_notice"]
+
+
 def test_suggest_name_rejects_scientist_outside_roster(monkeypatch, tmp_path):
     script = tmp_path / "scientists.sh"
     script.write_text(

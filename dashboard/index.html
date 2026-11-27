@@ -38746,7 +38746,7 @@ function spawnWatchLimitMs(pending){
 }
 
 // Poll the background verdict of an async spawn and report it as a toast.
-async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS,wslWarning=''){
+async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS,wslWarning='',worktreeNotice=''){
   const started=Date.now();
   let phase=null;
   while(Date.now()-started<limitMs){
@@ -38758,7 +38758,7 @@ async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS,wslWarni
     }catch(e){continue;}
     if(j?.state==='launching'&&j.phase&&j.phase!==phase){
       phase=j.phase;
-      if(phase==='checkout')toast('▸ CHECKING OUT WORKTREE','> '+name,false,8000);
+      if(phase==='checkout')toast('▸ CHECKING OUT WORKTREE','> '+name+worktreeNotice,false,8000);
       else if(phase==='startup')toast('▸ STARTING','> '+name,false);
     }
     if(!j||!j.ok||j.state==='launching')continue;
@@ -39490,6 +39490,7 @@ async function submitSpawn(){
       return;
     }
     const hold=j.wsl_hold;
+    const worktreeNotice=typeof j.worktree_notice==='string'?' · '+j.worktree_notice:'';
     const wslWarning=hold&&hold.ok===false
       ? ' · '+(hold.error||'WSL hold could not be confirmed')+
         ' · '+(hold.hint||'keep an Ubuntu window open until this agent has finished')
@@ -39499,11 +39500,11 @@ async function submitSpawn(){
       const adjusted=j.name_substituted
         ? ' · identity changed from '+(j.requested_name||'?') : '';
       toast(wslWarning?'▸ LAUNCHING · WSL NOT KEPT':j.name_substituted?'▸ LAUNCHING · NAME CHANGED':'▸ LAUNCHING',
-        '> '+(j.child_name||'')+adjusted+' :: registered · waiting for the REPL'+wslWarning,
+        '> '+(j.child_name||'')+adjusted+' :: registered · waiting for the REPL'+worktreeNotice+wslWarning,
         !!wslWarning,wslWarning?10000:undefined);
       updateSpawnButton();
       closeSpawnModal();
-      watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j),wslWarning);
+      watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j),wslWarning,worktreeNotice);
       return;
     }
     clearSpawnTaskDraft(payload.dir);
@@ -39513,7 +39514,7 @@ async function submitSpawn(){
     setSpawnStat('▸ SPAWNED '+(j.child_name||'')+adjusted+
       (j.worktree?' · worktree exp/'+j.child_name:'')+wslWarning,wslWarning?'err':'ok');
     toast(wslWarning?'▸ SPAWNED · WSL NOT KEPT':j.name_substituted?'▸ SPAWNED · NAME CHANGED':'▸ SPAWNED',
-      '> '+(j.child_name||'')+adjusted+' :: tmux session opening'+wslWarning,
+      '> '+(j.child_name||'')+adjusted+' :: tmux session opening'+worktreeNotice+wslWarning,
       !!wslWarning,wslWarning?10000:undefined);
     // 1.2s 余韻を見せてから自動クローズ
     setTimeout(()=>{

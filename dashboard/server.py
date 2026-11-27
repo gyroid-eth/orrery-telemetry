@@ -10663,7 +10663,11 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     program = spec.program
     model_str = spec.model
     effort = spec.effort
-    model_notice = {"model_note": spec.model_note} if spec.model_note else {}
+    launch_notices = {"model_note": spec.model_note} if spec.model_note else {}
+    if spec.worktree_required and not request["worktree"]:
+        launch_notices["worktree_notice"] = (
+            "Delegated Antigravity agents use a worktree to store their managed .agents settings."
+        )
 
     if standalone and not spec.standalone_supported:
         return {"ok": False,
@@ -10689,7 +10693,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     if request["dry_run"]:
         return {
             "ok": True, "dry_run": True, "provider": provider,
-            **model_notice,
+            **launch_notices,
             "model": model_str, "effort": effort, "dir": work_dir,
             "standalone": standalone, "worktree": worktree,
             "argv": _spawn_argv(request, spec, requested_name or "<child-name>",
@@ -10757,7 +10761,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         registration_status = "may remain" if registration_may_remain else "remains"
         result = {
             "ok": False,
-            **model_notice,
+            **launch_notices,
             "error": (
                 f"{error}; child registration '{child_name}' {registration_status} because "
                 "the dashboard server has no permission to delete it"
@@ -11083,6 +11087,8 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             f"standalone={standalone} worktree={worktree} ===\n".encode())
         if spec.model_note:
             log_fh.write(f"note: {spec.model_note}\n".encode())
+        if "worktree_notice" in launch_notices:
+            log_fh.write(f"note: {launch_notices['worktree_notice']}\n".encode())
         proc = subprocess.Popen(args, stdout=log_fh, stderr=log_fh, env=env,
                                 start_new_session=True)
 
@@ -11171,7 +11177,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                     detail=tail)
             return {
                 "ok": True,
-                **model_notice,
+                **launch_notices,
                 "child_name": child_name,
                 "requested_name": requested_name,
                 "name_substituted": name_substituted,
@@ -11191,7 +11197,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             # rest of the UI. The thread owns the log handle from here.
             pending = {
                 "ok": True,
-                **model_notice,
+                **launch_notices,
                 "pending": True,
                 "child_name": child_name,
                 "requested_name": requested_name,
