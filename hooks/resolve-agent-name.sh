@@ -64,16 +64,16 @@ fi
 # 2. Resolve the exact targeted pane session. Pane metadata is corroboration,
 # never authority by itself because stale files survive pane/session reuse.
 if [ -n "${TMUX_PANE:-}" ]; then
-    PANE_KEY="${TMUX_PANE//%/_}"
-    METADATA_FILE="$RUNTIME_DIR/agent_name_${PANE_KEY}"
-    PANE_METADATA=""
-    if [ -f "$METADATA_FILE" ]; then
-        PANE_METADATA=$(tr -d '[:space:]' < "$METADATA_FILE" 2>/dev/null)
-        # A placeholder in the metadata is not a competing identity; it is a
-        # pane that had not been named when the file was written.
-        if is_agent_name_placeholder "$PANE_METADATA"; then
-            PANE_METADATA=""
-        fi
+    PANE_NAME_HELPER="${_ags_client%/bin/lib/runtime_client.py}/hooks/pane-name.py"
+    PANE_RECORD="$("${AGENTSTACK_PYTHON:-python3}" "$PANE_NAME_HELPER" read "$RUNTIME_DIR" "$TMUX_PANE")" || {
+        RESOLVED_AGENT_SRC="identity-conflict"
+        return 0 2>/dev/null || exit 0
+    }
+    PANE_METADATA="${PANE_RECORD#*|}"
+    # A placeholder in the metadata is not a competing identity; it is a
+    # pane that had not been named when the file was written.
+    if is_agent_name_placeholder "$PANE_METADATA"; then
+        PANE_METADATA=""
     fi
     PANE_SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#S' 2>/dev/null)
     if is_agent_name_placeholder "$PANE_SESSION"; then

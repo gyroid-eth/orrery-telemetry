@@ -40,6 +40,7 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 
 - **発火:** `SessionStart`。さらに `mark-agent-registered.sh` が現在 session 自身の canonical name を取得した後にも background で呼びます。
 - **動作:** `AGENT_NAME` または引数を使い、`TMUX_PANE` ごとの identity metadata を runtime directory へ書きます。tmux rename は `pending-*` session にだけ許し、確立済みの親 session を child 名で上書きしません。
+- **再起動後:** 名前の記録は socket ごとに保存し、サーバーの PID と起動時刻を照合します。同じ pane 番号を次に確認するときに、以前のサーバーの記録を片付けます。旧形式の記録も更新時刻が現行サーバーの起動より前なら片付けます。
 - **衝突時:** 同名 tmux session を kill せず、rename を拒否して fail-closed にします。名前が未解決なら何もしません。
 
 ### `session-start-reminder.sh`
@@ -233,7 +234,7 @@ Codex plugin の対象 hook だけを承認する API と未確認時の `/hooks
 
 明示的な隔離起動・配送と operator の復旧は [global delivery client](global-delivery-client.md) を参照してください。既定は旧 mode のままです。
 
-SessionStart は旧 block の件数だけを案内します。bare session の Mail 登録は行わず、編集 guard の方針は保持します。 [Details](https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md#legacy-blocks).
+ORRERY に参加する Claude Code の SessionStart は、指示ファイルの移行で確認が必要なファイル、警告の種類、利用者が行う確認手順を表示します。bare session の Mail 登録は行わず、編集 guard の方針は保持します。[指示ファイルの移行](https://github.com/gyroid-eth/orrery/blob/master/docs/instruction-migration.md#legacy-blocks)
 
 ## ローカルモデルの鍵をagentのshellから読まない
 

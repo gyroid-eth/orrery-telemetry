@@ -188,12 +188,15 @@ def test_standalone_antigravity_forwards_only_offered_managed_tools():
 
 @pytest.mark.parametrize('harness', ['claude-code', 'codex-cli', 'dsh', 'hermes', 'antigravity'])
 @pytest.mark.parametrize(('mode', 'access'), [('off', None), ('view', 'read'), ('control', 'operate')])
-def test_computer_modes_forward_consistently_for_five_harnesses(harness, mode, access):
+@pytest.mark.parametrize('managed', [False, True], ids=['mac', 'wsl'])
+def test_computer_modes_forward_consistently_for_five_harnesses(harness, mode, access, managed):
     provider = 'gemini' if harness == 'antigravity' else 'codex'
     source = {**CATALOG, 'computer_modes':['off','view','control'], 'browser_modes':{},
               'providers':[{'id':provider,'capabilities':{'standalone':True},
                             'models':[{'id':'fixture-model'}],
                             'harnesses':[{'id':harness,'available':True}]}]}
+    if managed:
+        source.update(computer_use_transport='orrery-screen', computer_use=True)
     submitted = []
 
     def launch(body):
@@ -205,7 +208,8 @@ def test_computer_modes_forward_consistently_for_five_harnesses(harness, mode, a
     value = dict(payload(catalog), harness=harness, effort=None, computer=mode)
     value.pop('browser')
     assert store.launch('a'*32, value)['state'] == 'ready'
-    assert submitted[0].get('tools', {}).get('screen') == ({'access':access} if access else None)
+    expected = {'access':access, **({'server':'orrery-screen'} if managed else {})} if access else None
+    assert submitted[0].get('tools', {}).get('screen') == expected
 
 
 def test_antigravity_models_are_listed_without_forwarding_an_invalid_standalone_launch():

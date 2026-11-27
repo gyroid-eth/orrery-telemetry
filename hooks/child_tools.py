@@ -467,13 +467,15 @@ def check_provider(spec: dict, provider: str) -> None:
                 "screen server (screen:<read|operate>:<server>)")
     elif provider in ("dsh", "hermes"):
         return
-    elif provider in ("gemini", "antigravity", "agy") and sys.platform == "darwin":
+    elif provider in ("gemini", "antigravity", "agy") and sys.platform in {"darwin", "linux"}:
         names = tools.get("mcp", [])
         screen = tools.get("screen")
         if (spec["base"] != "default" or set(tools) - {"screen", "screen_off", "mcp", "browser_mode"}
                 or (screen and screen["server"] != SCREEN_SERVER)
                 or any(name != SCREEN_SERVER for name in names)):
             raise ToolsError("Antigravity supports only the managed Computer use selection")
+        if sys.platform == "linux" and not running_in_wsl() and screen_mode(spec) is not None:
+            raise ToolsError("Computer use requires Windows Cua Driver when running Antigravity on Linux")
     elif provider != "claude":
         if restrictive(spec):
             raise ToolsError(f"base and tools are not supported for provider: {provider}")
@@ -507,7 +509,11 @@ def _direct_chrome_package(definition: dict) -> str | None:
     args = definition.get("args") or []
     if not isinstance(command, str) or not isinstance(args, list):
         return None
-    if re.split(r"[/\\]", command)[-1] not in ("npx", "npx.cmd", "npx.exe"):
+    launcher = re.split(r"[/\\]", command)[-1]
+    if (launcher == "node.exe" and args and isinstance(args[0], str)
+            and args[0].lower().replace("\\", "/").endswith("/node_modules/npm/bin/npx-cli.js")):
+        args = args[1:]
+    elif launcher not in ("npx", "npx.cmd", "npx.exe"):
         return None
     options = True
     for word in args:
@@ -806,6 +812,59 @@ def _personal_chrome(definition):
                         for arg in args if isinstance(arg, str)))
 
 
+def _browser_npx(home=None):
+    command = shutil.which("npx")
+    if command and (sys.platform != "linux" or not running_in_wsl() or shutil.which("node")):
+        return {"command": command}
+    # A user service can have a much shorter PATH than the login shell.
+    home = home or Path.home()
+    nvm = Path(os.environ.get("NVM_DIR") or home / ".nvm").expanduser()
+    versions = nvm / "versions" / "node"
+    installed = [folder for folder in versions.glob("v*") if re.fullmatch(r"v\d+\.\d+\.\d+", folder.name)]
+    installed.sort(key=lambda folder: tuple(map(int, folder.name[1:].split("."))), reverse=True)
+    managed_node = Path(os.environ.get("AGENTSTACK_DSH_NODE", ""))
+    directories = [home / ".local/bin", home / ".nodebrew/current/bin", *(folder / "bin" for folder in installed)]
+    if managed_node.is_absolute() and managed_node.is_file() and os.access(managed_node, os.X_OK):
+        directories.insert(0, managed_node.parent)
+    for directory in directories:
+        if not all(path.is_file() and os.access(path, os.X_OK) for path in (directory / "npx", directory / "node")):
+            continue
+        # npx's env-based shebang must find Node beside the selected executable.
+        path = os.pathsep.join(filter(None, (str(directory), os.environ.get("PATH", os.defpath))))
+        return {"command": str(directory / "npx"), "env": {"PATH": path}}
+    raise ToolsError("Install Node.js to use Chrome DevTools")
+
+
+def _windows_browser_npx():
+    """Use Windows Node so autoConnect discovers the Windows Chrome profile."""
+    commands = [shutil.which("node.exe"), "/mnt/c/Program Files/nodejs/node.exe", "/c/Program Files/nodejs/node.exe"]
+    for command in filter(None, commands):
+        node = Path(command)
+        script = node.with_name("node_modules") / "npm/bin/npx-cli.js"
+        if not node.is_absolute() or not node.is_file() or not os.access(node, os.X_OK) or not script.is_file():
+            continue
+        try:
+            windows_path = subprocess.check_output(["wslpath", "-w", str(script)], text=True, timeout=2).strip()
+        except (OSError, subprocess.SubprocessError):
+            break
+        if re.fullmatch(r"[A-Za-z]:\\[^\x00-\x1f]+", windows_path):
+            return {"command": str(node), "args": [windows_path]}
+    raise ToolsError("My Chrome requires Windows Node.js with npm when running in WSL")
+
+
+def _temporary_browser_runtime(home=None):
+    runtime = _browser_npx(home)
+    if sys.platform != "linux" or not running_in_wsl():
+        return runtime, []
+    # Node runs in WSL for this mode. Pin a Linux executable so Puppeteer
+    # cannot choose a Windows browser and cross the WSL debugging boundary.
+    for name in ("google-chrome-stable", "google-chrome", "chromium", "chromium-browser"):
+        command = shutil.which(name)
+        if command and Path(command).resolve().suffix.lower() != ".exe":
+            return runtime, ["--executablePath", command]
+    raise ToolsError("Install Google Chrome or Chromium inside WSL to use Temporary Chrome")
+
+
 def _browser_mcp(mode, codex_config=None):
     if mode == "personal" and codex_config is not None:
         configured = _native_codex_browser(codex_config, explicit=True)
@@ -813,17 +872,24 @@ def _browser_mcp(mode, codex_config=None):
             if not _personal_chrome(configured[1]):
                 raise ToolsError("My Chrome requires Chrome DevTools with autoConnect")
             return configured
-    npx = shutil.which("npx")
-    if not npx:
-        raise ToolsError("Install Node.js to use Chrome DevTools")
-    switch = "--isolated" if mode == "temporary" else "--autoConnect"
-    return "chrome-devtools", {"command": npx, "args": ["-y", "chrome-devtools-mcp@latest",
-                                                       switch, "--no-usage-statistics"]}
+    if mode == "temporary":
+        runtime, browser_args = _temporary_browser_runtime()
+        options = ["--isolated", *browser_args]
+    else:
+        runtime = (_windows_browser_npx() if sys.platform == "linux" and running_in_wsl() else _browser_npx())
+        options = ["--autoConnect"]
+    args = [*runtime.get("args", ()), "-y", "chrome-devtools-mcp@latest", *options, "--no-usage-statistics"]
+    return "chrome-devtools", {**runtime, "args": args}
 
 
 def launch_browser_modes(codex_config, *, home=None):
     choices = {key: ["off"] for key in ("claude-code", "codex", "dsh", "hermes")}
-    if shutil.which("npx"):
+    try:
+        _temporary_browser_runtime(home)
+    except ToolsError:
+        have_temporary = False
+    else:
+        have_temporary = True
         for modes in choices.values():
             modes.append("temporary")
     choices["claude-code"].append("personal")
@@ -838,14 +904,22 @@ def launch_browser_modes(codex_config, *, home=None):
         choices[key].append("personal")
     choices["hermes"] = list(choices["dsh"])
     choices["antigravity"] = []
-    if sys.platform == "darwin":
+    if sys.platform in {"darwin", "linux"}:
         try:
             inherited = _agy_inherited_servers(
                 (home or Path.home()) / ".gemini" / "config" / "mcp_config.json", "global")
         except ToolsError:
             return choices
         if not _agy_managed_browser_conflict(inherited):
-            choices["antigravity"] = ["off", "temporary", "personal"] if shutil.which("npx") else ["off"]
+            choices["antigravity"] = ["off"]
+            if have_temporary:
+                choices["antigravity"].append("temporary")
+            try:
+                _browser_mcp("personal")
+            except ToolsError:
+                pass
+            else:
+                choices["antigravity"].append("personal")
     return choices
 
 
@@ -962,7 +1036,7 @@ def mail_alias_names(settings: dict) -> list[str]:
 def agy_validate_selection(spec, *, home=None, cwd=None):
     """Check Antigravity's inherited servers without creating launch state."""
     check_provider(spec, "gemini")
-    if sys.platform != "darwin":
+    if sys.platform not in {"darwin", "linux"}:
         return
     if home is None:
         home = Path.home()
@@ -993,12 +1067,12 @@ def agy_launch_config(mail_command, spec, *, runtime, project, child, mail_env, 
                       home=None, cwd=None, resume_from=None):
     agy_validate_selection(spec, home=home, cwd=cwd)
     servers = {"orrery-mail": {"command": mail_command, "args": []}}
-    if sys.platform != "darwin":
-        return {"mcpServers": servers}, None
     mode = spec["tools"].get("browser_mode")
     if mode in ("temporary", "personal"):
         name, definition = _browser_mcp(mode)
         servers[name] = definition
+    if sys.platform != "darwin" and not (sys.platform == "linux" and running_in_wsl()):
+        return {"mcpServers": servers}, None
     state = _screen_state()
     mode_for_screen = screen_mode(spec)
     try:
@@ -1015,7 +1089,10 @@ def agy_launch_config(mail_command, spec, *, runtime, project, child, mail_env, 
 
 def _agy_inherited_servers(path, scope):
     try:
-        inherited = json.loads(path.read_text()).get("mcpServers", {})
+        raw = path.read_text()
+        if not raw.strip():
+            return {}
+        inherited = json.loads(raw).get("mcpServers", {})
     except FileNotFoundError:
         inherited = {}
     except (ValueError, AttributeError) as exc:
@@ -1080,7 +1157,7 @@ def claude_mcp_definitions(claude_json: str, cwd: str) -> dict:
     return {**(user if isinstance(user, dict) else {}), **(project if isinstance(project, dict) else {})}
 
 
-def change_permission(tools: dict, permission: dict, definitions: dict | None) -> dict:
+def change_permission(tools: dict, permission: dict, definitions: dict | None, *, managed_screen: bool = False) -> dict:
     """Patch one permission in a saved, normalized selection."""
     definitions = definitions if isinstance(definitions, dict) else {}
 
@@ -1110,7 +1187,7 @@ def change_permission(tools: dict, permission: dict, definitions: dict | None) -
         elif mode == "off":
             # Persist the choice even when there is no relay in the new launch.
             changed["screen_off"] = True
-        elif mode == "view" or (mode == "control" and (screen == SCREEN_SERVER or SCREEN_SERVER in mcp)):
+        elif mode == "view" or (mode == "control" and (managed_screen or screen == SCREEN_SERVER or SCREEN_SERVER in mcp)):
             changed["screen"] = {"server": SCREEN_SERVER, "access": "read" if mode == "view" else "operate"}
         elif mode == "control":
             direct = next((name for name in mcp if name in removed), "cua-driver")

@@ -1549,10 +1549,14 @@ def test_d12_selected_parity_source_order_exposes_external_application_seam() ->
         < should_attempts[2] < worker
     )
     delivery = _extract_shell_function(source, "deliver_worker")
-    submit = delivery.index('tmux submit-input "$pane_id" "$paste_file"')
+    args = delivery.index('submit_args=(submit-input "$pane_id" "$paste_file")')
+    submit = delivery.index('run_to "$((TMUX_TIMEOUT + 2))" tmux "${submit_args[@]}"', args)
+    failure = delivery.index('if (( submit_rc != 0 )); then', submit)
     success = delivery.index(
-        'state_mark_result "$agent_name" "$msg_key" "success" "watcher"'
+        'state_mark_result "$agent_name" "$msg_key" "success" "watcher"', failure
     )
+    assert 'return 0' in delivery[failure:success]
+    assert 'rm -f "$signal_file"' not in delivery[failure:success]
     release = delivery.index('release_delivery_lease "$agent_name" "$msg_key"', success)
     unlink = delivery.index('rm -f "$signal_file"', release)
-    assert submit < success < release < unlink
+    assert args < submit < failure < success < release < unlink

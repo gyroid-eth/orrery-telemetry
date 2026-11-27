@@ -35,6 +35,7 @@ The installer distributes the endpoint and transport credential selector in the 
 
 - **Trigger:** `SessionStart`. It is also called in the background after `mark-agent-registered.sh` obtains the current session's own canonical name.
 - **Behavior:** Uses `AGENT_NAME` or an argument and writes identity metadata for each `TMUX_PANE` to the runtime directory. tmux rename is allowed only for `pending-*` sessions, so an established parent session is not overwritten with a child name.
+- **After a restart:** Each socket has its own pane-name records. The hooks verify the server PID and start time and discard records from the previous server when they next check the same pane number. Older unscoped records are also discarded when their modification time predates the current server.
 - **On collision:** Does not kill a same-name tmux session; it refuses the rename and fails closed. If the name cannot be resolved, it does nothing.
 
 ### `session-start-reminder.sh`
@@ -220,7 +221,7 @@ The [absolute reservation candidate](absolute-reservations.en.md) supplies expli
 
 For explicit isolated launch, delivery and operator recovery, see [global delivery client](global-delivery-client.en.md). Legacy remains the default.
 
-SessionStart reports only legacy-block counts. Bare sessions do not register with Mail; editing guards keep their policy. [Details](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#legacy-blocks).
+For participating Claude Code sessions, SessionStart lists each instruction file that needs review, the warning type, and what the operator can do. Bare sessions do not register with Mail. Editing guards keep their policy. [Instruction migration](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#legacy-blocks)
 
 For new isolated-global launches, SessionEnd does not prove provider exit. The wait runner saves the actual outcome and completes the single report intent before cleanup. Existing standalone hooks retain their behavior. See [dedicated launch and termination recovery](global-delivery-client.en.md#dedicated-launch-and-termination-recovery).
 

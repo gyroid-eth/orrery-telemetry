@@ -132,49 +132,36 @@ def test_exit_kill_capture_rejects_shared_mock_contamination_and_extra_exit_sign
         assert server.os is original_os
 
 
-def test_interactive_antigravity_keeps_existing_slash_exit_path(monkeypatch) -> None:
-    sent: list[list[str]] = []
+_AGY_MODEL_PICKER = ("Select a model\n> 1. Gemini 4 Neon\n  2. Gemini 4 Flash\nEnter to select · Esc to cancel\n", 1, 2)
+_CLAUDE_APPROVAL = ("Do you want to make this edit to test.txt?\n❯ 1. Yes\n  2. No\nEsc to cancel\n", 1, 2)
 
-    monkeypatch.setattr(
-        server,
-        "lookup_agent",
-        lambda name, _rows=[
-            {
-                "name": "GrayHopper",
-                "category": "agent",
-                "attached": False,
-            }
-        ]: next((r for r in _rows if r['name'] == name), None),
-    )
-    monkeypatch.setattr(server, "_has_session", lambda _name: True)
-    monkeypatch.setattr(server, "_agent_program", lambda _name: "antigravity")
-    monkeypatch.setattr(server, "_tmux_session_env", lambda *_args: "")
-    monkeypatch.setattr(server.time, "sleep", lambda _seconds: None)
 
-    class _Done:
-        returncode = 0
-        stderr = ""
-
-        def __init__(self, stdout=""):
-            self.stdout = stdout
-
-    def fake_run(argv, **_kwargs):
-        if argv[:2] == ["tmux", "display-message"]:
-            return _Done("agy\n")
-        if argv[:2] == ["tmux", "send-keys"]:
-            sent.append(argv)
-            return _Done()
-        raise AssertionError(f"unexpected command: {argv}")
-
-    monkeypatch.setattr(server.subprocess, "run", fake_run)
-    from _legacy_dashboard_transport import install_legacy_transport
-    install_legacy_transport(monkeypatch, None, server, fake_run)
+@pytest.mark.parametrize(("screen", "after_paste", "mutates", "error"), [
+    (None, None, True, None),
+    (_AGY_MODEL_PICKER, None, False, "Close any selection or approval"),
+    (_CLAUDE_APPROVAL, None, False, "Close any selection or approval"),
+    (("› user draft\n? for shortcuts\n", 0, 12), None, False, "clear the draft"),
+    (None, _CLAUDE_APPROVAL, True, "Cannot confirm /exit"),
+])
+def test_interactive_exit_requires_an_empty_composer_and_verified_command(
+        monkeypatch, screen, after_paste, mutates, error):
+    from _exit_terminal import ExitTerminal
+    terminal = ExitTerminal(monkeypatch, server, "GrayHopper", editor="agy",
+                            screen=screen, after_paste=after_paste)
+    monkeypatch.setattr(server, "lookup_agent", lambda _: {"category": "agent", "attached": False})
+    monkeypatch.setattr(server, "_agent_program", lambda _: "antigravity")
+    monkeypatch.setattr(server, "_tmux_session_env", lambda *_: "")
 
     result = server.do_exit("GrayHopper")
 
-    assert result["ok"] is True
-    assert "exit-sent" in result["actions"]
-    assert any("/exit" in argv for argv in sent)
+    if error is None:
+        assert result["ok"] is True
+        assert "exit-sent" in result["actions"]
+        assert terminal.mutations == [("paste", "/exit"), ("send-keys", "-t", "%41", "C-m")]
+    else:
+        assert result["ok"] is False
+        assert error in result["error"]
+        assert terminal.mutations == ([("paste", "/exit")] if mutates else [])
 
 
 def test_antigravity_resume_fails_closed_without_claude_lookup(monkeypatch) -> None:

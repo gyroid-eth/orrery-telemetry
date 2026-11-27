@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import socket
+import subprocess
+import sys
 import threading
 import urllib.request
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -13,6 +16,15 @@ import pytest
 import dashboard.server as server
 
 pytestmark = pytest.mark.usefixtures("isolated_provider_stall_runtime")
+
+
+def test_dashboard_import_without_posix_file_locking():
+    root = Path(server.__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c", "import subprocess, sys; sys.modules['fcntl'] = None; import dashboard.server"],
+        cwd=root, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_main_serves_dashboard_without_cleanup_process_or_reverse_dns(monkeypatch):

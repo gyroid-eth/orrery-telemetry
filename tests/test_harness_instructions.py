@@ -99,17 +99,17 @@ def test_shared_boundary_changes_fail_instead_of_silently_dropping_rules(mutatio
 
 
 @pytest.mark.parametrize('provider,name,digest', [
-    ('claude', 'CLAUDE.md', '79b1865078c8f564b815196946fdb50dc80b1391d86865a597710c69f43fbf6e'),
-    ('codex', 'AGENTS.md', 'ffc6726b2e7126db7d4908d57b619f4195e6941e4843b1927b77b2f25d80f7f3'),
+    ('claude', 'CLAUDE.md', 'e651116910def167d59c3cb92581b90bc230166acadfd7daa062c032b924648b'),
+    ('codex', 'AGENTS.md', 'fc142f2243581ad3b8ff8c5cc1742bd0b1a83fa359d74a9750ad4a53e9ebc589'),
 ])
 def test_program_output_matches_scope_adjusted_baseline(provider, name, digest):
     # Reviewed against af1e33d0: each provider template adds exactly four lines
     # requiring physical absolute paths in managed workspace-v1 sessions,
     # the same paths for renew/release, unchanged legacy paths/globs, and no
     # inferred cwd. Then each adds the eight-line "## Showing Files" section
-    # (show_files before the final message) and the shared tool-refusal rule.
-    # The renderer is unchanged; pin
-    # the intended full output.
+    # (show_files before the final message). #607 adds the shared tool-refusal
+    # rule, and #611 tells agents to end their turn after a completion report
+    # or a blocking question.
     output = renderer.render(provider, (ROOT / provider / name).read_bytes(), '/fixture/install', '/fixture/project')
     assert hashlib.sha256(output).hexdigest() == digest
 

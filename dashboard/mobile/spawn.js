@@ -19,6 +19,7 @@
   const browserLabels = {off:'Off', temporary:'Temporary Chrome', personal:'My Chrome'};
   let computerMode = 'off';
   let browserMode = 'off';
+  let browserChosen = false;
   function modeChoices(menu, control, labels, select) {
     return Object.entries(labels).map(([mode, label]) => {
       const button = document.createElement('button');
@@ -39,7 +40,9 @@
   });
   const browserChoices = modeChoices(browserMenu, browser, browserLabels, mode => {
     browserMode = mode;
+    browserChosen = true;
     syncBrowser(chosenRoute());
+    canReview();
   });
   const mobileControls = window.OrrerySpawnControls;
   const selects = new Map([
@@ -259,7 +262,7 @@
       return;
     }
     if (reset) {
-      computerMode = next.key === 'dsh' || next.key === 'antigravity' ? 'off' : 'control';
+      computerMode = next.key === 'dsh' || next.key === 'antigravity' || next.computer_use_transport === 'orrery-screen' ? 'off' : 'control';
       if (computerMenu.matches(':popover-open')) computerMenu.hidePopover();
     }
     if (!modes.includes(computerMode)) computerMode = modes[0] || 'off';
@@ -267,8 +270,8 @@
     for (const attr of ['role', 'aria-checked', 'aria-describedby']) computer.removeAttribute(attr);
     computer.setAttribute('aria-controls', computerMenu.id);
     computer.setAttribute('aria-expanded', String(computerMenu.matches(':popover-open')));
-    computer.setAttribute('aria-disabled', String(!modes.length));
-    computer.title = 'Computer use: ' + (modes.length ? computerLabels[computerMode] : 'Unavailable');
+    computer.setAttribute('aria-disabled', String(!modes.length || Boolean(next.computer_use_reason)));
+    computer.title = next.computer_use_reason || 'Computer use: ' + (modes.length ? computerLabels[computerMode] : 'Unavailable');
     computer.setAttribute('aria-label', computer.title);
     for (const [mode, button] of computerChoices) {
       button.hidden = !modes.includes(mode);
@@ -281,10 +284,22 @@
       ? next.browser_modes : null;
   }
 
+  function personalBrowserNotice(next) {
+    const why = browserModes(next)?.includes('personal') && next.personal_browser_status?.reason;
+    return why ? 'My Chrome: ' + why : '';
+  }
+
   function syncBrowser(next, reset = false) {
+    if (reset) browserChosen = false;
     const modes = browserModes(next);
     if (modes) {
-      if (reset || !modes.includes(browserMode)) browserMode = modes.includes('personal') ? 'personal' : 'off';
+      const status = next.personal_browser_status;
+      const unavailable = status?.unavailable === true;
+      if (!browserChosen) {
+        browserMode = (status?.reason || unavailable) ? (modes.includes('temporary') ? 'temporary' : 'off')
+          : modes.includes('personal') ? 'personal' : 'off';
+      }
+      if (!modes.includes(browserMode)) browserMode = 'off';
       browserTool.hidden = false;
       browser.dataset.browserMode = browserMode;
       browser.removeAttribute('role');
@@ -295,11 +310,16 @@
       browser.setAttribute('aria-disabled', String(!modes.length));
       const extra = next.launch_blocked ? 'Antigravity needs a parent agent and declared resources.'
         : !modes.length ? 'Browser modes are unavailable for this harness.' : '';
+      const limited = next.computer_use_transport === 'orrery-screen' && !modes.includes('temporary')
+        ? '. Install Google Chrome or Chromium and Node.js inside WSL to use Temporary Chrome.'
+        : '. Other modes need a compatible Chrome setup.';
       browser.title = extra || 'Browser: ' + browserLabels[browserMode]
-        + (modes.length < browserChoices.length ? '. Other modes need a compatible Chrome setup.' : '');
+        + (modes.length < browserChoices.length ? limited : '');
       browser.setAttribute('aria-label', browser.title);
       for (const [mode, button] of browserChoices) {
         button.hidden = !modes.includes(mode);
+        button.disabled = mode === 'personal' && unavailable;
+        button.title = mode === 'personal' ? status?.reason || '' : '';
         button.setAttribute('aria-pressed', String(mode === browserMode));
       }
       if (!modes.length && browserMenu.matches(':popover-open')) browserMenu.hidePopover();
@@ -341,14 +361,16 @@
     modelChip.title = level < 0 ? name : name + ' · ' + effortLabel(value);
     modelChip.setAttribute('aria-label', 'Model settings: ' + modelChip.title);
     if (!editor.hidden) {
-      const message = next?.launch_blocked ? 'Antigravity needs a parent agent and declared resources. Set these in the Telemetry dashboard.' : '';
+      const message = next?.launch_blocked ? 'Antigravity needs a parent agent and declared resources. Set these in the Telemetry dashboard.'
+        : personalBrowserNotice(next);
       for (const destination of [notice, modelNotice]) {
         if (destination.textContent !== message) destination.textContent = message;
         destination.hidden = !message;
       }
     }
     reviewButton.disabled = !task.value.trim() || !next || next.launch_blocked || !catalog?.directories.length
-      || (next.effort_required && !effort.value);
+      || (next.effort_required && !effort.value)
+      || (browserMode === 'personal' && next.personal_browser_status?.unavailable === true);
   }
 
   function updateRoute() {
@@ -534,7 +556,7 @@
     }
     $('spawn-summary').replaceChildren(...labels);
     $('spawn-task-copy').textContent = selection.task;
-    show('review');
+    show('review', personalBrowserNotice(route));
     $('spawn-edit').focus({preventScroll:true});
   }
 

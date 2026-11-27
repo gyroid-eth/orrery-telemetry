@@ -230,7 +230,7 @@ def _catalog_item(models: list[str]) -> dict:
         "model_efforts": model_efforts,
         "effort_default": "" if CAPABILITIES["effort_required"] else "high",
         "provider_key": "google",
-        "capabilities": {**CAPABILITIES, "standalone": sys.platform == "darwin"},
+        "capabilities": {**CAPABILITIES, "standalone": sys.platform in {"darwin", "linux"}},
     }
 
 
@@ -607,12 +607,7 @@ def _git(git: str, *args: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
-    """Check what the adapter needs before an identity is registered.
-
-    The adapter repeats these checks; failing here first avoids leaving a
-    retained registration behind for a launch that could never start.
-    """
+def _runtime_requirements(base: Any) -> tuple[dict, str]:
     hooks_dir = os.path.abspath(os.path.expanduser(base.HOOKS_DIR))
     adapter = os.path.join(hooks_dir, _ADAPTER_NAME)
     if not _executable(adapter):
@@ -634,11 +629,19 @@ def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
     ):
         if not _which(command, path):
             return {}, f"{label} not found for provider gemini"
+    return {"adapter": adapter, "hooks_dir": hooks_dir, "home": home}, ""
+
+
+def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
+    """Check what the adapter needs before an identity is registered."""
+    context, error = _runtime_requirements(base)
+    if error:
+        return {}, error
     work_dir = request["work_dir"]
     if not os.path.isdir(work_dir):
         return {}, f"dir does not exist: {work_dir}"
     if not request["standalone"] or request["worktree"]:
-        git = _which("git", path)
+        git = _which("git", _launch_path())
         if not git:
             return {}, "git not found for provider gemini"
         base_rev = request["worktree_base"] or "HEAD"
@@ -658,7 +661,7 @@ def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
         return {}, "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"
     if not (request["standalone"] or request["dry_run"]) and not base._runtime_agent_token(request["parent"]):
         return {}, f"parent registration token unavailable for '{request['parent']}'"
-    return {"adapter": adapter, "hooks_dir": hooks_dir, "home": home}, ""
+    return context, ""
 
 
 def _write_task_file(base: Any, task: str) -> str:
@@ -749,7 +752,12 @@ def _install_catalog(base: Any, integration: _Integration) -> None:
         models, error = integration.availability()
         if error:
             return payload
-        payload["providers"] = [*providers, _catalog_item(models)]
+        provider = _catalog_item(models)
+        if provider["harnesses"][0]["available"]:
+            _, reason = _runtime_requirements(base)
+            if reason:
+                provider["harnesses"] = [{"id": "antigravity", "available": False, "reason": "runtime_not_prepared"}]
+        payload["providers"] = [*providers, provider]
         return payload
 
     base.spawn_names_payload = spawn_names_payload
@@ -770,7 +778,7 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
         request, error = base._spawn_request(payload)
         if error:
             return error
-        standalone_supported = sys.platform == "darwin"
+        standalone_supported = sys.platform in {"darwin", "linux"}
         if request["standalone"] and not standalone_supported:
             return {"ok": False, "error": "standalone not supported for provider gemini"}
         tools_args, tools_error = base._spawn_tools_args(payload, PROVIDER_ID, False, "")
@@ -823,6 +831,17 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
         context, error = _preflight(base, request, resources)
         if error:
             return {"ok": False, "error": error}
+        if tools_args:
+            tools = base._child_tools_module()
+            try:
+                selection = tools.normalize(tools=payload.get("tools"))
+                cwd = request["work_dir"] if request["standalone"] and not request["worktree"] else None
+                tools.agy_validate_selection(selection, cwd=cwd)
+                mode = selection["tools"].get("browser_mode")
+                if mode in ("temporary", "personal"):
+                    tools._browser_mcp(mode)
+            except (OSError, tools.ToolsError) as exc:
+                return {"ok": False, "error": str(exc)}
 
         task_file = ("<gemini-task-file>" if request["dry_run"]
                      else _write_task_file(base, request["task"]))

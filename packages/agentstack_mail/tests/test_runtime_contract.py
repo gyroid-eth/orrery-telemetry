@@ -341,6 +341,11 @@ def test_signals_are_per_message_debounced_by_message_id_and_fully_cleared(
         assert (per_message_dir / "102.signal").is_file()
         assert legacy_path.is_file()
 
+        settings.notifications.clear_grace_seconds = 60.0
+        assert asyncio.run(clear_notification_signal(settings, project_slug, agent_name, message_id=101))
+        assert not (per_message_dir / "101.signal").exists()
+        assert (per_message_dir / "102.signal").is_file() and legacy_path.is_file()
+        settings.notifications.clear_grace_seconds = 0.0
         cleared = asyncio.run(
             clear_notification_signal(settings, project_slug, agent_name)
         )

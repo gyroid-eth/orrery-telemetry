@@ -13,6 +13,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import uuid
 
 if "child_resume" not in globals():
@@ -29,6 +31,7 @@ if "child_tools" not in globals():
 
 PROGRAM = "antigravity"
 TMUX_FORMAT = "#{session_name}|#{session_id}|#{session_created}|#{pid}"
+STARTUP_TIMEOUT = 22
 TOOL_REFUSAL_RULE = Path(".agents/rules/orrery-tool-refusals.md")
 RULE_HEADER = b"---\ntrigger: always_on\n---\n\n<!-- ORRERY: tool refusal rule -->\n\n"
 WRITE_TOOLS = {"write_to_file": "Write", "replace_file_content": "Edit",
@@ -68,6 +71,18 @@ def saved_conversation(runtime, name, registration):
 
 def _status_path(runtime, name):
     return child_resume._paths(runtime, name)[0].with_suffix(".agy-status.json")
+
+
+def _startup_path(runtime, name):
+    return _status_path(runtime, name).with_suffix(".startup")
+
+
+def _startup_state(runtime, name, identity):
+    try:
+        state = child_resume._load_state(_startup_path(runtime, name))
+    except (OSError, ValueError, child_resume.ResumeStateError):
+        return {}
+    return state if state.get("tmux") == identity else {}
 
 
 def read_status(runtime, name, identity):
@@ -291,6 +306,26 @@ def _managed_mail_approval_rules(home, cwd, config_dir):
     return [f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS] if found else []
 
 
+def _prompt_with_mcp_tools(prompt, *, managed_mail, parent, browser_mode):
+    instructions = []
+    if managed_mail:
+        recipient = parent or "<recipient agent name>"
+        arguments = json.dumps({"to": [recipient], "subject": "<subject>", "body_md": "<message>"})
+        instructions.append(
+            "For ORRERY Mail, use Antigravity's `call_mcp_tool` with `ServerName: orrery-mail`, "
+            f"`ToolName: send_message`, and `Arguments: {arguments}`. "
+            "The bound Mail server supplies your identity. Antigravity's built-in `send_message` "
+            "is for its own subagents."
+        )
+    if browser_mode in ("temporary", "personal"):
+        instructions.append(
+            "For browser work requested in the task, use Antigravity's `call_mcp_tool` with "
+            '`ServerName: chrome-devtools` and the specific browser action as `ToolName`. '
+            'To open a page, use `ToolName: new_page` and `Arguments: {"url": "<requested URL>"}`.'
+        )
+    return "\n\n".join([*instructions, prompt])
+
+
 def terminal_settings(home, sandbox):
     try:
         configured = json.loads((home / ".gemini/antigravity-cli/settings.json").read_text())
@@ -309,7 +344,7 @@ def terminal_mode(sandbox):
     return ["--mode", "auto", "--sandbox"] if sandbox else ["--mode", "accept-edits"]
 
 
-def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None):
+def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None, parent=None):
     if (prompt is None) == (conversation is None):
         raise ValueError("Provide the first task or an existing conversation")
     sandbox = plan.get("standalone") is True or os.environ.get("AGENTSTACK_CHILD_SANDBOX") == "on"
@@ -321,17 +356,21 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
         "command": shlex.join([plan["python"], str(Path(__file__).resolve()), "status"]),
     }
     permissions = settings["permissions"]
+    selection = _tool_selection(plan) if screen_mode is None or prompt is not None else None
     if screen_mode is None:
-        screen_mode = child_tools.screen_mode(_tool_selection(plan))
+        screen_mode = child_tools.screen_mode(selection)
     screen_permissions = []
     if screen_mode in ("view", "control"):
         screen_policy = child_tools._screen_state()
         screen_tools = screen_policy["VIEW_TOOLS"] if screen_mode == "view" else screen_policy["TOOLS"]
         screen_permissions = [f"mcp({child_tools.SCREEN_SERVER}/{tool})" for tool in screen_tools]
+    mail_rules = _managed_mail_approval_rules(home, cwd, config_dir)
     settings["permissions"] = {**permissions, "allow": list(dict.fromkeys(
-        [*permissions.get("allow", ()), *_managed_mail_approval_rules(home, cwd, config_dir),
-         *screen_permissions]
+        [*permissions.get("allow", ()), *mail_rules, *screen_permissions]
     ))}
+    if prompt is not None:
+        prompt = _prompt_with_mcp_tools(prompt, managed_mail=bool(mail_rules), parent=parent,
+                                        browser_mode=selection["tools"].get("browser_mode"))
     extra = []
     if config_dir is not None:
         settings["trustedWorkspaces"].append(str(config_dir))
@@ -341,6 +380,112 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
     return [plan["binary"], *terminal_mode(sandbox), *extra, "--settings",
             json.dumps(settings, separators=(",", ":")), *model, *effort,
             *(["--conversation", conversation] if conversation else ["-i", prompt])]
+
+
+def _mcp_menu(rows):
+    return ("MCP Servers" in rows
+            and any(row.startswith("Keyboard: ↑/↓ Navigate") and "esc Exit" in row for row in rows))
+
+
+def _ready_mcp_servers(rows):
+    if not _mcp_menu(rows):
+        return set()
+    return {
+        match[1] for row in rows
+        if (match := re.match(r"^(?:>\s+)?✓\s+(\S+)\s+Tools:\s+\S", row))
+    }
+
+
+def _deliver_first_task(process, pane, identity, task_file, menu_file, receipt, servers, deadline):
+    stage = "opening"
+    waiting_on = servers
+
+    def tmux(*args):
+        command = ([sys.executable, str(_home() / "bin/lib/runtime_tmux_consumer.py")]
+                   if args[0] in {"submit-input", "send-keys"} else ["tmux"])
+        return subprocess.run([*command, *args], capture_output=True, encoding="utf-8",
+                              timeout=max(0.1, min(8, deadline - time.monotonic())))
+
+    def same_pane():
+        reply = tmux("display-message", "-p", "-t", pane, TMUX_FORMAT)
+        return reply.returncode == 0 and reply.stdout.strip() == identity
+
+    while process.poll() is None and time.monotonic() < deadline:
+        if stage == "confirming":
+            if receipt.is_file():
+                return
+            time.sleep(0.15)
+            continue
+        if not same_pane():
+            raise ValueError("The Antigravity pane changed before its first task")
+        rows = {row.strip() for row in tmux("capture-pane", "-p", "-t", pane).stdout.splitlines()}
+        if stage == "opening" and _mcp_menu(rows):
+            stage = "waiting"
+        if stage == "waiting":
+            waiting_on = servers - _ready_mcp_servers(rows)
+            if not waiting_on and same_pane():
+                if tmux("send-keys", "-t", pane, "Escape").returncode:
+                    raise ValueError("Antigravity's MCP manager could not be closed")
+                stage = "submitting"
+        elif stage == "opening":
+            # submit-input already checks the actual editor and refuses while
+            # agy is restoring its UI or while an operator has a draft.
+            result = tmux("submit-input", pane, str(menu_file))
+            if result.returncode not in (0, 3, 4):
+                raise ValueError("Antigravity's MCP manager could not be opened safely")
+            # A native menu can be visible even when an older input helper
+            # cannot confirm that Enter opened it.
+            if result.returncode in (0, 4):
+                stage = "waiting"
+        elif stage == "submitting" and not _mcp_menu(rows):
+            result = tmux("submit-input", pane, str(task_file))
+            if result.returncode in (0, 4):
+                if receipt.is_file():
+                    return
+                stage = "confirming"
+            elif result.returncode != 3:
+                raise ValueError("Antigravity did not confirm submission of its first task")
+        time.sleep(0.15)
+    if stage == "waiting" and waiting_on:
+        names = ", ".join(sorted(waiting_on))
+        raise ValueError(f"Antigravity MCP tools did not become ready ({names}). Check /mcp and try again.")
+    if stage == "confirming":
+        raise ValueError("Antigravity did not acknowledge its first task in PreInvocation.")
+    raise ValueError("Antigravity did not accept its first task. Check CLI sign-in and workspace trust.")
+
+
+def _run_first_task(argv, *, env, runtime, name, identity, servers):
+    startup = _startup_path(runtime, name)
+    child_resume._atomic_json(startup, {"tmux": identity})
+    try:
+        with tempfile.TemporaryDirectory(prefix="agy-first-task-", dir=runtime.resolve()) as directory:
+            folder = Path(directory)
+            menu, task, receipt = (folder / filename for filename in ("menu", "task", "acknowledged"))
+            trigger = "Begin the ORRERY task " + uuid.uuid4().hex[:12]
+            menu.write_text("/mcp", encoding="utf-8")
+            task.write_text(trigger, encoding="utf-8")
+            child_resume._atomic_bytes(folder / "payload", argv[-1].encode("utf-8"))
+            env = {**env, "AGENTSTACK_AGY_FIRST_TASK_DIR": directory,
+                   "AGENTSTACK_AGY_FIRST_TASK_TRIGGER": trigger}
+            process = subprocess.Popen(argv[:-2], env=env)
+            try:
+                _deliver_first_task(process, env["TMUX_PANE"], identity, task, menu, receipt, set(servers),
+                                    time.monotonic() + STARTUP_TIMEOUT)
+            except BaseException:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                raise
+        startup.unlink()
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        message = str(error) if isinstance(error, ValueError) else "Antigravity's MCP startup check could not run"
+        child_resume._atomic_json(startup, {"tmux": identity, "error": message})
+        raise ValueError(message) from error
+    return process.wait()
 
 
 def run(runtime, name, task_file=None, conversation=None):
@@ -429,9 +574,12 @@ def run(runtime, name, task_file=None, conversation=None):
         env["AGENTSTACK_AGY_HISTORY_LAUNCH"] = subprocess.check_output(
             [sys.executable, str(history_helper()), "prepare", str(state["agent_id"]), identity],
             env=env, text=True, timeout=5).strip()
-        return subprocess.run(command(plan, cwd, prompt=prompt, conversation=conversation,
-                                      config_dir=config_dir, screen_mode=screen_mode),
-                              env=env).returncode
+        argv = command(plan, cwd, prompt=prompt, conversation=conversation, config_dir=config_dir,
+                       screen_mode=screen_mode, parent=parent)
+        if prompt is not None:
+            return _run_first_task(argv, env=env, runtime=runtime, name=name, identity=identity,
+                                   servers=mcp["mcpServers"])
+        return subprocess.run(argv, env=env).returncode
     finally:
         try:
             if workspace_mcp and written_mcp is not None:
@@ -584,6 +732,12 @@ def main():
         os.execvp(args.binary, [args.binary, *terminal_mode(sandbox), "--settings", settings, *args.arguments])
     runtime = Path(os.environ["AGENTSTACK_RUNTIME_DIR"])
     if args.action in {"ready", "wake-ready"}:
+        startup = _startup_state(runtime, args.name, args.identity)
+        if startup:
+            if args.action == "ready" and startup.get("error"):
+                print(startup["error"])
+                return 2
+            return 1
         activity = read_status(runtime, args.name, args.identity).get("activity")
         return 0 if activity == "wait" or (args.action == "ready" and activity) else 1
     name = os.environ["AGENT_NAME"]

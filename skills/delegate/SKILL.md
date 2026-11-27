@@ -201,7 +201,7 @@ Give the child a short role label and a concrete task description. Keep them sep
 | `task` | Concrete instruction stored in a task file and embedded in the launch prompt |
 | `group` | Shared cluster name for a set of related child agents |
 
-Embedded task template:
+Use the following task template for every harness, including tasks sent through the dashboard API. Include the same completion and waiting instructions when adapting the template.
 
 ```markdown
 ## Role: <role>
@@ -217,6 +217,7 @@ Embedded task template:
 - Do not modify files outside the declared scope.
 - Before reporting, call `show_files` with the reports, figures or screenshots the parent or the person should look at.
 - Report completion to <parent-agent-name> with `send_message` at importance `high`, including changed paths, summary, and verification.
+- After sending your completion report or a question that blocks your work, end your turn and keep the session open. Replies arrive as ORRERY Mail notifications. Do not wait in a sleep loop.
 ```
 
 Use generic task examples such as code review, API migration, test-suite repair, documentation cleanup, or data import validation. Avoid embedding organization-specific project lore in the delegated task unless the current user request requires it.

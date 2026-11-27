@@ -50,6 +50,32 @@ def test_orchestrator_command_omits_the_effort_option(managed, monkeypatch, tmp_
         assert "--effort" not in args
 
 
+@pytest.mark.parametrize(("access", "mode"), [("read", "view"), ("operate", "control")])
+def test_wsl_antigravity_uses_the_same_managed_screen_gate(tmp_path, monkeypatch, access, mode):
+    monkeypatch.setattr(agy.child_tools, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(agy.child_tools, "_screen_state", lambda: vars(screen_state))
+    monkeypatch.setattr(screen_state, "_python", lambda _: sys.executable)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "FixtureWSL")
+    monkeypatch.setenv("WSL_INTEROP", "/run/WSL/fixture")
+    monkeypatch.setenv("AGENTSTACK_PORT", "53163")
+    tools = agy.child_tools.change_permission({"screen_off": True}, {"computer_use": mode}, {}, managed_screen=True)
+    assert tools == {"screen": {"server": "orrery-screen", "access": access}}
+    spec = agy.child_tools.normalize(tools=tools)
+    mcp, actual = agy.child_tools.agy_launch_config("/fixture/mail", spec, runtime=str(tmp_path),
+        project=PROJECT, child=NAME, generation="1"*32, mail_env="")
+    assert actual == mode
+    [launch] = screen_state.Store(tmp_path).list()
+    assert launch["computer_use"] == mode
+    binding = mcp["mcpServers"]["orrery-screen"]
+    assert binding["env"]["WSL_INTEROP"] == "/run/WSL/fixture"
+    plan = {"binary": "/fixture/agy", "python": sys.executable}
+    argv = agy.command(plan, tmp_path, prompt="Fixture task", screen_mode=mode)
+    grants = json.loads(argv[argv.index("--settings") + 1])["permissions"]["allow"]
+    expected = screen_state.VIEW_TOOLS if mode == "view" else screen_state.TOOLS
+    assert grants == ["command(*)", *(f"mcp(orrery-screen/{tool})" for tool in expected)]
+
+
 @pytest.mark.parametrize("sandbox", [False, True])
 def test_one_workspace_is_trusted_without_changing_global_settings(managed, monkeypatch, tmp_path, sandbox):
     _, cwd, state = managed
@@ -71,7 +97,7 @@ def test_one_workspace_is_trusted_without_changing_global_settings(managed, monk
     assert agy.validate_plan(plan) == cwd
     args = agy.command(plan, cwd, prompt="First task")
     overlay = json.loads(args[args.index("--settings") + 1])
-    assert args[-2:] == ["-i", "First task"]
+    assert args[-2] == "-i" and args[-1].endswith("\n\nFirst task")
     assert overlay["enableTerminalSandbox"] is sandbox
     assert ("--sandbox" in args) is sandbox
     assert args[args.index("--mode") + 1] == ("auto" if sandbox else "accept-edits")
@@ -132,6 +158,7 @@ def test_same_named_foreign_mail_server_gets_no_automatic_approval(
     }})
     args = agy.command(state["gemini_launch"], cwd, prompt="First task", config_dir=config_dir)
     assert json.loads(args[args.index("--settings") + 1])["permissions"] == {"allow": ["command(*)"]}
+    assert args[-2:] == ["-i", "First task"]
 
 
 @pytest.mark.parametrize(("selection", "screen_mode"), [([], "off"), (["screen:read"], "view"), (["screen:operate"], "control")])
@@ -302,6 +329,117 @@ def test_antigravity_card_uses_saved_tool_selection(selection, computer, browser
     assert ("browser_use_reason" in fields) == (browser is None)
 
 
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+@pytest.mark.parametrize("browser_mode", ["off", "temporary", "personal"])
+def test_delegated_first_task_names_the_configured_mcp_tools(managed, monkeypatch, tmp_path, platform, browser_mode):
+    runtime, cwd, state = managed
+    state["gemini_launch"]["tools"] = [f"browser-mode:{browser_mode}"]
+    child_resume._atomic_json(child_resume._paths(runtime, NAME)[0], state)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(agy.child_tools, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(agy.child_tools, "running_in_wsl", lambda: platform == "linux")
+    monkeypatch.setattr(agy.child_tools, "_browser_mcp", lambda mode: (
+        "chrome-devtools", {"command": "/fixture/chrome", "args": [mode]}))
+    monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", PROJECT)
+    monkeypatch.setenv("TMUX_PANE", "%4")
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(agy.subprocess, "check_output",
+                        lambda argv, **_: IDENTITY if argv[0] == "tmux" else "history-fixture")
+    launches = []
+
+    def launch(argv, *, env, **_):
+        if argv[0] == "/bin/bash":
+            return SimpleNamespace(returncode=0)
+        assert env["PARENT_AGENT"] == "FixtureParent"
+        config = json.loads((cwd / ".agents/mcp_config.json").read_text())
+        assert ("chrome-devtools" in config["mcpServers"]) == (browser_mode != "off")
+        assert config["mcpServers"]["orrery-mail"] == agy._mail_server()
+        rules = json.loads(argv[argv.index("--settings") + 1])["permissions"]["allow"]
+        assert "mcp(orrery-mail/send_message)" in rules
+        assert all("chrome-devtools" not in rule for rule in rules)
+        launches.append(argv[-2:])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", launch)
+    monkeypatch.setattr(agy, "_run_first_task", lambda argv, *, env, **kwargs: launch(argv, env=env).returncode)
+    task = tmp_path / "handoff"
+    original = "Canonical task:\nReport the result.\n"
+    child_resume._atomic_json(task, {"message": {"content": original}})
+    assert agy.run(runtime, NAME, task_file=task) == 0
+    [(flag, prompt)] = launches
+    assert flag == "-i" and prompt.endswith("\n\n" + original)
+    assert "`call_mcp_tool` with `ServerName: orrery-mail`" in prompt
+    assert "`ToolName: send_message`" in prompt
+    assert 'Arguments: {"to": ["FixtureParent"], "subject": "<subject>", "body_md": "<message>"}' in prompt
+    assert ("`ServerName: chrome-devtools`" in prompt) == (browser_mode != "off")
+    assert ("`ToolName: new_page`" in prompt) == (browser_mode != "off")
+
+
+@pytest.mark.parametrize(("browser_ready", "acknowledged"), [(True, True), (True, False), (False, False)])
+@pytest.mark.parametrize("startup_screen", [
+    "? for shortcuts  Gemini 3.8 Flash · low",
+    "> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\nauto · Gemini 3.8 Flash · low",
+])
+def test_first_task_waits_for_same_panes_mcp_tools(monkeypatch, tmp_path, browser_ready, acknowledged, startup_screen):
+    menu, task = tmp_path / "menu", tmp_path / "task"
+    receipt = tmp_path / "acknowledged"
+    browser_row = "✓ chrome-devtools  Tools: new_page"
+    ready_menu = ["MCP Servers", "✓ orrery-mail  Tools: send_message",
+                  "Keyboard: ↑/↓ Navigate  enter Actions  esc Exit"]
+    states = iter([
+        startup_screen,
+        "\n".join(ready_menu + ["◌ chrome-devtools"]),
+        "\n".join(ready_menu + ([browser_row] if browser_ready else [])),
+        "working",
+    ])
+    pane = "%4"
+    actions = []
+    now = 0
+
+    def count_sleep(seconds):
+        nonlocal now
+        now += seconds
+
+    def tmux(argv, **kwargs):
+        operation = argv[1] if argv[0] == "tmux" else argv[2]
+        if operation == "display-message":
+            assert argv[-2] == pane
+            return SimpleNamespace(returncode=0, stdout=IDENTITY)
+        if operation == "capture-pane":
+            return SimpleNamespace(returncode=0, stdout=next(states, "\n".join(ready_menu)))
+        actions.append((operation, argv[-1]))
+        if operation == "submit-input" and argv[-1] == str(task):
+            if acknowledged:
+                receipt.touch()
+            return SimpleNamespace(returncode=4 if startup_screen.startswith(">") else 0)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.time, "monotonic", lambda: now)
+    monkeypatch.setattr(agy.time, "sleep", count_sleep)
+    monkeypatch.setattr(agy.subprocess, "run", tmux)
+    process = SimpleNamespace(poll=lambda: None)
+    positional = (process, pane, IDENTITY, task, menu, receipt, {"orrery-mail", "chrome-devtools"}, 1)
+    if browser_ready:
+        if acknowledged:
+            agy._deliver_first_task(*positional)
+        else:
+            with pytest.raises(ValueError, match="did not acknowledge its first task"):
+                agy._deliver_first_task(*positional)
+        assert actions == [("submit-input", str(menu)), ("send-keys", "Escape"), ("submit-input", str(task))]
+    else:
+        with pytest.raises(ValueError, match="MCP tools did not become ready"):
+            agy._deliver_first_task(*positional)
+        assert actions == [("submit-input", str(menu))]
+
+
+def test_startup_marker_applies_only_to_current_launch(managed):
+    runtime, _, _ = managed
+    startup = agy._startup_path(runtime, NAME)
+    child_resume._atomic_json(startup, {"tmux": IDENTITY, "error": "fixture error"})
+    assert agy._startup_state(runtime, NAME, IDENTITY)["error"] == "fixture error"
+    assert agy._startup_state(runtime, NAME, IDENTITY + "-old") == {}
+
+
 def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_folder(tmp_path, monkeypatch):
     cwd = tmp_path / "vault"
     own_hooks = cwd / ".agents" / "hooks.json"
@@ -360,6 +498,7 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
 
     monkeypatch.setattr(agy.subprocess, "check_output", check_output)
     monkeypatch.setattr(agy.subprocess, "run", launch)
+    monkeypatch.setattr(agy, "_run_first_task", lambda argv, *, env, **kwargs: launch(argv, env=env).returncode)
     task = tmp_path / "handoff"
     child_resume._atomic_json(task, {"message": {"content": "One initial task."}})
     assert agy.run(runtime, NAME, task_file=task) == 0
@@ -369,7 +508,11 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
     child_resume.mark_retired(runtime, NAME, retention_days=30)
     child_resume.begin_resume(runtime, NAME, agent_id=52, project_key=PROJECT, program="antigravity")
     assert agy.run(runtime, NAME, conversation=SID) == 0
-    assert launches == [["-i", "One initial task."], ["--conversation", SID]]
+    assert len(launches) == 2
+    assert launches[0][0] == "-i" and launches[0][1].endswith("\n\nOne initial task.")
+    assert '"to": ["<recipient agent name>"]' in launches[0][1]
+    assert "ServerName: chrome-devtools" not in launches[0][1]
+    assert launches[1] == ["--conversation", SID]
     assert not state_path.with_suffix(".agy-config").exists()
     assert sorted(path.relative_to(cwd).as_posix() for path in cwd.rglob("*")) == [
         ".agents", ".agents/hooks.json"]
@@ -413,6 +556,7 @@ def test_standalone_resume_rotates_the_screen_binding_and_keeps_a_lower_operator
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(agy.subprocess, "run", launch)
+    monkeypatch.setattr(agy, "_run_first_task", lambda argv, **kwargs: launch(argv).returncode)
     task = tmp_path / "handoff"
     child_resume._atomic_json(task, {"message": {"content": "Fixture task"}})
     assert agy.run(runtime, NAME, task_file=task) == 0

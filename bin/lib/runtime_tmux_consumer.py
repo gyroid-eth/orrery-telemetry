@@ -1,8 +1,60 @@
 """Private legacy adapter: resolve once, re-admit actual target before effects."""
+import json
 import os
 from pathlib import Path
 import runpy
+import stat
 import sys
+import time
+
+
+class _NotificationHandoff:
+    """Persist the watcher handoff before sending bytes to the editor."""
+
+    def __init__(self, path, identity, key):
+        self.signal = Path(path)
+        self.identity = identity
+        self.key = key
+        runtime = Path(os.environ.get('AGENTSTACK_RUNTIME_DIR', str(Path.home()/'.agentstack/runtime')))
+        self.state = runtime / 'notify-state.json'
+
+    def current(self):
+        try:
+            st = self.signal.lstat()
+        except FileNotFoundError:
+            return False
+        return (stat.S_ISREG(st.st_mode)
+                and f'{st.st_dev}:{st.st_ino}:{st.st_mtime_ns}:{st.st_size}' == self.identity)
+
+    def claim(self, *, resuming):
+        import fcntl
+
+        with open(str(self.state) + '.lock', 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not self.current():
+                return False
+            try:
+                state = json.loads(self.state.read_text(encoding='utf-8'))
+            except FileNotFoundError:
+                state = {}
+            if not isinstance(state, dict):
+                raise ValueError('invalid watcher state')
+            entry = state.setdefault(self.key, {})
+            if not isinstance(entry, dict):
+                raise ValueError('invalid watcher entry')
+            if entry.get('last_result') == 'success' or entry.get('terminal'):
+                return False
+            if entry.get('editor_handoff_epoch'):
+                return resuming
+            old_failure = (entry.get('last_result') == 'submit_failed'
+                           and entry.get('wait_reason') in {
+                               'draft_not_confirmed', 'enter_not_confirmed', 'enter_failed', 'paste_failed',
+                           })
+            entry['editor_handoff_epoch'] = int(time.time())
+            tmp = self.state.with_suffix('.json.tmp')
+            tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+            tmp.replace(self.state)
+            return resuming or not old_failure
 
 
 def main(argv):
@@ -13,11 +65,16 @@ def main(argv):
         consumer=factory(home,transport_api=api)
         if argv and argv[0]=='stop-group':consumer.stop_group(argv[1]);return 0
         if argv and argv[0]=='submit-input':
-            if len(argv)!=3:return 2
+            notice = None
+            if len(argv) == 7 and argv[3] == '--notice':
+                notice = _NotificationHandoff(*argv[4:])
+            elif len(argv) != 3:
+                return 2
             with Path(argv[2]).open(encoding='utf-8') as handle:
                 text=handle.read(262145)
             if not text.strip() or len(text.encode('utf-8'))>262144:return 2
-            result = consumer.submit_text(argv[1], text, on_wait=lambda reason: print(reason, file=sys.stderr))
+            result = consumer.submit_text(argv[1], text, on_wait=lambda reason: print(reason, file=sys.stderr),
+                                          notice=notice)
             return {'accepted':0,'refused':3,'unknown':4}[result]
         if argv and (argv[0] in ('attach','attach-session') or (argv[0]=='new-session' and '-A' in argv)):
             if argv[0]=='new-session' and consumer.transport.identity is None:

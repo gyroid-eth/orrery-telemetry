@@ -784,6 +784,35 @@ def provider_instructions(home, provider, wrapper, project, *, configure=False, 
     atomic(entry['resolved_path'],replace_block(data or b'',block),entry=entry)
 
 
+def print_session_notices(findings, engine):
+    notices = [finding for finding in findings if finding['kind'] not in ('current', 'missing')]
+    if not notices:
+        return
+    setup = f'agentstack-{engine.provider}-setup'
+    actions = {
+        'legacy': f'Run {setup} in this working directory and review the migration plan.',
+        'duplicate': 'Run agentstack-doctor in this working directory and review the cleanup command for this copy.',
+        'malformed': f'Review and fix the managed block markers, then run {setup} --check.',
+        'unknown': f'Check the reported file path and access error, then run {setup} --check.',
+    }
+    count = len(notices)
+    print(f'ORRERY instruction migration: {count} {"notice" if count == 1 else "notices"}.')
+    print('Ask the operator to review these findings:')
+    for finding in notices:
+        kind = finding['kind']
+        path = finding['source_path']
+        if kind == 'edited':
+            action = f'Compare the block with {setup} --print and move any personal edits outside the markers. '
+            if path == str(engine.target):
+                action += 'Replace the marked block with the reviewed current block.'
+            else:
+                action += 'Once the current user block is in place, remove this obsolete marked block.'
+        else:
+            action = actions[kind]
+        detail = f' ({finding["reason"]!r})' if finding['reason'] else ''
+        print(f'- {path!r} [{kind}]{detail}. {action}')
+
+
 def cli(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--provider',choices=('claude','codex'),default='claude')
@@ -805,8 +834,7 @@ def cli(argv=None):
             sys.stdout.buffer.write(e.block);return 0
         findings=e.detect(args.path)
         if args.session_notices:
-            count=sum(x['kind'] not in ('current','missing') for x in findings)
-            if count:print(f'ORRERY instruction migration: {count} notices; ask the operator to run agentstack-doctor.')
+            print_session_notices(findings, e)
             return 0
         result={'schema_version':2,'action':action,'provider':args.provider,'target_path':str(e.target),'stage':None,'plan_id':None,'plan':None,'apply_argv':[],'findings':findings,'reason':None,'next_argv':[]}
         status=0

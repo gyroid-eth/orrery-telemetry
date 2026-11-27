@@ -11,6 +11,7 @@ Runnable two ways (no third-party dependency required):
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import stat
@@ -181,7 +182,9 @@ def _tmux_stub(tmpdir: pathlib.Path, *, collision: bool) -> pathlib.Path:
         "#!/bin/bash\n"
         f'echo "$@" >> "{log}"\n'
         'case "$1" in\n'
-        '  display-message) echo "pending-4242" ;;\n'
+        '  display-message)\n'
+        '    case "$*" in *"#{start_time}"*) echo "1|1|%9|/tmp/fake-tmux" ;;\n'
+        '    *) echo "pending-4242" ;; esac ;;\n'
         f'  rename-session) exit {1 if collision else 0} ;;\n'
         f'  has-session) exit {0 if collision else 1} ;;\n'
         "  *) exit 0 ;;\n"
@@ -218,7 +221,7 @@ def test_tmux_name_collision_never_kills_the_existing_session():
         assert result.returncode != 0, result.stdout
         assert "already exists" in result.stderr
         # Identity metadata must not be published for an unfinalized name.
-        assert not (runtime / "agent_name_%9".replace("%", "_")).exists()
+        assert not list(runtime.rglob("agent_name__9"))
 
 
 def test_successful_rename_still_records_identity():
@@ -241,7 +244,8 @@ def test_successful_rename_still_records_identity():
         )
         assert result.returncode == 0, result.stderr
         assert "rename-session Fresh-Bohr" in log.read_text(encoding="utf-8")
-        assert (runtime / "agent_name__9").read_text(encoding="utf-8") == "Fresh-Bohr"
+        record, = runtime.rglob("agent_name__9")
+        assert json.loads(record.read_text(encoding="utf-8")) == {"server": [1, 1], "name": "Fresh-Bohr"}
 
 
 def _main() -> int:

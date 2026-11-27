@@ -94,6 +94,21 @@ def upstream(tmp_path):
     return config, log
 
 
+@pytest.mark.parametrize("scenario", ["normal", "schema"])
+def test_windows_catalog_probe_uses_only_read_only_permission_check(tmp_path, scenario):
+    from dashboard.screen_driver_probe import DRIVER_INCOMPATIBLE, probe
+
+    driver, log = tmp_path / "driver.py", tmp_path / "calls"
+    driver.write_text(FIXTURE.replace('SCHEMAS["darwin"]', 'SCHEMAS["windows"]'))
+    params = StdioServerParameters(command=sys.executable, args=[str(driver), str(log), scenario])
+    status = asyncio.run(probe(params))
+    calls = log.read_text().splitlines()
+    if scenario == "schema":
+        assert status == DRIVER_INCOMPATIBLE and calls == ["started"]
+    else:
+        assert status == 0 and calls == ["started", '["check_permissions", {"prompt": false}]']
+
+
 def test_fixed_list_and_live_permissions(upstream):
     asyncio.run(_fixed_list_and_live_permissions(upstream))
 

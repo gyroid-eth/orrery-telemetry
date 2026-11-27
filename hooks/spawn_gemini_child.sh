@@ -253,7 +253,7 @@ CHILD_NAME="$(
 [[ -n "$CHILD_NAME" ]] || { echo "$PROG: child preregistration returned no name" >&2; exit 1; }
 PREREGISTERED=true
 
-if [[ "$(uname -s)" == Darwin ]]; then
+case "$(uname -s)" in Darwin|Linux)
   if [[ -z "$RESOURCES" ]]; then
     echo "$PROG: interactive Antigravity children require declared resources" >&2
     exit 2
@@ -274,7 +274,7 @@ if [[ "$(uname -s)" == Darwin ]]; then
     "${adapter_args[@]}" "" "$WORK_DIR"
   trap - EXIT
   exit 0
-fi
+;; esac
 
 BRANCH_NAME="exp/$CHILD_NAME"
 WORKTREE_DIR="$WORKTREE_ROOT/$CHILD_NAME"
