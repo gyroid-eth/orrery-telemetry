@@ -131,3 +131,20 @@ def test_native_agy_under_a_shell_requires_its_executable_or_argv0(
     monkeypatch.setitem(scope, 'os', SimpleNamespace(readlink=readlink))
     assert view.editor == 'agy' and view.empty
     assert confirm(view).allows_paste('First line\nSecond line') is confirmed
+
+
+@pytest.mark.parametrize(("highlight", "option", "expected"), [
+    ("\x1b[1;7m", "/exit", "/exit"),
+    ("\x1b[0;1m\x1b[38;2;0;0;46m\x1b[48;2;99;168;248m", "/exit", "/exit"),
+    ("\x1b[0;1m\x1b[38;2;0;0;46m\x1b[48;2;99;168;248m", "/help", "/help"),
+    ("\x1b[1m", "/exit", None),
+    ("\x1b[48;2;99;168;248m\x1b[49m", "/exit", None),
+])
+def test_codex_completion_requires_active_row_highlight(highlight, option, expected):
+    metadata = "/tmp/fixture.sock\t100\t%1\t200\t2\t0\t7\t1\tcodex"
+    lines = [f"{highlight}› {option}  native command\x1b[0m", "",
+             "\x1b[1m›\x1b[0m /exit", "", "  GPT-6.2-Sol high · Context 12% left"]
+    view = frame(metadata, lines, "%1")
+    assert view.draft == "/exit" and view.selected
+    assert view.selected_command == expected
+    assert submission["ready"](view, "/exit") is (expected == "/exit")
