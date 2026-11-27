@@ -103,18 +103,38 @@ def environment(root):
             'GIT_CONFIG_NOSYSTEM': '1', 'GIT_TERMINAL_PROMPT': '0'}
 
 
-def install_dsh(repo, root, node, cache=None, *, datadir=True):
+def dsh_node(root, node):
     node = Path(node).expanduser()
     if not node.is_absolute() or not node.is_file() or not os.access(node, os.X_OK):
-        raise ValueError('dsh requires --dsh-node with an absolute Node executable (>=24.2)')
+        raise ValueError('dsh requires --dsh-node with an absolute Node executable (>=24.9)')
     node = node.resolve()
     env = environment(root)
     env['PATH'] = str(node.parent) + os.pathsep + os.defpath
     proof = json.loads(run([str(node), '-p', 'JSON.stringify({version:process.version,execPath:process.execPath})'], cwd=root, env=env))
     match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', proof['version'])
-    if not match or tuple(map(int, match.groups())) < (24, 2, 0) or Path(proof['execPath']).resolve() != node:
+    if not match or tuple(map(int, match.groups())) < (24, 9, 0) or Path(proof['execPath']).resolve() != node:
         raise ValueError('Node version/execPath does not match the pinned executable')
     proof['sha256'] = hashlib.sha256(node.read_bytes()).hexdigest()
+    return node, env, proof
+
+
+def dsh_npm_command(root, node, command):
+    user_config, global_config = root / 'empty-user.npmrc', root / 'empty-global.npmrc'
+    user_config.write_text('')
+    global_config.write_text('')
+    npm = node.parent.parent / 'lib/node_modules/npm/bin/npm-cli.js'
+    return [str(node), str(npm), command, '--ignore-scripts', '--no-audit', '--no-fund',
+            '--registry=https://registry.npmjs.org/', '--fetch-retries=0',
+            '--userconfig=' + str(user_config), '--globalconfig=' + str(global_config),
+            '--cache=' + str(root / 'npm-cache')]
+
+
+def tarball_integrity(data):
+    return 'sha512-' + base64.b64encode(hashlib.sha512(data).digest()).decode()
+
+
+def install_dsh(repo, root, node, cache=None, *, datadir=True):
+    node, env, proof = dsh_node(root, node)
     pins = read(repo / 'integrations/dsh/runtime-pins.json')
     evidence = root / 'evidence'
     evidence.mkdir()
@@ -125,25 +145,23 @@ def install_dsh(repo, root, node, cache=None, *, datadir=True):
         else:
             with urllib.request.urlopen(item['url'], timeout=60) as response:
                 target.write_bytes(response.read())
-        digest = 'sha512-' + base64.b64encode(hashlib.sha512(target.read_bytes()).digest()).decode()
-        if digest != item['integrity']:
+        if tarball_integrity(target.read_bytes()) != item['integrity']:
             raise ValueError('dsh tarball sha512 mismatch')
     runtime = root / 'runtime'
-    runtime.mkdir()
-    lock = repo / 'integrations/dsh/runtime-package-lock.json'
-    shutil.copy2(lock, runtime / 'package-lock.json')
-    save(runtime / 'package.json', {'dependencies': read(lock)['packages']['']['dependencies']})
-    user_config, global_config = root / 'empty-user.npmrc', root / 'empty-global.npmrc'
-    user_config.write_text('')
-    global_config.write_text('')
-    npm = node.parent.parent / 'lib/node_modules/npm/bin/npm-cli.js'
-    common = [str(node), str(npm), 'ci', '--ignore-scripts', '--no-audit', '--no-fund',
-              '--registry=https://registry.npmjs.org/', '--fetch-retries=0',
-              '--userconfig=' + str(user_config), '--globalconfig=' + str(global_config),
-              '--cache=' + str(root / 'npm-cache')]
+    exa = root / 'exa'
+    common = dsh_npm_command(root, node, 'ci')
     if cache:
         common += ['--offline', '--cache=' + str(Path(cache) / 'npm-cache')]
-    run(common, cwd=runtime, env=env)
+    # The Exa package pins exact peers from a different dsh release. Its
+    # provider can use its own peers without affecting native plugin discovery.
+    for target in (runtime, exa):
+        target.mkdir()
+        lock = repo / 'integrations/dsh' / (target.name + '-package-lock.json')
+        shutil.copy2(lock, target / 'package-lock.json')
+        save(target / 'package.json', {'dependencies': read(lock)['packages']['']['dependencies']})
+        run(common, cwd=target, env=env)
+    exa_package = 'node_modules/@deepseek-ai/dsh-web-search-exa'
+    (runtime / exa_package).symlink_to(exa / exa_package, target_is_directory=True)
     # The TUI bundles workspace:* packages. Asking npm to resolve its entire
     # manifest fails; preserve the verified bundle and add only pinned UI deps.
     tui = runtime / 'node_modules/@deepseek-harness-tui/dsh-tui'
@@ -310,11 +328,14 @@ def install_hermes(repo, root, python, cache=None):
 def generation_id(repo, harness, *, datadir=True):
     if harness == 'hermes':
         return HERMES_COMMIT[:16] + '-ca1-' + hermes_ca().load(repo)[2][:16] + '-exa1-tui1-' + hermes_tui().recipe_id()[:16]
-    inputs = ['runtime-pins.json', 'runtime-package-lock.json', 'ui-package.json', 'ui-package-lock.json']
+    inputs = ['runtime-pins.json', 'runtime-package-lock.json', 'exa-package-lock.json',
+              'ui-package.json', 'ui-package-lock.json']
     if datadir:
         inputs.append('tui-datadir.patch.json')
     digest = hashlib.sha256(b''.join((repo / 'integrations/dsh' / name).read_bytes() for name in inputs)).hexdigest()[:16]
-    return 'dsh-0.2.1-rc.2-tui-0.16.1-' + digest + ('-plain-datadir1' if datadir else '-plain1')
+    pins = {item['name']: item['version'] for item in read(repo / 'integrations/dsh/runtime-pins.json')}
+    versions = f"dsh-{pins['@deepseek-ai/dsh']}-tui-{pins['@deepseek-harness-tui/dsh-tui']}"
+    return versions + '-' + digest + ('-plain-datadir1' if datadir else '-plain1')
 
 
 def validate(repo, harness, receipt):

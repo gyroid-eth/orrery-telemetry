@@ -48,12 +48,8 @@ def prepare(node, runtime, output):
         raise ValueError('Pinned Node executable is required')
     version = subprocess.check_output([str(node), '--version'], env={'PATH': os.defpath}, text=True, timeout=5).strip()
     match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', version)
-    if not match or tuple(map(int, match.groups())) < (24, 2, 0):
-        raise ValueError('Pinned Node 24.2 or newer is required')
-    for name, expected in [('@deepseek-ai/dsh', '0.2.1-rc.2'), ('@deepseek-harness-tui/dsh-tui', '0.16.1')]:
-        package = runtime / 'node_modules' / name / 'package.json'
-        if json.loads(package.read_text()).get('version') != expected:
-            raise ValueError('Pinned dsh/TUI runtime versions are required')
+    if not match or tuple(map(int, match.groups())) < (24, 9, 0):
+        raise ValueError('Pinned Node 24.9 or newer is required')
     receipt_file = runtime.parent / 'evidence/upstream-runtime.json'
     if not receipt_file.is_file():
         raise ValueError('Plain dsh/TUI runtime receipt is required')

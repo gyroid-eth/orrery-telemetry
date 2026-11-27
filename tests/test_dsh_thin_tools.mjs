@@ -261,7 +261,13 @@ const rows=[];
 try {
 const handle=await ctx.agents.create({sessionId:'native-own-session',meta:{cwd:config.root}});
 const child=await ctx.agents.create({sessionId:'native-delegated-session',meta:{cwd:config.root,parentSession:'native-own-session',origin:'subagent'},parentAgent:handle.agent});
-const call=(name,args)=>handle.agent.ctx.tools.execute({callId:'probe-'+rows.length,name,agent:handle.agent,arguments:args,signal:new AbortController().signal});
+const call=async(name,args)=>{
+  const batch=await handle.agent.ctx.tools.execute({
+    calls:[{type:'tool-call',id:'probe-'+rows.length,name,arguments:JSON.stringify(args)}],
+    agent:handle.agent,signal:new AbortController().signal,
+  });
+  return batch.results[0].result;
+};
  for(const file of ['unreserved.txt','expired.txt','conflict.txt','allowed.txt']) { const r=await call('write',{file_path:config.root+'/'+file,content:'native write'});rows.push({file,error:r.isError,denial_visible:JSON.stringify(r).includes('FILE RESERVATION REQUIRED: reserve before editing')}); }
  if(config.mode==='loaded') {const read=await call('read',{file_path:config.protected});rows.push({file:'protected-read',error:read.isError});
  const shell=await call('bash',{command:config.helper+' find-generic-password -s fake-service -a fake-account -w',description:'synthetic guard probe'});rows.push({file:'key-helper',error:shell.isError});}

@@ -40,7 +40,7 @@ class ThinTests(unittest.TestCase):
         entry.parent.mkdir()
         entry.write_text('native CLI fixture')
         thin.save(self.runtime.parent / 'evidence/node-runtime.json', {
-            'version': 'v24.3.0', 'execPath': str(self.node),
+            'version': 'v24.9.0', 'execPath': str(self.node),
             'sha256': hashlib.sha256(self.node.read_bytes()).hexdigest()})
         source = self.runtime / 'node_modules/@deepseek-harness-tui/dsh-tui/lib/native.js'
         source.parent.mkdir()

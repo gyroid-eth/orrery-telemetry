@@ -313,7 +313,7 @@ for (const trigger of ['turn','checkpoint']) test(`installed TUI defers an empty
     const {createFreshAgent}=await import(pathToFileURL(path.join(tui,'lib/types/dsh-adapter/fresh-agent.js')).href);
     root=new Context();
     await root.plugin(ctx=>{new Service(ctx,'workingDirectory');});
-    for (const pkg of ['dsh-session','dsh-session-projection','dsh-llm','dsh-tools','dsh-system-prompt','dsh-agent','dsh-agent-loop']) {
+    for (const pkg of ['dsh-session','dsh-session-projection','dsh-llm','dsh-tools','dsh-tool-executor-native','dsh-system-prompt','dsh-agent','dsh-agent-loop']) {
       const module=await load('@deepseek-ai/'+pkg);
       await root.plugin(module.default??module,{});
     }

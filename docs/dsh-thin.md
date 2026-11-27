@@ -6,13 +6,19 @@
 
 install の opt-in は従来どおり `--enable-dsh`。同じ固定版でも新しい `-plain-datadir1` 世代を作り、検証済み tarball/lock を使って TUI の source は DATA_DIR を `DSH_TUI_DATA_DIR` で替える1行だけ変更します。旧 managed patch は使いません。owner receipt は `variant: plain-datadir` と `thin_config_contract: 1`、template は `generation_receipt` を参照します。旧 managed 世代は移行中も残し、古い receipt を薄い起動へ自動昇格させません。operator の template/manifest の配置は別作業です。
 
-鍵は native credentials plugin が Keychain から一度だけ取得して memory に保持します。OS の入口は macOS の `/usr/bin/security`、他 OS は未対応です。取得失敗は固定 error、再取得 loop はありません。選択 ref は env/file に fallback せず、native の set/unset からも disk へ保存しません。標準 API-key adapter は credentials service を必須の依存として設定します。plugin の欠落を generator が静的に検出しますが、実登録を起動前に検査する preflight は作りません。
+dsh 0.2.2 には Node.js 24.9.0 以上が必要です。Mac と WSL で同じ dsh/TUI pins を使います。`node --version` が 24.9.0 未満なら、利用する OS とアーキテクチャ向けの Node 24 LTS を用意し、`/absolute/path/to/node --version` で版を確認してから `scripts/install.sh --enable-dsh --dsh-node /absolute/path/to/node` を実行します。更新した世代の receipt と Node の path は、利用する dsh template にも反映します。
+
+保守時は `python3 scripts/refresh-dsh-pins.py --node /absolute/path/to/node --dsh 0.2.2-rc.5 --tui 0.20.2 --exa 0.2.2-rc.1` で、指定した版の sha512 照合、runtime/Exa/UI lock の再生成、TUI パッチの適用前の行の照合をまとめて実行できます。Exa の厳密な peer 依存は別のツリーに固定します。パッチの行が変わった場合は、新しい配布物を確認して recipe を直してから再実行します。更新を適用する前に lock の差分を確認し、隔離環境で起動と検索を試します。
+
+0.2.2 系が書いた子 agent catalog v3 は旧 0.2.1 系で読めないため、旧版へ戻す際は切替前の `DSH_HOME` のバックアップから再開します。
+
+鍵は native credentials plugin が一度だけ取得して memory に保持します。macOS は Keychain、Linux / WSL は設定済みの Secret Service 参照を使います。取得失敗は固定 error、再取得 loop はありません。選択 ref は env/file に fallback せず、native の set/unset からも disk へ保存しません。標準 API-key adapter は credentials service を必須の依存として設定します。plugin の欠落を generator が静的に検出します。
 
 生成patchはbundledのcredentials行を無効にし、別idでKeychain pluginを挿入します。native patchの`name`は既存行の一致条件であり、pluginの置換には使いません。
 
 通常の native tool はそのまま使えます。`orrery_tools.mjs` が native の tool 名・入力・実 cwd を、共通の #289 鍵読取 guard、登録、予約 hook へ渡します。判定の再実装や read/write/Mail だけの制限はありません。成功した編集の予約解放も既存 hook です。これは同一ユーザーの任意 code を隔離する sandbox ではありません。
 
-固定版の補助plugin `working-activity` は依存packageが不足して起動時に警告するため、生成設定で無効にします。通常の状態行と`esc to interrupt`による作業中の判定は維持し、依存のlockやruntimeの世代は変更しません。
+管理プロファイルは `working-activity` を無効にします。ORRERY は TUI の状態行と `esc to interrupt` から作業中かどうかを判定します。
 
 共通hookがexit 2で編集を拒否した場合は、公開のJSON理由またはstderr理由を先頭2000文字まで子へ返します。内部診断の形は除外し、他の非0は固定文、exit 0は公開の`systemMessage`だけを表示します。Hermesと同じ扱いです。
 

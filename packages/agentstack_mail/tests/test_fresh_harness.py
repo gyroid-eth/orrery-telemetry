@@ -129,7 +129,7 @@ def fixture(program,tmp,parent_id):
             case.setUp()
         product_copy(case.product)
         case.node.write_text(native);case.node.chmod(0o700)
-        save(case.runtime.parent/'evidence/node-runtime.json',dict(version='v24.3.0',execPath=str(case.node),sha256=hashlib.sha256(case.node.read_bytes()).hexdigest()))
+        save(case.runtime.parent/'evidence/node-runtime.json',dict(version='v24.9.0',execPath=str(case.node),sha256=hashlib.sha256(case.node.read_bytes()).hexdigest()))
         manifest=json.loads(case.manifest.read_text());manifest['harnesses']['dsh']['python']=sys.executable
         save(case.manifest,manifest)
         return case.product,case.manifest,'a',case.doCleanups

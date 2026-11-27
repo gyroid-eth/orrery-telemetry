@@ -416,7 +416,7 @@ class AcquisitionTests(unittest.TestCase):
         self.node.chmod(0o700)
         self.calls = []
         self.pm_inputs = []
-        self.version = 'v24.3.0'
+        self.version = 'v24.9.0'
         self.exec_path = str(self.node)
         self.commit = installer.HERMES_COMMIT
         self.bad_patch = False
@@ -439,6 +439,7 @@ class AcquisitionTests(unittest.TestCase):
             item['integrity'] = 'sha512-' + base64.b64encode(hashlib.sha512(data).digest()).decode()
         installer.save(self.repo / 'integrations/dsh/runtime-pins.json', pins)
         installer.save(self.repo / 'integrations/dsh/runtime-package-lock.json', {'packages': {'': {'dependencies': {'fixture': 'file:../evidence/package-0.tgz'}}}})
+        installer.save(self.repo / 'integrations/dsh/exa-package-lock.json', {'packages': {'': {'dependencies': {'@deepseek-ai/dsh-web-search-exa': 'file:../evidence/package-2.tgz'}}}})
         installer.save(self.repo / 'integrations/dsh/ui-package.json', {'dependencies': {'bundled': '1.0.0', 'missing': '1.0.0'}})
         installer.save(self.repo / 'integrations/dsh/ui-package-lock.json', {'lockfileVersion': 3})
         installer.save(self.repo / 'integrations/dsh/tui-datadir.patch.json', installer.read(ROOT / 'integrations/dsh/tui-datadir.patch.json'))
@@ -463,7 +464,7 @@ class AcquisitionTests(unittest.TestCase):
             self.assertIn('--fetch-retries=0', argv)
             if Path(cwd).name == 'runtime':
                 for item in installer.read(self.repo / 'integrations/dsh/runtime-pins.json'):
-                    if item['name'] == '@deepseek-harness-tui/dsh-tui':
+                    if item['name'] != '@deepseek-ai/dsh':
                         continue
                     installer.save(Path(cwd) / 'node_modules' / item['name'] / 'package.json', {'version': item['version']})
                 if self.bad_patch:
@@ -471,6 +472,10 @@ class AcquisitionTests(unittest.TestCase):
                     rows = installer.read(recipe)
                     rows['old'] = 'wrong preimage'
                     installer.save(recipe, rows)
+            elif Path(cwd).name == 'exa':
+                item = next(pin for pin in installer.read(self.repo / 'integrations/dsh/runtime-pins.json')
+                            if pin['name'] == '@deepseek-ai/dsh-web-search-exa')
+                installer.save(Path(cwd) / 'node_modules' / item['name'] / 'package.json', {'version': item['version']})
             else:
                 for name in ('bundled', 'missing'):
                     installer.save(Path(cwd) / 'node_modules' / name / 'package.json', {'version': '1.0.0'})
@@ -535,6 +540,8 @@ class AcquisitionTests(unittest.TestCase):
         tui = self.root / 'runtime/node_modules/@deepseek-harness-tui/dsh-tui'
         self.assertEqual(installer.read(tui / 'node_modules/bundled/package.json')['version'], 'bundled-original')
         self.assertTrue((tui / 'node_modules/missing').is_symlink())
+        exa = Path('node_modules/@deepseek-ai/dsh-web-search-exa')
+        self.assertEqual((self.root / 'runtime' / exa).resolve(), self.root / 'exa' / exa)
         self.assertEqual((tui / 'lib/probe.js').read_text(), 'old-one\nold-two\n')
         self.assertEqual(installer.read(details['runtime_receipt'])['source_patch'], 'tui-datadir-v1')
         (tui / installer.UPSTREAM_PROOF_FILES[0]).write_text('ordinary damaged source')
@@ -581,7 +588,7 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
 
     def test_wrong_node_version_and_exec_path_stop_before_acquisition(self):
-        for version, executable in [('v22.17.0', str(self.node)), ('v24.3.0', '/different/node')]:
+        for version, executable in [('v24.8.0', str(self.node)), ('v24.9.0', '/different/node')]:
             self.version, self.exec_path = version, executable
             with self.assertRaisesRegex(ValueError, 'version/execPath'):
                 self.dsh()

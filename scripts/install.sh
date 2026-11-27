@@ -149,7 +149,7 @@ Options:
   --enable-dsh           DeepSeek 表示と固定 dsh runtime を導入（子の起動なし）
   --enable-hermes        固定 Hermes を専用 managed root に導入（鍵なし）
   --disable-hermes       Hermes opt-in を無効化（導入済みfileはuninstallまで保持）
-  --dsh-node PATH        既存 Node >=24.2 の絶対path（Node自体は取得しない）
+  --dsh-node PATH        既存 Node >=24.9 の絶対path（Node自体は取得しない）
   --managed-spawn-config PATH  私有manifestの絶対pathを保存しdashboardへ渡す
   --harness-cache PATH   dsh offline cacheとHermes固定sourceの取得元（PMは別途取得）
   --disable-dsh          DeepSeek のロゴ配信と残高表示を無効化（既存fileは保持）

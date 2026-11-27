@@ -52,11 +52,12 @@ test('Exa: 上流の固定版で偽 HTTP を呼び、鍵無しは検索時だけ
     await apply(ctx, config);
     const providers = new Map([[provider.id, provider], ['deepseek-official', { available: () => true, search() { throw Error('別の検索先'); } }]]);
     const { WebRuntime } = await import(pathToFileURL(`${runtime}/node_modules/@deepseek-ai/dsh-web/lib/index.js`));
-    const web = { searchProviders: providers, config: { searchProvider: { get: () => 'orrery-exa' } } };
-    web.search = (request, signal) => WebRuntime.prototype.search.call(web, request, signal);
+    const web = Object.assign(Object.create(WebRuntime.prototype), {
+      searchProviders: providers, config: { searchProvider: { get: () => 'orrery-exa' } },
+    });
     const { applyWebSearchTool } = await import(pathToFileURL(`${runtime}/node_modules/@deepseek-ai/dsh-tool-web/lib/index.js`));
     let tool;
-    applyWebSearchTool({ web, tools: { register(t) { tool = t; } }, systemPrompt: { section() {}, getSectionOrder() { return 1; } } }, 5, 4, 30000, false);
+    applyWebSearchTool({ web, tools: { register(t) { tool = t; } }, systemPrompt: { section() {}, getSectionOrder() { return 1; } } }, 5, 4, 1500, 30000, false);
     const result = await tool.execute({ queries: ['fixture'] }, { signal: new AbortController().signal });
     assert.equal(result.sources[0].url, 'https://example.invalid/exa');
     assert.equal(fake.calls[0].authorization, 'Bearer fixture-exa-token');

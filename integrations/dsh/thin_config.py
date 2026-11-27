@@ -129,7 +129,7 @@ def validate_input(document):
         if hashlib.sha256(node.read_bytes()).hexdigest() != proof['sha256']:
             raise ValueError('invalid_runtime')
         version = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', proof.get('version', ''))
-        if not version or tuple(map(int, version.groups())) < (24, 2, 0) or Path(proof['execPath']).resolve() != node.resolve():
+        if not version or tuple(map(int, version.groups())) < (24, 9, 0) or Path(proof['execPath']).resolve() != node.resolve():
             raise ValueError('invalid_runtime')
         for pin in read(root / 'integrations/dsh/runtime-pins.json'):
             if read(runtime / 'node_modules' / pin['name'] / 'package.json')['version'] != pin['version']:

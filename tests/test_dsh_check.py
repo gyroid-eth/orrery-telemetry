@@ -41,7 +41,7 @@ class CheckTests(unittest.TestCase):
         for variant in ('plain', 'plain-datadir'):
             with self.subTest(variant=variant), tempfile.TemporaryDirectory() as directory:
                 node, runtime, receipt = self.native_runtime(directory, variant)
-                with patch.object(check.subprocess, 'check_output', return_value='v24.3.0'):
+                with patch.object(check.subprocess, 'check_output', return_value='v24.9.0'):
                     env, proof = check.prepare(node, runtime, Path(directory) / 'out')
                 self.assertEqual(Path(proof['runtime_receipt']).resolve(), receipt.resolve())
                 self.assertEqual(proof['variant'], variant)
@@ -52,7 +52,7 @@ class CheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             node, runtime, receipt = self.native_runtime(directory, 'managed')
             output = Path(directory) / 'out'
-            with patch.object(check.subprocess, 'check_output', return_value='v24.3.0'):
+            with patch.object(check.subprocess, 'check_output', return_value='v24.9.0'):
                 with self.assertRaisesRegex(ValueError, 'Plain dsh/TUI runtime receipt is required'):
                     check.prepare(node, runtime, output)
                 receipt.unlink()
