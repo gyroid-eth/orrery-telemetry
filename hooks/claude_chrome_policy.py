@@ -31,8 +31,12 @@ without --chrome (a documented limitation).
 
 The deviceId is a selection policy the child is told to follow, not a
 technical binding: Claude Code has no flag that pins Claude in Chrome to one
-browser. The policy is printed at every session start (startup, resume,
-compaction) because a resumed transcript alone may carry an older selection.
+browser. When no deviceId is specified, the child is instructed to pick the
+single connected browser matching this machine's OS (Windows under WSL,
+macOS on Darwin, Linux on native Linux) and ask only when zero or multiple
+connected browsers match. The policy is printed at every session start
+(startup, resume, compaction) because a resumed transcript alone may carry
+an older selection.
 
 Usage:
   claude_chrome_policy.py prepare <dir> <agent> <launch_id> <device|""> <standalone 0|1> [<chrome 0|1> <tools-spec-json>]
@@ -96,7 +100,51 @@ def session_path(directory: str, agent: str, session_id: str) -> str:
     return os.path.join(directory, f"{agent}.claude-launch.{session_id}.json")
 
 
-def policy_text(device: str, standalone: bool) -> str:
+_AUTO = object()
+
+
+def _running_in_wsl(
+    environ: dict[str, str] | None = None,
+    *,
+    proc_version_path: str = "/proc/version",
+    interop_path: str = "/proc/sys/fs/binfmt_misc/WSLInterop",
+) -> bool:
+    env = os.environ if environ is None else environ
+    if env.get("WSL_DISTRO_NAME") or env.get("WSL_INTEROP"):
+        return True
+    if os.path.exists(interop_path):
+        return True
+    try:
+        with open(proc_version_path, encoding="utf-8", errors="replace") as handle:
+            return "microsoft" in handle.read(4096).lower()
+    except OSError:
+        return False
+
+
+def local_browser_os(
+    *,
+    platform: str | None = None,
+    environ: dict[str, str] | None = None,
+    wsl: bool | None = None,
+) -> str | None:
+    """OS name of the browser running on this machine, or None if unknown."""
+    plat = sys.platform if platform is None else platform
+    if plat == "darwin":
+        return "macOS"
+    if plat in ("win32", "cygwin", "msys"):
+        return "Windows"
+    if plat.startswith("linux"):
+        is_wsl = _running_in_wsl(environ) if wsl is None else wsl
+        return "Windows" if is_wsl else "Linux"
+    return None
+
+
+def policy_text(
+    device: str,
+    standalone: bool,
+    *,
+    target_os: str | None | object = _AUTO,
+) -> str:
     report_to = "the operator" if standalone else "your parent agent"
     if device:
         return (
@@ -115,13 +163,34 @@ def policy_text(device: str, standalone: bool) -> str:
             "or OS). This is an instruction for you to follow, not a technical "
             "lock."
         )
+    os_name = local_browser_os() if target_os is _AUTO else target_os
+    if os_name:
+        return (
+            "Browser: this session was started with Claude in Chrome (--chrome) "
+            f"with no explicit deviceId, so use this machine's {os_name} browser. "
+            "Until that browser is selected, use no browser tool except "
+            "list_connected_browsers. To select it: call list_connected_browsers "
+            f"and find the connected browsers whose OS is {os_name}. If exactly "
+            f"one connected browser matches {os_name}, call select_browser with "
+            "its deviceId, confirm it succeeded, and only then open your own tab "
+            "with tabs_create_mcp and work only in tabs you created after that "
+            "selection; do not reuse an earlier selection or tab. Select again "
+            "after any resume, restart, compaction or disconnect. If zero or more "
+            f"than one connected browser matches {os_name}, do not select or "
+            "switch browsers, open tabs, navigate, read pages or click: send the "
+            "names and deviceIds from list_connected_browsers to "
+            f"{report_to} and wait for the deviceId to use. Never fall back to a "
+            "browser on another OS or machine. This is an instruction for you to "
+            "follow, not a technical lock."
+        )
     return (
         "Browser: this session was started with Claude in Chrome (--chrome), "
-        "but no target browser was specified. Use no browser tool except "
-        "list_connected_browsers: do not select or switch browsers, open tabs, "
-        "navigate, read pages or click. If the task needs a browser, send the "
-        "names and deviceIds from list_connected_browsers to "
-        f"{report_to} and wait for the deviceId to use."
+        "but no target browser was specified and this machine's OS could not "
+        "be determined. Use no browser tool except list_connected_browsers: do "
+        "not select or switch browsers, open tabs, navigate, read pages or "
+        "click. If the task needs a browser, send the names and deviceIds from "
+        f"list_connected_browsers to {report_to} and wait for the deviceId to "
+        "use."
     )
 
 
