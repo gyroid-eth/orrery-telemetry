@@ -76,8 +76,23 @@ class ThinConfig(unittest.TestCase):
         self.assertFalse((self.runtime / 'profiles').exists())
         self.assertFalse((self.base / 'child').exists())
 
+    def test_child_sandbox_off_uses_local_terminal_without_editing_profile(self):
+        self.save(self.profile / 'config.yaml', {'terminal': {'backend': 'docker', 'timeout': 150}})
+        plan = self.generate(child_sandbox=False)
+        overlay = config.read(Path(plan['env']['HERMES_MANAGED_DIR']) / 'config.yaml')
+        self.assertEqual(plan['env']['TERMINAL_ENV'], 'local')
+        self.assertEqual(overlay['terminal'], {'backend': 'local'})
+        self.assertEqual(config.read(self.profile / 'config.yaml')['terminal'],
+                         {'backend': 'docker', 'timeout': 150})
+        plan = self.generate(child_sandbox=True)
+        self.assertNotIn('TERMINAL_ENV', plan['env'])
+        self.assertNotIn('terminal', config.read(Path(plan['env']['HERMES_MANAGED_DIR']) / 'config.yaml'))
+
     def test_native_plan_no_caps_no_key_env_and_literal_query_file(self):
-        plan = self.generate()
+        from hooks import harness_child
+
+        instructions = harness_child.write_instructions(self.base / 'managed', '/fixture/project')
+        plan = self.generate(instructions_file=str(instructions))
         self.assertEqual(plan['argv'][1:3], ['chat', '--provider'])
         self.assertRegex(plan['argv'][3], '^orrery-deepseek-[a-f0-9]{24}$')
         self.assertEqual(plan['argv'][4:6], ['--model', 'fixture-main'])
@@ -85,6 +100,8 @@ class ThinConfig(unittest.TestCase):
         for option in ('--oneshot', '--toolsets', '--reasoning', '--quiet', '--yolo'):
             self.assertNotIn(option, plan['argv'])
         overlay = config.read(Path(plan['config_dir']) / 'config.yaml')
+        self.assertEqual(overlay['agent']['system_prompt'], instructions.read_text())
+        self.assertIn('the refused action.', overlay['agent']['system_prompt'])
         self.assertEqual(overlay['display']['busy_input_mode'], 'queue')
         self.assertEqual(overlay['auxiliary']['vision']['model'], 'fixture-main')
         self.assertNotIn('security', overlay)

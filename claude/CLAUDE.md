@@ -199,6 +199,8 @@ workspace or a path-shaped project key into that root list.
 If an MCP tool returns a refusal message (for example, Codex's
 `approval policy is never`, a Claude tool missing from `--allowed-tools`, or
 a denied browser or OS permission), stop the blocked work and report it.
+Do not use another tool, a shell command, or another application to carry out
+the refused action.
 A pending Allow prompt blocks the tool call. If a person presses Allow, the
 call continues; if permission is denied and a refusal message returns,
 report that message then. Do not attempt to report while the call is waiting.

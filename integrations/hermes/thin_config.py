@@ -469,6 +469,8 @@ def generate(document):
                 disabled = []
             overlay['agent']['disabled_toolsets'] = list(dict.fromkeys(
                 [*(name.strip() for name in disabled if isinstance(name, str) and name.strip()), 'computer_use']))
+        if document.get('child_sandbox') is False:
+            overlay['terminal'] = {'backend': 'local'}
         if telegram is not None:
             overlay['telegram'] = telegram
             overlay['plugins']['enabled'].append('orrery-telegram')
@@ -535,6 +537,7 @@ def generate(document):
         argv.extend(['--query-file', str(prompt)])
     env = {'HERMES_HOME': str(profile), 'HERMES_MANAGED_DIR': str(state / 'overlay'),
            **facts['credential_context'], **tui_env,
+           **({'TERMINAL_ENV': 'local'} if document.get('child_sandbox') is False else {}),
            'HERMES_BUNDLED_LOCALES': str(Path(facts['source']) / 'locales'),
            'AGENTSTACK_LLM_KEY_DEFINITIONS': str(definitions),
            'AGENTSTACK_NATIVE_SESSION_FILE': str(state / 'native-session.json'),

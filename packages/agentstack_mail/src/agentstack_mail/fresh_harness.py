@@ -64,7 +64,7 @@ def setup(client, root, provider, *, persistent=None):
     return client.path.parent / 'providers' / provider, binary, dict(runner=runner, spec=spec, model=ready['model'])
 
 
-def plan(client, root, provider, settings, run, cwd, prompt, session_id, *, persistent=None):
+def plan(client, root, provider, settings, run, cwd, prompt, session_id, *, persistent=None, child=False):
     api = helper(root)
     for folder in (client.path.parent / 'providers', client.path.parent / 'providers' / provider):
         folder.mkdir(mode=0o700, exist_ok=True);_directory(folder)
@@ -90,6 +90,8 @@ def plan(client, root, provider, settings, run, cwd, prompt, session_id, *, pers
         state_dir=str(state), runtime_dir=str(client.path.parent), fresh_client_dir=str(client.path.parent),
         cwd=str(cwd), mcp_config=str(mcp), prompt_file=str(task), instructions_file=str(instructions),
         tools=selection_spec.get('tools', {'base':'default','tools':{}}), env=env)
+    if child:
+        document['child_sandbox'] = os.environ.get('AGENTSTACK_CHILD_SANDBOX') == 'on'
     for key in ('effort','helper_model','web_search'):
         if key in selection_spec:document[key] = selection_spec[key]
     document.update({key:settings['runner'][key] for key in ('url_index','url_key','server_url') if key in settings['runner']})

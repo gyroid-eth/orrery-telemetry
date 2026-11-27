@@ -68,6 +68,8 @@
     <string>__SPAWN_ROOTS__</string>
     <key>AGENTSTACK_WORKTREE_ROOT</key>
     <string>__WORKTREE_ROOT__</string>
+    <key>AGENTSTACK_CHILD_SANDBOX</key>
+    <string>__CHILD_SANDBOX__</string>
     <key>AGENTSTACK_CODEX_CHILD_APPROVAL</key>
     <string>__CODEX_CHILD_APPROVAL__</string>
     <key>AGENTSTACK_CHILD_DEFAULT_TOOLS</key>

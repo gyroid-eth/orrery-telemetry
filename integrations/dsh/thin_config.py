@@ -410,6 +410,8 @@ def generate(document):
         protected.extend([str(settings_file), str(definitions)])
     return {'argv': argv, 'cwd': str(cwd), 'config_dir': str(config_dir),
             'env': {'DSH_HOME': str(home), 'DSH_TUI_DATA_DIR': str(tui_data), 'DSH_TUI_LANG': language,
+                    **({'DSH_PERMISSION_MODE': 'workspace-write' if document['child_sandbox']
+                        else 'danger-full-access'} if 'child_sandbox' in document else {}),
                     **({'DSH_AGENTS_HOME': str(personal)} if personal else {}),
                     **facts['credential_context'],
                     'AGENTSTACK_LLM_KEY_FILES': json.dumps(protected),

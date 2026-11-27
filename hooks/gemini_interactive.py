@@ -32,6 +32,8 @@ if "child_tools" not in globals():
 PROGRAM = "antigravity"
 TMUX_FORMAT = "#{session_name}|#{session_id}|#{session_created}|#{pid}"
 STARTUP_TIMEOUT = 22
+TOOL_REFUSAL_RULE = Path(".agents/rules/orrery-tool-refusals.md")
+RULE_HEADER = b"---\ntrigger: always_on\n---\n\n<!-- ORRERY: tool refusal rule -->\n\n"
 WRITE_TOOLS = {"write_to_file": "Write", "replace_file_content": "Edit",
                "multi_replace_file_content": "Edit"}
 ACTIVITY = {"idle": "wait", "working": "work", "tool_use": "work",
@@ -110,6 +112,19 @@ def _guard_config(cwd):
     if path.parent.is_symlink():
         raise ValueError("Antigravity workspace configuration cannot be a symlink")
     return path
+
+
+def write_tool_refusal_rule(cwd):
+    _guard_config(cwd)
+    path = cwd / TOOL_REFUSAL_RULE
+    if path.parent.is_symlink() or path.is_symlink():
+        raise ValueError("Antigravity tool refusal rule cannot be a symlink")
+    if path.exists():
+        old = child_resume._read_private(path, "tool refusal rule", 64 * 1024)
+        if not old.startswith(RULE_HEADER):
+            raise ValueError("The worktree already has a tool refusal rule at the ORRERY path")
+    renderer = runpy.run_path(str(_home() / "bin/lib/instruction_blocks.py"))
+    child_resume._atomic_bytes(path, RULE_HEADER + renderer["tool_refusal_block"]())
 
 
 def validate_plan(plan):
@@ -311,20 +326,36 @@ def _prompt_with_mcp_tools(prompt, *, managed_mail, parent, browser_mode):
     return "\n\n".join([*instructions, prompt])
 
 
-def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None, parent=None):
-    if (prompt is None) == (conversation is None):
-        raise ValueError("Provide the first task or an existing conversation")
-    settings = {"trustedWorkspaces": [str(cwd)], "enableTerminalSandbox": True,
-                "statusLine": {
-                    "type": "command",
-                    "command": shlex.join([plan["python"], str(Path(__file__).resolve()), "status"]),
-                }}
-    home = Path.home()
+def terminal_settings(home, sandbox):
     try:
         configured = json.loads((home / ".gemini/antigravity-cli/settings.json").read_text())
     except FileNotFoundError:
         configured = {}
     permissions = configured.get("permissions") or {}
+    if not sandbox:
+        # Auto requires the terminal sandbox. Allow shell commands in
+        # accept-edits mode while preserving higher-priority deny and ask rules.
+        allow = list(dict.fromkeys([*permissions.get("allow", ()), "command(*)"]))
+        permissions = {**permissions, "allow": allow}
+    return {"enableTerminalSandbox": sandbox, "permissions": permissions}
+
+
+def terminal_mode(sandbox):
+    return ["--mode", "auto", "--sandbox"] if sandbox else ["--mode", "accept-edits"]
+
+
+def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None, parent=None):
+    if (prompt is None) == (conversation is None):
+        raise ValueError("Provide the first task or an existing conversation")
+    sandbox = plan.get("standalone") is True or os.environ.get("AGENTSTACK_CHILD_SANDBOX") == "on"
+    home = Path.home()
+    settings = terminal_settings(home, sandbox)
+    settings["trustedWorkspaces"] = [str(cwd)]
+    settings["statusLine"] = {
+        "type": "command",
+        "command": shlex.join([plan["python"], str(Path(__file__).resolve()), "status"]),
+    }
+    permissions = settings["permissions"]
     selection = _tool_selection(plan) if screen_mode is None or prompt is not None else None
     if screen_mode is None:
         screen_mode = child_tools.screen_mode(selection)
@@ -346,7 +377,7 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
         extra = ["--add-dir", str(config_dir)]
     model = ["--model", plan["model"]] if plan.get("model") else []
     effort = ["--effort", plan["effort"]] if plan.get("effort") else []
-    return [plan["binary"], "--mode", "auto", "--sandbox", *extra, "--settings",
+    return [plan["binary"], *terminal_mode(sandbox), *extra, "--settings",
             json.dumps(settings, separators=(",", ":")), *model, *effort,
             *(["--conversation", conversation] if conversation else ["-i", prompt])]
 
@@ -494,10 +525,12 @@ def run(runtime, name, task_file=None, conversation=None):
         env.pop("PARENT_AGENT", None)
         env.pop("AGENTSTACK_PROXY_PARENT_AGENT", None)
     if conversation and not plan.get("standalone"):
+        excludes = runtime / f"gemini-git-excludes-{name}"
+        child_resume._atomic_bytes(excludes, (f".agents/mcp_config.json\n.agents/hooks.json\n{TOOL_REFUSAL_RULE}\n").encode())
         count = env.get("GIT_CONFIG_COUNT", "0")
         index = int(count) if count.isdecimal() else 0
         env[f"GIT_CONFIG_KEY_{index}"] = "core.excludesFile"
-        env[f"GIT_CONFIG_VALUE_{index}"] = str(runtime / f"gemini-git-excludes-{name}")
+        env[f"GIT_CONFIG_VALUE_{index}"] = str(excludes)
         env["GIT_CONFIG_COUNT"] = str(index + 1)
 
     os.chdir(cwd)
@@ -506,6 +539,8 @@ def run(runtime, name, task_file=None, conversation=None):
     config_dir = workspace_mcp = written_mcp = None
     try:
         standalone = plan.get("standalone") is True
+        if not standalone:
+            write_tool_refusal_rule(cwd)
         changed = permission_selection(runtime, state, conversation) if conversation else None
         screen_mode = "off"
         if standalone or conversation is None or changed:
@@ -626,6 +661,7 @@ def guard(event, cwd, *, runtime):
         if (args.get("IsArtifact") or not target.is_relative_to(cwd)
                 or any(target.is_relative_to(root) for root in protected)
                 or any(part.casefold() == ".git" for part in target.relative_to(cwd).parts)
+                    or target == (cwd / TOOL_REFUSAL_RULE).resolve()
                 or target in {(cwd / ".agents" / filename).resolve()
                               for filename in ("hooks.json", "mcp_config.json")}):
             return {"decision": "deny", "reason": "Edit files only in the child worktree"}
@@ -633,8 +669,9 @@ def guard(event, cwd, *, runtime):
         mode = WRITE_TOOLS[name]
     elif name == "run_command":
         workdir = (cwd / Path(args.get("Cwd") or cwd)).resolve()
-        if (args.get("BypassSandbox") or not workdir.is_relative_to(cwd)
-                or any(workdir.is_relative_to(root) for root in protected)):
+        if not workdir.is_relative_to(cwd) or any(workdir.is_relative_to(root) for root in protected):
+            return {"decision": "deny", "reason": "Run the command inside the child worktree"}
+        if args.get("BypassSandbox") and os.environ.get("AGENTSTACK_CHILD_SANDBOX") == "on":
             return {"decision": "deny", "reason": "Use a sandboxed command inside the child worktree"}
         inputs["command"] = args["CommandLine"]
         cwd = workdir
@@ -676,11 +713,23 @@ def main():
     group.add_argument("--conversation")
     actions.add_parser("status")
     actions.add_parser("guard")
+    headless = actions.add_parser("exec-headless")
+    headless.add_argument("binary")
+    headless.add_argument("arguments", nargs=argparse.REMAINDER)
+    rule = actions.add_parser("tool-refusal-rule")
+    rule.add_argument("cwd", type=Path)
     for action in ("ready", "wake-ready"):
         ready = actions.add_parser(action)
         ready.add_argument("name")
         ready.add_argument("identity")
     args = parser.parse_args()
+    if args.action == "tool-refusal-rule":
+        write_tool_refusal_rule(args.cwd.resolve(strict=True))
+        return 0
+    if args.action == "exec-headless":
+        sandbox = os.environ.get("AGENTSTACK_CHILD_SANDBOX") == "on"
+        settings = json.dumps(terminal_settings(Path.home(), sandbox), separators=(",", ":"))
+        os.execvp(args.binary, [args.binary, *terminal_mode(sandbox), "--settings", settings, *args.arguments])
     runtime = Path(os.environ["AGENTSTACK_RUNTIME_DIR"])
     if args.action in {"ready", "wake-ready"}:
         startup = _startup_state(runtime, args.name, args.identity)

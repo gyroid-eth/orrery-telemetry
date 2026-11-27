@@ -39,7 +39,8 @@ SESSION_ID = "01d13f58-8e1a-7777-a3d8-e2ba243cdb49"
 
 @pytest.fixture
 def policy_env(monkeypatch, tmp_path):
-    for name in ("AGENTSTACK_CODEX_SANDBOX", "AGENTSTACK_CODEX_CHILD_APPROVAL", "AGENTSTACK_CODEX_NETWORK",
+    for name in ("AGENTSTACK_CHILD_SANDBOX", "AGENTSTACK_CODEX_SANDBOX",
+                 "AGENTSTACK_CODEX_CHILD_APPROVAL", "AGENTSTACK_CODEX_NETWORK",
                  "AGENTSTACK_CODEX_ADD_DIRS", "AGENTSTACK_SPAWN_DIRS",
                  "AGENTSTACK_SPAWN_ROOTS", "AGENTSTACK_HOME"):
         monkeypatch.delenv(name, raising=False)
@@ -233,22 +234,25 @@ def _invoke_resume_entry(monkeypatch, tmp_path, project, runtime, *, registratio
 def test_resume_defaults_to_never_with_network_and_project_root(policy_env):
     tmp_path, project = policy_env
     flags = server._codex_child_launch_flags()
-    assert flags.startswith("--sandbox workspace-write --ask-for-approval never")
+    assert flags.startswith("--sandbox danger-full-access --ask-for-approval never")
     assert "-c sandbox_workspace_write.network_access=true" in flags
     assert f"--add-dir {shlex.quote(os.path.realpath(str(project)))}" in flags
     # The old hardcoded on-request is gone.
     assert "on-request" not in flags
 
 
-def test_resume_reads_full_access_from_installed_env(policy_env, monkeypatch):
+def test_resume_reads_shared_sandbox_without_changing_standalone(policy_env, monkeypatch):
     tmp_path, _ = policy_env
     install_home = tmp_path / "custom-install"
     install_home.mkdir()
     monkeypatch.setattr(server, "HERE", str(install_home / "dashboard"))
-    (install_home / "env.sh").write_text("export AGENTSTACK_CODEX_SANDBOX=danger-full-access\n")
+    (install_home / "env.sh").write_text("export AGENTSTACK_CODEX_SANDBOX=danger-full-access\n"
+                                         "export AGENTSTACK_CHILD_SANDBOX=on\n")
     monkeypatch.setenv("AGENTSTACK_CODEX_CHILD_APPROVAL", "on-request")
-    for standalone in (False, True):
-        flags = server._codex_child_launch_flags(standalone=standalone)
+    assert shlex.split(server._codex_child_launch_flags())[:4] == [
+        "--sandbox", "workspace-write", "--ask-for-approval", "on-request"]
+    for flags in (server._codex_child_launch_flags(standalone=True),
+                  server._codex_child_launch_flags(child=False)):
         assert shlex.split(flags)[:4] == ["--sandbox", "danger-full-access", "--ask-for-approval", "never"]
 
 
@@ -276,6 +280,7 @@ def test_resume_uses_the_recorded_codex_launch_policy(policy_env, monkeypatch, s
 
     assert result["ok"], result
     flags = shlex.split(launched[0][-1])
+    assert flags[flags.index("--sandbox") + 1] == ("workspace-write" if standalone else "danger-full-access")
     if standalone:
         assert "--ask-for-approval" not in flags
     else:

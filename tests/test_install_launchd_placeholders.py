@@ -113,6 +113,7 @@ def test_child_and_profile_settings_survive_every_service_writer(tmp_path, write
     expected = {
         "AGENTSTACK_SPAWN_DIRS": path + '/spawn',
         "AGENTSTACK_SPAWN_ROOTS": path + '/roots',
+        "AGENTSTACK_CHILD_SANDBOX": "on",
         "AGENTSTACK_CODEX_CHILD_APPROVAL": "on-request",
         "AGENTSTACK_CODEX_NETWORK": "restricted",
         "AGENTSTACK_CODEX_ADD_DIRS": path + '/add-dirs',

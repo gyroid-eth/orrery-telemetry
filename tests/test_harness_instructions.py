@@ -63,6 +63,26 @@ def test_neutral_identity_and_all_shared_sections_are_kept_byte_for_byte():
     assert renderer.parse(output)[2] == 'harness'
 
 
+def test_all_harnesses_receive_the_same_refusal_rule(tmp_path):
+    from hooks import gemini_interactive, harness_child
+
+    rule = b'Do not use another tool, a shell command, or another application to carry out\nthe refused action.'
+    shared = renderer.tool_refusal_block()
+    assert shared in render()
+    fresh = harness_child.fresh_instructions(tmp_path / 'state', ROOT)
+    assert shared in fresh.read_bytes()
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    gemini_interactive.write_tool_refusal_rule(workspace)
+    agy_rule = workspace / gemini_interactive.TOOL_REFUSAL_RULE
+    assert agy_rule.read_bytes() == gemini_interactive.RULE_HEADER + shared
+    assert agy_rule.read_bytes().startswith(b'---\ntrigger: always_on\n---\n')
+    assert shared.count(rule) == 1
+    for prefix in (ROOT, ROOT / 'templates/fresh'):
+        assert (prefix / 'claude/CLAUDE.md').read_bytes().count(rule) == 1
+        assert (prefix / 'codex/AGENTS.md').read_bytes().count(rule) == 1
+
+
 @pytest.mark.parametrize('start,end', re.findall(
     rb'^<!-- include: (.+) UNTIL (.+) -->$',
     (ROOT / 'bin/lib/harness_instructions.md').read_bytes(), re.M))
@@ -79,16 +99,17 @@ def test_shared_boundary_changes_fail_instead_of_silently_dropping_rules(mutatio
 
 
 @pytest.mark.parametrize('provider,name,digest', [
-    ('claude', 'CLAUDE.md', 'b45d84e25b9820a1dcdd635900cd15e553d9e8796b171c0984381c8c04c113fb'),
-    ('codex', 'AGENTS.md', 'cc2fa8bfbab4da53bd86fb6a36e38090b5f350f9cf629fef051957d8f5bbb438'),
+    ('claude', 'CLAUDE.md', 'e651116910def167d59c3cb92581b90bc230166acadfd7daa062c032b924648b'),
+    ('codex', 'AGENTS.md', 'fc142f2243581ad3b8ff8c5cc1742bd0b1a83fa359d74a9750ad4a53e9ebc589'),
 ])
 def test_program_output_matches_scope_adjusted_baseline(provider, name, digest):
     # Reviewed against af1e33d0: each provider template adds exactly four lines
     # requiring physical absolute paths in managed workspace-v1 sessions,
     # the same paths for renew/release, unchanged legacy paths/globs, and no
     # inferred cwd. Then each adds the eight-line "## Showing Files" section
-    # (show_files before the final message). #611 also tells agents to end
-    # their turn after sending a completion report or a blocking question.
+    # (show_files before the final message). #607 adds the shared tool-refusal
+    # rule, and #611 tells agents to end their turn after a completion report
+    # or a blocking question.
     output = renderer.render(provider, (ROOT / provider / name).read_bytes(), '/fixture/install', '/fixture/project')
     assert hashlib.sha256(output).hexdigest() == digest
 
