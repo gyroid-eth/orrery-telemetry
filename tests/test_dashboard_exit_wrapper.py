@@ -10,6 +10,7 @@ fix walks the pane's descendants; these pin both the walk and the branch.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import pathlib
 import shlex
@@ -113,6 +114,26 @@ def test_exit_leaves_a_finished_shell_for_the_operator(monkeypatch):
     assert not sent
 
 
+def test_refused_exit_diagnostics_are_private_and_keep_three_frames(monkeypatch, tmp_path, caplog):
+    server = _load_server()
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path))
+    for index in range(4):
+        server._write_exit_refusal_frame("ExitProbe", "completion_unverified", {
+            "pane": "%41", "width": 80, "height": 24, "cursor_x": 6, "cursor_y": 17,
+            "ansi": f"\x1b[31mfixture private draft {index}\x1b[0m",
+        })
+    directory = tmp_path / "child-agents/ExitProbe.exit-refusals"
+    files = sorted(directory.glob("*.ansi"))
+    assert directory.stat().st_mode & 0o777 == 0o700
+    assert len(files) == 3 and all(path.stat().st_mode & 0o777 == 0o600 for path in files)
+    metadata, ansi = files[-1].read_bytes().split(b"\n", 1)
+    assert json.loads(metadata) == dict(pane="%41", width=80, height=24, cursor_x=6, cursor_y=17,
+                                       reason="completion_unverified", truncated=False)
+    assert ansi == b"\x1b[31mfixture private draft 3\x1b[0m"
+    assert f"reason=completion_unverified frame={files[-1]}" in caplog.text
+    assert "fixture private draft" not in caplog.text
+
+
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="requires tmux")
 @pytest.mark.parametrize("screen", ["model", "approval", "composer", "hermes", "hermes-wrong", "hermes-edited"])
 def test_exit_keys_on_a_private_tmux_server(monkeypatch, tmp_path, screen):
@@ -120,6 +141,7 @@ def test_exit_keys_on_a_private_tmux_server(monkeypatch, tmp_path, screen):
     import tempfile
 
     server = _load_server()
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path))
     received = tmp_path / "input"
     tui = r"""
 import os, pathlib, sys, tty
@@ -189,6 +211,14 @@ while True:
                 time.sleep(.02)
             assert received.exists()
             result = server.do_exit("ExitProbe")
+            evidence = list((tmp_path / "child-agents/ExitProbe.exit-refusals").glob("*.ansi"))
+            assert len(evidence) == (0 if result["ok"] else 1)
+            if evidence:
+                metadata, ansi = evidence[0].read_bytes().split(b"\n", 1)
+                observed = json.loads(metadata)
+                assert observed["height"] == 27 and observed["width"] == (46 if screen.startswith("hermes") else 80)
+                if screen == "hermes-wrong":
+                    assert b"/exit-other" in ansi and observed["reason"] == "completion_mismatch"
             if screen in ("composer", "hermes"):
                 assert result["ok"], result
                 assert received.read_bytes() == b"\x1b[200~/exit\x1b[201~\r"

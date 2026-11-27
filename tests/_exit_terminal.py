@@ -42,9 +42,10 @@ class ExitTerminal:
     def command(self, args, **kwargs):
         stdout = ""
         if args[0] == "display-message":
-            if self.metadata in args:
+            if len(args) > 4 and args[4].startswith(self.metadata):
                 screen, row, col = self.render()
-                stdout = f"/tmp/synthetic-tmux\t{self.pid}\t%41\t400\t{row}\t0\t{col}\t1\t{self.pane_command}\n{screen}"
+                size = "\t80\t24" if args[4] != self.metadata else ""
+                stdout = f"/tmp/synthetic-tmux\t{self.pid}\t%41\t400\t{row}\t0\t{col}\t1\t{self.pane_command}{size}\n{screen}"
             elif args[-1] == "#{pane_current_command}":
                 stdout = self.pane_command
             elif args[-1] == "#{pane_pid}":

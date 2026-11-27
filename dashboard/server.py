@@ -8628,20 +8628,33 @@ def do_jump(session: str, *, open_terminal: bool | None = None,
         if not _valid_permission_request(permission):
             return {"ok": False, "error": "permission requires a history_session_id and one valid computer_use, browser_mode or browser_use value"}
         requested = True
+    audit = {"tools_change": "not_started"}
+
+    def report(result):
+        if permission is not _TOOLS_UNSET and check_only is not True:
+            phase = audit["tools_change"]
+            event = {"operation": "permission-restart", "recipient": session,
+                     "status": ("warning" if result.get("warning") else "ok") if result.get("ok") else "error",
+                     "reason": result.get("error") or result.get("warning"),
+                     "tools_change": phase, "tools_change_cleared": audit.get("tools_change_cleared"),
+                     "tools_change_reason": audit.get("tools_change_reason")}
+            print("[orrery action] " + json.dumps(event), file=sys.stderr, flush=True)
+        return result
+
     if not requested and not os.path.lexists(os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")):
         return _do_jump(session, open_terminal=open_terminal)
     try:
         module = _child_resume_module()
         with module.tools_change_lock(pathlib.Path(RUNTIME_DIR), session):
             if requested:
-                return _jump_with_tools(session, module, base=base, tools=tools,
-                                        permission=None if permission is _TOOLS_UNSET else permission,
-                                        open_terminal=open_terminal, check_only=check_only is True)
+                return report(_jump_with_tools(session, module, base=base, tools=tools,
+                                               permission=None if permission is _TOOLS_UNSET else permission,
+                                               open_terminal=open_terminal, check_only=check_only is True, audit=audit))
             return _do_jump(session, open_terminal=open_terminal)
     except _ResumeCapabilityError as exc:
-        return _resume_unavailable(exc.code)
+        return report(_resume_unavailable(exc.code))
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        return {"ok": False, "error": str(exc), "resume_capability": "config_unrestorable"}
+        return report({"ok": False, "error": str(exc), "resume_capability": "config_unrestorable"})
 
 
 def _permission_stopped_terminal(session, sessions):
@@ -8666,7 +8679,7 @@ def _permission_stopped_terminal(session, sessions):
     return f"{live['session_id']}|{live['created']}|{live['server_pid']}"
 
 
-def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=None, check_only=False):
+def _jump_with_tools(session, module, *, base, tools, open_terminal, audit, permission=None, check_only=False):
     boot = module.boot_time()
     live = _child_session_live(session, boot)
     if live is None:
@@ -8848,6 +8861,21 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
                 **({"warning": browser_warning} if browser_warning else {})}
     generation = module.begin_tools_change(runtime, session, state, record, candidate, profile,
                                            **({"adopt": True} if adopt else {}))
+    audit["tools_change"] = "pending"
+    audit["tools_change_cleared"] = False
+
+    def finish(commit):
+        try:
+            module.finish_tools_change(runtime, session, generation, commit=commit)
+        except Exception as exc:
+            audit["tools_change_reason"] = str(exc)
+            persisted = _card_private_mapping(runtime / "child-agents" / f"{session}.json")
+            if persisted:
+                audit["tools_change_cleared"] = "tools_change_generation" not in persisted
+            raise
+        audit["tools_change"] = "committed" if commit else "rolled_back"
+        audit["tools_change_cleared"] = True
+
     try:
         with module.owned_tools_change(generation):
             _invalidate_resume_capability_cache(session)
@@ -8865,20 +8893,20 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
             result = {"ok": False, "error": "The child became active before the tools-changing resume"}
     except Exception:
         # Only this generation may restore the previous selection/config.
-        module.finish_tools_change(runtime, session, generation, commit=False)
+        finish(False)
         raise
     if result.get("ok") and browser_warning:
         result["warning"] = " · ".join(filter(None, (result.get("warning"), browser_warning)))
     if result.get("ok"):
         try:
-            module.finish_tools_change(runtime, session, generation, commit=True)
+            finish(True)
         except Exception:
             # Launch has already been accepted. Do not undo a selection used
             # by a running child or report that accepted launch as a failure.
             result = {**result, "warning": "; ".join(filter(None, (
                 result.get("warning"), f"Tools change ({generation}) cleanup is pending; recover this generation before another resume")))}
     elif not result.get("resume_confirmation_pending"):
-        module.finish_tools_change(runtime, session, generation, commit=False)
+        finish(False)
     _invalidate_resume_capability_cache(session)
     if result.get("ok"):
         result = {**result, "tools_changed": True, "base": spec["base"], "tools": spec["tools"]}
@@ -11321,6 +11349,39 @@ def do_exit(session: str, *, history_session_id=_TOOLS_UNSET) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+_EXIT_REFUSAL_LOCK = threading.Lock()
+_EXIT_REFUSAL_HISTORY = 3
+_EXIT_REFUSAL_FRAME_BYTES = 512 * 1024
+
+
+def _write_exit_refusal_frame(session, reason, frame):
+    """Retain only local, private diagnostic frames beside the child state."""
+    children = Path(RUNTIME_DIR) / "child-agents"
+    directory = children / f"{session}.exit-refusals"
+    try:
+        with _EXIT_REFUSAL_LOCK:
+            for path in (children, directory):
+                path.mkdir(mode=0o700, parents=path == children, exist_ok=True)
+                info = path.lstat()
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    raise OSError("Exit diagnostic directory is not private")
+            captured = frame["ansi"].encode("utf-8", "replace")
+            metadata = {key: value for key, value in frame.items() if key != "ansi"}
+            metadata.update(reason=reason, truncated=len(captured) > _EXIT_REFUSAL_FRAME_BYTES)
+            with tempfile.NamedTemporaryFile(dir=directory, prefix=f"{time.time_ns():020d}-",
+                                             suffix=".ansi", delete=False) as evidence:
+                evidence.write(json.dumps(metadata).encode("utf-8") + b"\n")
+                evidence.write(captured[:_EXIT_REFUSAL_FRAME_BYTES])
+                path = Path(evidence.name)
+            previous = sorted(directory.glob("*.ansi"), reverse=True)
+            for expired in previous[_EXIT_REFUSAL_HISTORY:]:
+                expired.unlink(missing_ok=True)
+    except OSError as exc:
+        logging.warning("Exit refused session=%s reason=%s frame unavailable: %s", session, reason, exc)
+    else:
+        logging.warning("Exit refused session=%s reason=%s frame=%s", session, reason, path)
+
+
 def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
     """running/finished エージェントに `/exit` を送り、Claude を graceful exit させる。
 
@@ -11430,7 +11491,8 @@ def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
     error, interrupted = _MODE_API['runtime_tmux_api']()['submit_terminal_exit'](
         lambda *args, **kwargs: _tmux_run(list(args), timeout=3, capture_output=True, text=True, **kwargs),
         lambda: observed_target() == observed, pane, interrupt_key=interrupt_key,
-        activity=lambda screen: harness_activity.parse_activity(screen, program))
+        activity=lambda screen: harness_activity.parse_activity(screen, program),
+        on_refusal=lambda reason, frame: _write_exit_refusal_frame(session, reason, frame))
     if error:
         return {"ok": False, "error": error}
     if interrupted:
