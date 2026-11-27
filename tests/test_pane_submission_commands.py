@@ -171,6 +171,31 @@ def test_watcher_confirms_a_wrapped_hermes_paste_card(width):
     assert not submission['ready'](view, notice + '\nA second line')
 
 
+@pytest.mark.parametrize('editor', ['agy', 'claude', 'codex', 'dsh', 'hermes'])
+def test_native_paste_summary_for_each_editor(editor):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    text = 'ORRERY Mail notification: message from Fixture [normal]: ' + '試🧪e\u0301 ⏎ ' * 260
+    if editor in ('claude', 'dsh', 'hermes'):
+        text += '\nSecond fixture line\nThird fixture line'
+    border = '─' * 80
+    layouts = {
+        'agy': ([border], f'> [Pasted text #1 {len(text)} chars]', [border, 'plan · Gemini 4 Neon · high']),
+        'claude': ([border], '❯ [Pasted text #1 +2 lines]', [border]),
+        'codex': ([], f'› \x1b[38;5;6m[Pasted Content {len(text)} chars]\x1b[39m', ['Context 90% left']),
+        'dsh': ([border], f'⌸ ❯ ▸ 3 lines・{len(text.encode("utf-16-le")) // 2} chars・'
+                'ORRERY Mail notification…・hover to peek', [border]),
+        'hermes': (['☤ fixture · -- · 4s', border],
+                   '❯ [Pasted text #1: 3 lines → /tmp/fixture/pastes/paste_1_140243.txt]', [border]),
+    }
+    before, row, after = layouts[editor]
+    column = len(submission['SGR'].sub('', row))
+    metadata = f'/tmp/fixture.sock\t100\t%1\t200\t{len(before)}\t0\t{column}\t1\t{editor}'
+    view = submission['frame'](metadata, [*before, row, *after], '%1')
+    assert view.editor == editor and submission['ready'](view, text)
+    if editor != 'claude':
+        assert not submission['ready'](view, text + '\n🧪')
+
+
 def test_watcher_confirms_a_long_dsh_notice_from_its_visible_end():
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     body = ('Several words wrapped in the dsh editor. ' * 60)[:2000]
@@ -276,8 +301,12 @@ def test_watcher_treats_claude_prompt_suggestion_as_empty(styled, column, empty)
     assert submission['frame'](metadata, lines, '%1').empty is empty
 
 
-@pytest.mark.parametrize('busy', [False, True])
-def test_watcher_retries_its_own_folded_codex_notice_after_a_transient_clear(monkeypatch, tmp_path, busy):
+@pytest.mark.parametrize(('editor', 'busy', 'multiline'), [
+    ('codex', False, False), ('codex', True, False), ('agy', False, False), ('agy', False, True),
+])
+def test_watcher_retries_its_own_folded_notice_after_a_transient_clear(
+    monkeypatch, tmp_path, editor, busy, multiline,
+):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
     lock = tmp_path / 'pane.lock'
@@ -287,7 +316,12 @@ def test_watcher_retries_its_own_folded_codex_notice_after_a_transient_clear(mon
     monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(
         monotonic=lambda: next(now) * .03, sleep=lambda _: None))
     notice = 'ORRERY Mail notification: message from Fixture [normal]: ' + '日本語🧪' * 300
-    draft = f'\x1b[38;5;6m[Pasted Content {len(notice)} chars]\x1b[39m'
+    if multiline:
+        notice += '\nsecond line\nthird line'
+    draft = {
+        'codex': f'\x1b[38;5;6m[Pasted Content {len(notice)} chars]\x1b[39m',
+        'agy': '[Pasted text #1 +3 lines]' if multiline else f'[Pasted text #1 {len(notice)} chars]',
+    }[editor]
     idle = 'gpt-5.4 default · fixture'
     queue = '  \x1b[1mtab\x1b[0m to queue message          100% context left'
     screen = draft
@@ -303,9 +337,15 @@ def test_watcher_retries_its_own_folded_codex_notice_after_a_transient_clear(mon
             current = '' if transient else screen
             transient = False
             footer = queue if current and busy else idle
-            lines = [f'\x1b[1m›\x1b[0m {current}', '', footer]
+            if editor == 'agy':
+                border = '─' * 80
+                lines = [border, f'\x1b[94m>\x1b[39m {current}', border, 'plan · Gemini 4 Neon · high']
+                row = 1
+            else:
+                lines = [f'\x1b[1m›\x1b[0m {current}', '', footer]
+                row = 0
             column = 2 + len(submission['SGR'].sub('', current))
-            meta = f'/tmp/fixture.sock\t100\t%1\t200\t0\t0\t{column}\t1\tcodex-code-mode-host'
+            meta = f'/tmp/fixture.sock\t100\t%1\t200\t{row}\t0\t{column}\t1\t{editor}'
             return subprocess.CompletedProcess(args, 0, '\n'.join([meta, *lines, '']), '')
         effects.append(operation if operation != 'send-keys' else args[-1])
         if operation == 'load-buffer':
@@ -594,10 +634,11 @@ def test_watcher_retries_a_scrolled_notice_from_its_visible_tail(monkeypatch, tm
 @pytest.mark.parametrize('case', [
     'fresh', 'retry', 'different', 'typed-marker', 'cursor-inside', 'more-below', 'no-agy-footer',
 ])
-def test_watcher_submits_a_scrolled_agy_mail_notice(monkeypatch, case):
+def test_watcher_submits_a_scrolled_agy_mail_notice(monkeypatch, tmp_path, case):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
-    monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
+    monkeypatch.setitem(submit.__globals__, 'try_lock',
+                        lambda view: os.open(tmp_path / 'pane.lock', os.O_RDWR | os.O_CREAT, 0o600))
     ticks = itertools.count()
     monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(
         monotonic=lambda: next(ticks) * .01, sleep=lambda _: None))
