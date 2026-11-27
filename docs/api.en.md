@@ -217,7 +217,7 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 
 API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
 
-API 58 can return a `personal_browser_status` entry `{reason, unavailable}` per harness that uses Chrome DevTools MCP for My Chrome on macOS or WSL. `unavailable: true` means Chrome is stopped or its debugging endpoint is unreachable. The launch form then defaults to Temporary Chrome when offered and to Off otherwise.
+API 58 can return a `personal_browser_status` entry `{reason, unavailable}` per harness that uses Chrome DevTools MCP for My Chrome on macOS or WSL. When the entry carries a reason, the launch form defaults to Temporary Chrome if offered, or Off otherwise. The form only disables My Chrome when `unavailable: true` confirms that Chrome is stopped or its debugging endpoint is unreachable. A new check preserves any mode the user has selected.
 
 On macOS, the API 53 catalog lists `off`, `view`, and `control` in `computer_modes`. View uses `tools.screen.access: "read"` and Control uses `tools.screen.access: "operate"`. For Off, omit the screen selection from the explicit `tools` object. Mobile `/view/spawn` sends one of the modes as `computer` and still accepts the boolean from older clients. See `browser_modes.antigravity` for the available Antigravity browser modes.
 

@@ -19,6 +19,7 @@
   const browserLabels = {off:'Off', temporary:'Temporary Chrome', personal:'My Chrome'};
   let computerMode = 'off';
   let browserMode = 'off';
+  let browserChosen = false;
   function modeChoices(menu, control, labels, select) {
     return Object.entries(labels).map(([mode, label]) => {
       const button = document.createElement('button');
@@ -39,7 +40,9 @@
   });
   const browserChoices = modeChoices(browserMenu, browser, browserLabels, mode => {
     browserMode = mode;
+    browserChosen = true;
     syncBrowser(chosenRoute());
+    canReview();
   });
   const mobileControls = window.OrrerySpawnControls;
   const selects = new Map([
@@ -287,14 +290,16 @@
   }
 
   function syncBrowser(next, reset = false) {
+    if (reset) browserChosen = false;
     const modes = browserModes(next);
     if (modes) {
       const status = next.personal_browser_status;
       const unavailable = status?.unavailable === true;
-      if (reset || !modes.includes(browserMode) || browserMode === 'personal' && unavailable) {
-        browserMode = unavailable ? (modes.includes('temporary') ? 'temporary' : 'off')
+      if (!browserChosen) {
+        browserMode = (status?.reason || unavailable) ? (modes.includes('temporary') ? 'temporary' : 'off')
           : modes.includes('personal') ? 'personal' : 'off';
       }
+      if (!modes.includes(browserMode)) browserMode = 'off';
       browserTool.hidden = false;
       browser.dataset.browserMode = browserMode;
       browser.removeAttribute('role');
@@ -364,7 +369,8 @@
       }
     }
     reviewButton.disabled = !task.value.trim() || !next || next.launch_blocked || !catalog?.directories.length
-      || (next.effort_required && !effort.value);
+      || (next.effort_required && !effort.value)
+      || (browserMode === 'personal' && next.personal_browser_status?.unavailable === true);
   }
 
   function updateRoute() {
