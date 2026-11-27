@@ -1515,7 +1515,8 @@ added = Path(args[args.index("--add-dir") + 1])
 assert (added / ".agents/hooks.json").is_file()
 assert (added / ".agents/mcp_config.json").is_file()
 Path(os.environ["FIXTURE_CAPTURE"]).write_text(json.dumps(
-    {"cwd": os.getcwd(), "args": args, "parent": os.getenv("PARENT_AGENT")}))
+    {"cwd": os.getcwd(), "args": args, "parent": os.getenv("PARENT_AGENT"),
+     "node": os.getenv("AGENTSTACK_DSH_NODE")}))
 """)
     _executable(fake_bin / "tmux", f"#!{sys.executable}\n" + """
 import json, os, subprocess, sys
@@ -1528,7 +1529,9 @@ elif args[0] == "new-session":
     workdir = args[args.index("-c") + 1]
     runner = args.index("/bin/bash")
     assert args[runner-2:runner] == ["-e", "AGENTSTACK_GEMINI_INTERACTIVE=1"]
-    result = subprocess.run(args[runner:], cwd=workdir, env={**os.environ, "TMUX_PANE": "%1"})
+    env = {**os.environ, "TMUX_PANE": "%1"}
+    env.pop("AGENTSTACK_DSH_NODE", None)
+    result = subprocess.run(args[runner:], cwd=workdir, env=env)
     assert result.returncode == 0
     status = Path(os.environ["AGENTSTACK_RUNTIME_DIR"]) / "child-agents/FixtureAgy.agy-status.json"
     status.write_text(json.dumps({"tmux": identity, "activity": "wait"}))
@@ -1555,6 +1558,7 @@ else:
              "PARENT_AGENT":"Unrelated", "AGENTSTACK_HOME":str(home), "AGENTSTACK_HOOKS_DIR":str(hooks),
              "AGENTSTACK_LABEL_PREFIX":"org.agentstack.test.gemini-adapter",
              "AGENTSTACK_PYTHON":sys.executable, "AGENTSTACK_RUNTIME_DIR":str(runtime),
+             "AGENTSTACK_DSH_NODE":str(tmp_path / "local node/bin/node"),
              "AGENTSTACK_WORKTREE_ROOT":str(tmp_path / "worktrees"), "AGENTSTACK_PROJECT_KEY":"/fixture",
              "AGENTSTACK_GEMINI_TASK_FILE":str(task), "FIXTURE_CAPTURE":str(capture)},
         capture_output=True, text=True, timeout=30,
@@ -1564,6 +1568,7 @@ else:
     launched_folder = tmp_path / "worktrees/FixtureAgy" if isolation else selected
     assert observed["cwd"] == str(launched_folder)
     assert observed["parent"] is None
+    assert observed["node"] == str(tmp_path / "local node/bin/node")
     assert observed["args"][-2] == "-i"
     assert observed["args"][-1].count("One canonical task.") == 1
     assert "independent Antigravity agent" in observed["args"][-1]
