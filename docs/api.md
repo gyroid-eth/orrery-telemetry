@@ -218,6 +218,8 @@ API 49 は `GET /api/spawn-names` にハーネス別の `browser_modes` を追�
 
 API 53 の macOS カタログは `computer_modes` に `off`、`view`、`control` を返します。View は `tools.screen.access: "read"`、Control は `tools.screen.access: "operate"` を使います。Off は明示した `tools` から画面の指定を外します。スマホの `/view/spawn` は選択を `computer` に渡し、旧クライアントの真偽値も受け付けます。Antigravity で利用できるブラウザのモードは `browser_modes.antigravity` を参照します。
 
+WSL のカタログには `computer_use_transport: "orrery-screen"` が付きます。legacy の起動で HTTP operator capability と Windows の Cua Driver の名前付きパイプ経由の応答を確認できた場合、`computer_use: true` と `computer_modes: ["off","view","control"]` を返します。確認できない場合は `computer_use: false`、`computer_modes: ["off"]` と `computer_use_reason` を返します。WSL で View または Control を指定する `POST /api/spawn` は、上記の `access` と `tools.screen.server: "orrery-screen"` を渡します。
+
 API 49 は dsh・Hermes の子へ Chrome DevTools を渡せる起動フォルダを、`dirs` と同じ表記の `native_browser_dirs` で返します。スマホは選択したフォルダが含まれる場合に Browser を表示します。起動時にも設定を検証します。
 
 API33では `dynamic_models: true` / `model_source: server` の動的Localを追加します。pickerは設定した各endpointの `/v1/models` を明示取得し、静的検証・spawn POSTではmodel探索しません。各modelは生の `id`、任意の `display_name`、0始まり `url_index`、opaqueな `url_key`、`model_state`（`loaded` / `available` / `unloaded`）、`context` と由来 `context_source`（`server` / `override` / `default`）を持ちます。status欠損・未知の有効IDは許可し、明示unloadedだけ無効です。`Available` はロード済みの証明ではありません。URL別失敗は `endpoints[].reason` へ出し、取得失敗時に旧model行を現在値として返しません。URL・資格参照は公開catalogへ含めません。動的effortは未報告、helperはSame as mainです。実command生成・exact resumeでは選択URLだけを1回照合し、ID消失・明示unloaded・取得失敗を拒否します。server modelの継続lockではありません。

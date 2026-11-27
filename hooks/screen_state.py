@@ -292,6 +292,17 @@ def binding_path(store, target):
     return store.directory / ("binding-" + _digest(json.dumps(target, sort_keys=True)) + ".json")
 
 
+def cua_driver_path(install=None):
+    configured = os.environ.get("AGENTSTACK_CUA_DRIVER")
+    if configured:
+        return configured
+    install = install or os.environ.get("AGENTSTACK_HOME") or Path.home() / ".agentstack"
+    managed = Path(install) / "cua-driver/current"
+    if managed.is_symlink() and managed.is_file() and os.access(managed, os.X_OK):
+        return str(managed.resolve())
+    return None
+
+
 def definition(runtime_dir, project, agent, generation, mode, *, scope=None, origin=None, mail_env=None):
     return launch_definition(runtime_dir, project, agent, generation, mode,
                              scope=scope, origin=origin, mail_env=mail_env)[0]
@@ -339,7 +350,10 @@ def launch_definition(runtime_dir, project, agent, generation, mode, *,
     if not binding_file.is_file():
         raise ScreenStateError("SCREEN_BINDING_UNAVAILABLE", 503)
     env = {"AGENTSTACK_SCREEN_BINDING_FILE": str(binding_file)}
-    for key in ("AGENTSTACK_CUA_DRIVER", "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
+    driver = cua_driver_path()
+    if driver:
+        env["AGENTSTACK_CUA_DRIVER"] = driver
+    for key in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
                 "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP",
                 "WSL_INTEROP", "WSL_DISTRO_NAME"):
         if os.environ.get(key):

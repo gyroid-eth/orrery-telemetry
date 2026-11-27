@@ -126,9 +126,11 @@ def driver_parameters(platform):
         raise ScreenError("AGENTSTACK_CUA_DRIVER には実行ファイルの絶対パスが必要です。")
     binary = configured or shutil.which(name)
     if not binary and platform == "darwin":
-        app_binary = Path("/Applications/CuaDriver.app/Contents/MacOS/cua-driver")
-        if app_binary.is_file():
-            binary = str(app_binary)
+        for directory in (Path.home() / "Applications", Path("/Applications")):
+            app_binary = directory / "CuaDriver.app/Contents/MacOS/cua-driver"
+            if app_binary.is_file():
+                binary = str(app_binary)
+                break
     if not binary:
         raise ScreenError("Cua Driver が見つかりません。実行ファイルのパスを確認してください。")
     args = ["mcp"]

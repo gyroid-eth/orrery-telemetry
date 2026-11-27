@@ -2840,6 +2840,15 @@ PYNODE
   done
 }
 
+offer_cua_driver() {
+  [[ "$TIER" != tier0 ]] || return 0
+  local args=(--install "$INSTALL_DIR" --pins "$REPO_ROOT/integrations/cua-driver/runtime-pins.json")
+  [[ "$DRY_RUN" != true ]] || args+=(--dry-run)
+  if ! "$PYTHON_BIN" "$SCRIPT_DIR/lib/cua_driver_install.py" "${args[@]}"; then
+    warn "Cua Driver setup did not complete. To try again, run $BIN_DIR/agentstack-install-cua-driver"
+  fi
+}
+
 install_payload() {
   if [[ "$TIER" != "tier0" ]]; then
     copy_core_tree "$REPO_ROOT/hooks" "$HOOKS_DIR" "hooks"
@@ -2889,6 +2898,12 @@ install_payload() {
     cp "$SCRIPT_DIR/lib/mail_required_features.json" "$BIN_DIR/lib/mail_required_features.json"
     cp "$SCRIPT_DIR/lib/mail_update_notice.py" "$BIN_DIR/lib/mail_update_notice.py"
     cp "$SCRIPT_DIR/lib/install_examples.py" "$BIN_DIR/lib/install_examples.py"
+    if [[ "$TIER" != tier0 ]]; then
+      cp "$REPO_ROOT/integrations/cua-driver/runtime-pins.json" "$BIN_DIR/lib/cua-driver-pins.json"
+      cp "$SCRIPT_DIR/lib/cua_driver_install.py" "$BIN_DIR/lib/cua_driver_install.py"
+      cp "$SCRIPT_DIR/lib/agentstack-install-cua-driver.sh" "$BIN_DIR/agentstack-install-cua-driver"
+      chmod +x "$BIN_DIR/agentstack-install-cua-driver"
+    fi
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
     cp "$REPO_ROOT/bin/lib/runtime_client.py" "$BIN_DIR/lib/runtime_client.py"
@@ -5842,6 +5857,7 @@ PY
   fi
   restart_mobile_relay
   restart_codex_app_bridge
+  offer_cua_driver
   if [[ "$DRY_RUN" == true ]]; then
     say "Dry-run complete: no files were written."
   else

@@ -83,6 +83,11 @@ check_cmd tmux
 check_cmd git
 check_cmd uv
 
+if [[ -x "$INSTALL_DIR/bin/agentstack-install-cua-driver" && -L "$INSTALL_DIR/cua-driver/current" ]]; then
+  "$INSTALL_DIR/bin/agentstack-install-cua-driver" --check || \
+    echo "warning: could not check managed Cua Driver privacy preferences" >&2
+fi
+
 if [[ -f "$MANIFEST" ]]; then
   echo "ok: manifest $MANIFEST"
   "$PYTHON_BIN" -m json.tool "$MANIFEST" >/dev/null || status=1
