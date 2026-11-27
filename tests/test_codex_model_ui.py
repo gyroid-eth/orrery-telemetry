@@ -27,11 +27,16 @@ def run_ui(provider, scenario):
 
 
 @pytest.fixture
-def provider(monkeypatch, tmp_path):
+def installed_codex(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / "stack"))
     monkeypatch.delenv("AGENTSTACK_CODEX_MODELS", raising=False)
-    monkeypatch.setattr(codex_models, "cli_version", lambda: (0, 159, 1))
+    policy = codex_models.LauncherPolicy(binary=str(tmp_path / "bin/codex"), version=(0, 159, 1))
+    monkeypatch.setattr(codex_models, "resolve_launcher", lambda: policy)
+
+
+@pytest.fixture
+def provider(installed_codex):
     return codex_models.provider_catalog()
 
 
@@ -138,7 +143,7 @@ selectSpawnModel('gpt-5.6-sol');out.folded=state();
     assert result["folded"]["payload"]["model"] == "gpt-5.6-sol"
 
 
-def test_invalid_defaults_are_visible_but_explicit_choices_work(monkeypatch, tmp_path):
+def test_invalid_defaults_are_visible_but_explicit_choices_work(monkeypatch, installed_codex):
     monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_MODEL", "bad!")
     monkeypatch.setenv("AGENTSTACK_CODEX_DEFAULT_EFFORT", "bad")
     provider = codex_models.provider_catalog()

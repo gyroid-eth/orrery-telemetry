@@ -12,6 +12,15 @@
 
 ## 2026.11.27
 
+### provider CLI の導入案内
+
+- NEW AGENT の起動カタログに Claude Code・Codex・Antigravity の CLI の準備状況を載せます。起動口で CLI が見つからないときは、対応する導入ガイドを表示します。
+- `agentstack-gemini-setup --check` は、ORRERY Mail の設定が必要なときに確認用と適用用のコマンドを表示します。
+
+### 起こし直したあとも Computer use の Off を名簿に表示
+
+Computer use を Off にして agent を起こし直すと、名簿の `computer_use` が `off` ではなく空になり、cockpit の札がどれも選ばれていない表示になっていました。Off の選択を保存し、名簿と札に `off` を返すようにしました。画面操作の道具を渡さない動きは変わりません。古い版で Off にした agent は、この版で Off を選び直して起こし直した時点から表示が直ります。
+
 ### 試験用fresh Mailへ固定宛先の追加指示を送る任意MCPアダプター
 
 [第2段階のfresh送信アダプター](integrations/chatgpt_mcp/FRESH_MESSAGES.md)を追加しました。既定OFFで、運用者が準備した保護clientと最大16件の宛先に固定し、全文preview・digest・永続claimを通して送信します。保存した受領だけをstatusで読み、不明な結果を再送しません。送信権の事前委任、Tunnel共有範囲、無効時の確認と証拠保全を日本語・英語で説明しています。

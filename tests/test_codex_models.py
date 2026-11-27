@@ -26,7 +26,9 @@ def isolated_catalog(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENTSTACK_RUNTIME_DIR", raising=False)
     monkeypatch.setattr(models.time, "time", lambda: NOW)
     monkeypatch.delenv("AGENTSTACK_CODEX_BIN", raising=False)
-    monkeypatch.setattr(models, "cli_version", lambda: (0, 159, 1))
+    policy = models.LauncherPolicy(binary=str(tmp_path / "bin/codex"), version=(0, 159, 1))
+    monkeypatch.setattr(models, "cli_version", lambda: policy.version)
+    monkeypatch.setattr(models, "_probe_launcher", lambda: policy)
 
 
 def row(model="gpt-6.1-sol", efforts=("low", "medium", "high", "xhigh", "max", "ultra"), **extra):
