@@ -365,7 +365,7 @@ def _ready_mcp_servers(rows):
     }
 
 
-def _deliver_first_task(process, pane, identity, task_file, menu_file, servers, deadline):
+def _deliver_first_task(process, pane, identity, task_file, menu_file, receipt, servers, deadline):
     stage = "opening"
     waiting_on = servers
 
@@ -380,6 +380,11 @@ def _deliver_first_task(process, pane, identity, task_file, menu_file, servers, 
         return reply.returncode == 0 and reply.stdout.strip() == identity
 
     while process.poll() is None and time.monotonic() < deadline:
+        if stage == "confirming":
+            if receipt.is_file():
+                return
+            time.sleep(0.15)
+            continue
         if not same_pane():
             raise ValueError("The Antigravity pane changed before its first task")
         rows = {row.strip() for row in tmux("capture-pane", "-p", "-t", pane).stdout.splitlines()}
@@ -395,20 +400,26 @@ def _deliver_first_task(process, pane, identity, task_file, menu_file, servers, 
             # submit-input already checks the actual editor and refuses while
             # agy is restoring its UI or while an operator has a draft.
             result = tmux("submit-input", pane, str(menu_file))
-            if result.returncode not in (0, 3):
+            if result.returncode not in (0, 3, 4):
                 raise ValueError("Antigravity's MCP manager could not be opened safely")
-            if result.returncode == 0:
+            # A native menu can be visible even when an older input helper
+            # cannot confirm that Enter opened it.
+            if result.returncode in (0, 4):
                 stage = "waiting"
         elif stage == "submitting" and not _mcp_menu(rows):
             result = tmux("submit-input", pane, str(task_file))
-            if result.returncode == 0:
-                return
-            if result.returncode != 3:
+            if result.returncode in (0, 4):
+                if receipt.is_file():
+                    return
+                stage = "confirming"
+            elif result.returncode != 3:
                 raise ValueError("Antigravity did not confirm submission of its first task")
         time.sleep(0.15)
     if stage == "waiting" and waiting_on:
         names = ", ".join(sorted(waiting_on))
         raise ValueError(f"Antigravity MCP tools did not become ready ({names}). Check /mcp and try again.")
+    if stage == "confirming":
+        raise ValueError("Antigravity did not acknowledge its first task in PreInvocation.")
     raise ValueError("Antigravity did not accept its first task. Check CLI sign-in and workspace trust.")
 
 
@@ -416,13 +427,18 @@ def _run_first_task(argv, *, env, runtime, name, identity, servers):
     startup = _startup_path(runtime, name)
     child_resume._atomic_json(startup, {"tmux": identity})
     try:
-        with tempfile.TemporaryDirectory(prefix="agy-first-task-", dir=runtime) as directory:
-            menu, task = (Path(directory) / name for name in ("menu", "task"))
+        with tempfile.TemporaryDirectory(prefix="agy-first-task-", dir=runtime.resolve()) as directory:
+            folder = Path(directory)
+            menu, task, receipt = (folder / filename for filename in ("menu", "task", "acknowledged"))
+            trigger = "Begin the ORRERY task " + uuid.uuid4().hex[:12]
             menu.write_text("/mcp", encoding="utf-8")
-            task.write_text(argv[-1], encoding="utf-8")
+            task.write_text(trigger, encoding="utf-8")
+            child_resume._atomic_bytes(folder / "payload", argv[-1].encode("utf-8"))
+            env = {**env, "AGENTSTACK_AGY_FIRST_TASK_DIR": directory,
+                   "AGENTSTACK_AGY_FIRST_TASK_TRIGGER": trigger}
             process = subprocess.Popen(argv[:-2], env=env)
             try:
-                _deliver_first_task(process, env["TMUX_PANE"], identity, task, menu, set(servers),
+                _deliver_first_task(process, env["TMUX_PANE"], identity, task, menu, receipt, set(servers),
                                     time.monotonic() + STARTUP_TIMEOUT)
             except BaseException:
                 if process.poll() is None:

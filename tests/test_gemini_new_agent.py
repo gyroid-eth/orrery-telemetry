@@ -1564,11 +1564,16 @@ assert (added / ".agents/mcp_config.json").is_file()
 Path(os.environ["FIXTURE_CAPTURE"]).write_text(json.dumps(
     {"cwd": os.getcwd(), "args": args, "parent": os.getenv("PARENT_AGENT"),
      "node": os.getenv("AGENTSTACK_DSH_NODE")}))
-delivered = Path(os.environ["FIXTURE_CAPTURE"]).with_suffix(".task")
+capture = Path(os.environ["FIXTURE_CAPTURE"])
+submitted = capture.with_suffix(".trigger")
 until = time.monotonic() + 8
-while not delivered.is_file() and time.monotonic() < until:
+while not submitted.is_file() and time.monotonic() < until:
     time.sleep(.05)
-assert delivered.is_file()
+assert submitted.read_text() == os.environ["AGENTSTACK_AGY_FIRST_TASK_TRIGGER"]
+staging = Path(os.environ["AGENTSTACK_AGY_FIRST_TASK_DIR"])
+capture.with_suffix(".task").write_text((staging / "payload").read_text())
+(staging / "acknowledged").touch()
+time.sleep(.3)
 """)
     _executable(fake_bin / "tmux", f"#!{sys.executable}\n" + """
 import json, os, subprocess, sys
@@ -1590,7 +1595,7 @@ elif args[0] == "submit-input":
         opened.touch()
     else:
         assert not opened.exists()
-        capture.with_suffix(".task").write_text(content)
+        capture.with_suffix(".trigger").write_text(content)
 elif args[0] == "send-keys":
     assert args[-1] == "Escape"
     opened.unlink()

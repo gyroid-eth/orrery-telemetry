@@ -341,13 +341,14 @@ def test_delegated_first_task_names_the_configured_mcp_tools(managed, monkeypatc
     assert ("`ToolName: new_page`" in prompt) == (browser_mode != "off")
 
 
-@pytest.mark.parametrize("browser_ready", [True, False])
+@pytest.mark.parametrize(("browser_ready", "acknowledged"), [(True, True), (True, False), (False, False)])
 @pytest.mark.parametrize("startup_screen", [
     "? for shortcuts  Gemini 3.8 Flash · low",
     "> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\nauto · Gemini 3.8 Flash · low",
 ])
-def test_first_task_waits_for_same_panes_mcp_tools(monkeypatch, tmp_path, browser_ready, startup_screen):
+def test_first_task_waits_for_same_panes_mcp_tools(monkeypatch, tmp_path, browser_ready, acknowledged, startup_screen):
     menu, task = tmp_path / "menu", tmp_path / "task"
+    receipt = tmp_path / "acknowledged"
     browser_row = "✓ chrome-devtools  Tools: new_page"
     ready_menu = ["MCP Servers", "✓ orrery-mail  Tools: send_message",
                   "Keyboard: ↑/↓ Navigate  enter Actions  esc Exit"]
@@ -373,15 +374,23 @@ def test_first_task_waits_for_same_panes_mcp_tools(monkeypatch, tmp_path, browse
         if operation == "capture-pane":
             return SimpleNamespace(returncode=0, stdout=next(states, "\n".join(ready_menu)))
         actions.append((operation, argv[-1]))
+        if operation == "submit-input" and argv[-1] == str(task):
+            if acknowledged:
+                receipt.touch()
+            return SimpleNamespace(returncode=4 if startup_screen.startswith(">") else 0)
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(agy.time, "monotonic", lambda: now)
     monkeypatch.setattr(agy.time, "sleep", count_sleep)
     monkeypatch.setattr(agy.subprocess, "run", tmux)
     process = SimpleNamespace(poll=lambda: None)
-    positional = (process, pane, IDENTITY, task, menu, {"orrery-mail", "chrome-devtools"}, 1)
+    positional = (process, pane, IDENTITY, task, menu, receipt, {"orrery-mail", "chrome-devtools"}, 1)
     if browser_ready:
-        agy._deliver_first_task(*positional)
+        if acknowledged:
+            agy._deliver_first_task(*positional)
+        else:
+            with pytest.raises(ValueError, match="did not acknowledge its first task"):
+                agy._deliver_first_task(*positional)
         assert actions == [("submit-input", str(menu)), ("send-keys", "Escape"), ("submit-input", str(task))]
     else:
         with pytest.raises(ValueError, match="MCP tools did not become ready"):

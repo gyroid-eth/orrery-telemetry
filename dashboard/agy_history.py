@@ -26,6 +26,7 @@ LAUNCH = re.compile(r"[a-f0-9]{32}\Z")
 TRANSCRIPTS = frozenset({"transcript.jsonl", "transcript_full.jsonl"})
 GROUP = "orrery-reader"
 HOOKS = ("SessionStart", "PreInvocation")
+FIRST_TASK_LIMIT = 2 * 1024 * 1024
 
 
 def _atomic_json(path, data):
@@ -200,6 +201,39 @@ def configure(path, mode):
         _atomic_json(path, config)
 
 
+def first_task(runtime, name, nonce, payload, environment):
+    trigger = environment.get("AGENTSTACK_AGY_FIRST_TASK_TRIGGER")
+    spool = environment.get("AGENTSTACK_AGY_FIRST_TASK_DIR")
+    if (not trigger or not spool or not isinstance(payload, dict)
+            or payload.get("lastUserInput") != trigger or payload.get("invocationNum") != 0):
+        return None
+    launch = _read(_index(runtime, name))
+    workspaces = payload.get("workspacePaths")
+    if (launch.get("launch_id") != nonce or not isinstance(workspaces, list)
+            or launch["workspace"] not in workspaces):
+        raise ValueError("Antigravity first task does not match this launch")
+    folder = Path(spool)
+    info = folder.lstat()
+    if (folder.parent != runtime or not folder.name.startswith("agy-first-task-")
+            or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077):
+        raise ValueError("Antigravity first task directory is not private")
+    # Only one invocation can consume the original path.
+    claimed = folder / "claimed"
+    try:
+        (folder / "payload").replace(claimed)
+    except FileNotFoundError:
+        return None
+    descriptor = os.open(claimed, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as source:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError("Antigravity first task is not a private file")
+        content = source.read(FIRST_TASK_LIMIT + 1)
+    if not content or len(content) > FIRST_TASK_LIMIT:
+        raise ValueError("Antigravity first task has an invalid size")
+    return {"injectSteps": [{"userMessage": content.decode("utf-8")}]}, folder / "acknowledged"
+
+
 def main():
     command = sys.argv[1]
     if command == "configure":
@@ -211,13 +245,32 @@ def main():
         print(prepare(runtime, Path.home(), name, sys.argv[2], os.environ.get("AGENTSTACK_PROJECT_KEY", ""),
                       Path.cwd(), sys.argv[3]))
     elif command == "hook":
+        nonce = os.environ.get("AGENTSTACK_AGY_HISTORY_LAUNCH")
+        if not nonce:
+            print("{}")
+            return
         try:
-            nonce = os.environ.get("AGENTSTACK_AGY_HISTORY_LAUNCH")
-            if nonce:
-                record(runtime, name, nonce, json.loads(sys.stdin.buffer.read(256 * 1024 + 1)))
+            payload = json.loads(sys.stdin.buffer.read(256 * 1024 + 1))
+        except (OSError, ValueError, TypeError):
+            print("{}")
+            return
+        try:
+            record(runtime, name, nonce, payload)
         except (OSError, ValueError, KeyError, TypeError):
             pass  # Reader availability must not interrupt the model invocation.
-        print("{}")
+        try:
+            pending = first_task(runtime, name, nonce, payload, os.environ)
+        except (OSError, ValueError, KeyError, TypeError):
+            print(json.dumps({"terminationBehavior": "terminate", "injectSteps": [
+                {"errorMessage": {"userMessage": "ORRERY could not verify Antigravity's first task."}}
+            ]}))
+            return
+        if pending is None:
+            print("{}")
+            return
+        output, receipt = pending
+        print(json.dumps(output, ensure_ascii=False), flush=True)
+        receipt.touch(mode=0o600, exist_ok=False)
 
 
 if __name__ == "__main__":
