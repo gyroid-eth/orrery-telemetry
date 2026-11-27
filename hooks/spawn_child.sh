@@ -2959,11 +2959,11 @@ claude_child_system_prompt() {
     fi
     if [[ -n "$parent_name" ]]; then
         if [[ "$embedded_task" == true ]]; then
-            initial_task="The first user message contains the task from ${parent_name}. Start it directly."
+            initial_task="The first user message contains the task from ${parent_name}."
         else
-            initial_task="The first user message tells you how to fetch the task from ${parent_name}. Fetch the task with include_bodies set to true, then carry it out."
+            initial_task="The first user message tells you how to fetch the task from ${parent_name}. Fetch the task with include_bodies set to true."
         fi
-        printf 'This Claude Code session is the ORRERY child agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine because its parent agent %s delegated a task to it; ORRERY delegation is set up on this machine by the person who runs it. %s %s Report to %s with mcp__orrery-mail__send_message, not with any other messaging tool.' \
+        printf 'This Claude Code session is the ORRERY child agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine because its parent agent %s delegated a task to it; ORRERY delegation is set up on this machine by the person who runs it. %s Carry out the task using your usual judgment. %s Report to %s with mcp__orrery-mail__send_message, not with any other messaging tool.' \
             "$child_name" "$parent_name" "$initial_task" "$mail" "$parent_name"
     else
         printf 'This Claude Code session is the standalone ORRERY agent %s. The ORRERY launcher (spawn_child.sh) started it on this machine; ORRERY is set up on this machine by the person who runs it. The first user message is its task. Carry it out, using your usual judgment. %s' \
