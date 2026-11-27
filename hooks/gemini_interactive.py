@@ -32,6 +32,7 @@ if "child_tools" not in globals():
 
 PROGRAM = "antigravity"
 TMUX_FORMAT = "#{session_name}|#{session_id}|#{session_created}|#{pid}"
+MCP_PREPARING = "@orrery-agy-mcp-preparing"
 STARTUP_TIMEOUT = 22
 TOOL_REFUSAL_RULE = Path(".agents/rules/orrery-tool-refusals.md")
 RULE_HEADER = b"---\ntrigger: always_on\n---\n\n<!-- ORRERY: tool refusal rule -->\n\n"
@@ -436,6 +437,7 @@ def _ready_mcp_servers(rows):
 
 
 def _deliver_first_task(process, pane, identity, task_file, menu_file, receipt, servers, deadline):
+    resume = task_file is None
     stage = "opening"
     waiting_on = servers
 
@@ -469,7 +471,8 @@ def _deliver_first_task(process, pane, identity, task_file, menu_file, receipt, 
         elif stage == "opening":
             # submit-input already checks the actual editor and refuses while
             # agy is restoring its UI or while an operator has a draft.
-            result = tmux("submit-input", pane, str(menu_file))
+            result = tmux("submit-input", pane, str(menu_file),
+                          *(("--prepare-agy-mcp",) if resume else ()))
             if result.returncode not in (0, 3, 4):
                 raise ValueError("Antigravity's MCP manager could not be opened safely")
             # A native menu can be visible even when an older input helper
@@ -477,6 +480,8 @@ def _deliver_first_task(process, pane, identity, task_file, menu_file, receipt, 
             if result.returncode in (0, 4):
                 stage = "waiting"
         elif stage == "submitting" and not _mcp_menu(rows):
+            if resume:
+                return
             result = tmux("submit-input", pane, str(task_file))
             if result.returncode in (0, 4):
                 if receipt.is_file():
@@ -490,6 +495,8 @@ def _deliver_first_task(process, pane, identity, task_file, menu_file, receipt, 
         raise ValueError(f"Antigravity MCP tools did not become ready ({names}). Check /mcp and try again.")
     if stage == "confirming":
         raise ValueError("Antigravity did not acknowledge its first task in PreInvocation.")
+    if resume:
+        raise ValueError("Antigravity did not open its MCP manager after resuming.")
     raise ValueError("Antigravity did not accept its first task. Check CLI sign-in and workspace trust.")
 
 
@@ -525,6 +532,37 @@ def _run_first_task(argv, *, env, runtime, name, identity, servers):
         child_resume._atomic_json(startup, {"tmux": identity, "error": message})
         raise ValueError(message) from error
     return process.wait()
+
+
+def _run_managed_resume(argv, *, env, runtime, name, identity, servers, previous_history):
+    startup = _startup_path(runtime, name)
+    pane = env["TMUX_PANE"]
+    state = {"tmux": identity, "conversation": argv[-1],
+             "generation": child_resume.tools_change_generation()}
+    child_resume._atomic_json(startup, state)
+    subprocess.run(["tmux", "set-option", "-p", "-t", pane, MCP_PREPARING, "1"],
+                   check=True, timeout=5)
+    process = subprocess.Popen(argv, env=env)
+    try:
+        with tempfile.TemporaryDirectory(prefix="agy-resume-", dir=runtime.resolve()) as directory:
+            menu = Path(directory) / "menu"
+            menu.write_text("/mcp", encoding="utf-8")
+            _deliver_first_task(process, pane, identity, None, menu, None, set(servers),
+                                time.monotonic() + STARTUP_TIMEOUT)
+        _history()["confirm_resume"](runtime, name, env["AGENTSTACK_AGY_HISTORY_LAUNCH"],
+                                     argv[-1], previous_history)
+        subprocess.run(["tmux", "set-option", "-pu", "-t", pane, MCP_PREPARING],
+                       check=True, timeout=5)
+        child_resume._atomic_json(startup, {**state, "ready": True})
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        message = str(error) if isinstance(error, ValueError) else "Antigravity's MCP resume check could not run"
+        child_resume._atomic_json(startup, {**state, "error": message})
+        print(message, file=sys.stderr)
+    finally:
+        # Keep the original conversation open for manual inspection on failure.
+        result = process.wait()
+        startup.unlink(missing_ok=True)
+    return result
 
 
 def run(runtime, name, task_file=None, conversation=None):
@@ -575,7 +613,7 @@ def run(runtime, name, task_file=None, conversation=None):
     os.chdir(cwd)
     status_path = _status_path(runtime, name)
     status_path.unlink(missing_ok=True)
-    config_dir = workspace_mcp = written_mcp = None
+    config_dir = workspace_mcp = written_mcp = mcp = None
     try:
         standalone = plan.get("standalone") is True
         if not standalone:
@@ -617,6 +655,12 @@ def run(runtime, name, task_file=None, conversation=None):
         if screen_mode is not None or conversation or written_mcp:
             child_resume.prepare_active_state(runtime, name, project_key=project, program=PROGRAM,
                                               gemini_launch=plan)
+        previous_history = None
+        if conversation and mcp is not None:
+            registration = dict(agent_id=state["agent_id"], project_key=project, program=PROGRAM)
+            previous_history = _history()["binding"](runtime, name, registration)
+            if previous_history.get("history_session_id") != conversation:
+                raise ValueError("Antigravity's saved conversation changed before resume")
         env["AGENTSTACK_AGY_HISTORY_LAUNCH"] = subprocess.check_output(
             [sys.executable, str(history_helper()), "prepare", str(state["agent_id"]), identity],
             env=env, text=True, timeout=5).strip()
@@ -625,6 +669,9 @@ def run(runtime, name, task_file=None, conversation=None):
         if prompt is not None:
             return _run_first_task(argv, env=env, runtime=runtime, name=name, identity=identity,
                                    servers=mcp["mcpServers"])
+        if previous_history is not None:
+            return _run_managed_resume(argv, env=env, runtime=runtime, name=name, identity=identity,
+                                       servers=mcp["mcpServers"], previous_history=previous_history)
         return subprocess.run(argv, env=env).returncode
     finally:
         try:
@@ -783,7 +830,8 @@ def main():
             if args.action == "ready" and startup.get("error"):
                 print(startup["error"])
                 return 2
-            return 1
+            if not startup.get("ready"):
+                return 1
         activity = read_status(runtime, args.name, args.identity).get("activity")
         return 0 if activity == "wait" or (args.action == "ready" and activity) else 1
     name = os.environ["AGENT_NAME"]

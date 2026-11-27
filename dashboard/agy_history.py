@@ -56,6 +56,37 @@ def _receipt(index, launch):
     return index.with_name(f"{index.stem}-{nonce}.json")
 
 
+def _resume_proof(path):
+    return path.with_suffix(".resume.json")
+
+
+def confirm_resume(runtime, name, nonce, sid, previous):
+    """Carry the verified transcript into the new launch after native MCP is ready."""
+    index = _index(runtime, name)
+    launch = _read(index)
+    if (launch.get("launch_id") != nonce or previous.get("history_binding") != "bound"
+            or previous.get("history_session_id") != sid
+            or previous.get("history_workspace") != launch.get("workspace")):
+        raise ValueError("Antigravity's resume no longer matches its saved conversation")
+    transcript = _transcript(launch["home"], sid, previous["transcript_path"])
+    if not _read(transcript, metadata=False).st_size:
+        raise ValueError("Antigravity's saved transcript is empty")
+    path = _receipt(index, launch)
+    with _receipt_lock(path):
+        if _read(index) != launch:
+            raise ValueError("Antigravity's launch changed before MCP became ready")
+        try:
+            receipt = _read(path)
+        except FileNotFoundError:
+            receipt = None
+        if receipt is not None and receipt.get("conversation_id") != sid:
+            raise ValueError("Antigravity restored a different conversation")
+        _atomic_json(_resume_proof(path), dict(
+            launch, conversation_id=sid, transcript_path=str(transcript),
+            received_at=datetime.now(timezone.utc).isoformat(),
+        ))
+
+
 @contextmanager
 def _receipt_lock(path):
     import fcntl  # The receipt writer is POSIX-only; keep Windows imports of the dashboard safe.
@@ -122,6 +153,13 @@ def record(runtime, name, nonce, payload):
                 # UUID in this launch must never replace the bound history.
                 _atomic_json(path, dict(conflicted=True))
             return
+        try:
+            resume = _read(_resume_proof(path))
+        except FileNotFoundError:
+            resume = None
+        if resume is not None and resume.get("conversation_id") != sid:
+            _atomic_json(path, dict(conflicted=True))
+            return
         evidence = dict(launch, conversation_id=sid, transcript_path=str(transcript),
                         received_at=datetime.now(timezone.utc).isoformat())
         _atomic_json(path, evidence)
@@ -141,7 +179,15 @@ def binding(runtime, name, registration, session=None):
                                        for k in ("session_id", "created", "tmux_pid")):
             return dict(unbound("receipt_predates_session"), history_binding="stale")
         path = _receipt(index, launch)
-        receipt = _read(path)
+        try:
+            receipt = _read(path)
+        except FileNotFoundError:
+            proof = _resume_proof(path)
+            receipt = _read(proof)
+            if path.exists():
+                receipt = _read(path)
+            else:
+                path = proof
         if receipt.get("conflicted") is True:
             return unbound("session_conflict")
         if any(receipt.get(key) != value for key, value in launch.items()):

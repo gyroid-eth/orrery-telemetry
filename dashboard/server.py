@@ -5822,7 +5822,7 @@ def _gemini_resume_material(session, *, live=None):
     return registration, state, helper, cwd, sid
 
 
-def _await_gemini_permission_resume(session, registration, sid, identity, *, timeout=30):
+def _await_gemini_permission_resume(session, registration, sid, identity, generation, *, timeout=30):
     if not re.fullmatch(r"\$\d+\|[1-9]\d*\|[1-9]\d*", identity):
         return False
     target, created, pid = identity.split("|")
@@ -5833,11 +5833,14 @@ def _await_gemini_permission_resume(session, registration, sid, identity, *, tim
                           "#{session_name}|#{session_id}|#{session_created}|#{pid}"]).strip()
         if observed != f"{session}|{identity}":
             return False
-        history = agy_history.binding(RUNTIME_DIR, session, registration, launch)
-        status = _card_private_mapping(Path(RUNTIME_DIR) / "child-agents" / f"{session}.agy-status.json")
-        if (history.get("history_binding") == "bound" and history.get("history_session_id") == sid
-                and status.get("tmux") == observed and status.get("activity") == "wait"):
-            return True
+        ready = _card_private_mapping(Path(RUNTIME_DIR) / "child-agents" / f"{session}.agy-status.startup")
+        if (ready.get("tmux") == observed and ready.get("conversation") == sid
+                and ready.get("generation") == generation):
+            if ready.get("error"):
+                return False
+            if ready.get("ready") is True:
+                history = agy_history.binding(RUNTIME_DIR, session, registration, launch)
+                return history.get("history_binding") == "bound" and history.get("history_session_id") == sid
         time.sleep(0.25)
     return False
 
@@ -5880,7 +5883,8 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expect
             "AGENTSTACK_RESERVED_IDENTITY": "1", "AGENTSTACK_GEMINI_INTERACTIVE": "1",
             "AGENTSTACK_CHILD_SANDBOX": _child_sandbox_mode(),
         }
-        if generation := module.tools_change_generation():
+        generation = module.tools_change_generation()
+        if generation:
             environment["AGENTSTACK_TOOLS_CHANGE_GENERATION"] = generation
         if os.environ.get("AGENTSTACK_SCREEN_PYTHON"):
             environment["AGENTSTACK_SCREEN_PYTHON"] = os.environ["AGENTSTACK_SCREEN_PYTHON"]
@@ -5908,7 +5912,7 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expect
         if not launched.get("ok"):
             raise _ResumeCapabilityError("config_unrestorable", "Antigravity tmux resume could not be started")
         if verify_permission and not _await_gemini_permission_resume(
-                session, registration, sid, launched.get("tmux_identity", "")):
+                session, registration, sid, launched.get("tmux_identity", ""), generation):
             if _child_session_live(session, module.boot_time()) is not False:
                 return {"ok": False, "error": "Could not confirm the Antigravity conversation resumed; check its terminal",
                         "resume_confirmation_pending": True}

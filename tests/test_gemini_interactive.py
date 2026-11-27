@@ -493,6 +493,37 @@ def test_startup_marker_applies_only_to_current_launch(managed):
     assert agy._startup_state(runtime, NAME, IDENTITY + "-old") == {}
 
 
+@pytest.mark.parametrize("server_name", ["orrery-screen", "chrome-devtools"])
+def test_resumed_cli_waits_for_its_managed_servers_without_submitting_a_task(
+        tmp_path, monkeypatch, server_name):
+    menu = tmp_path / "menu"
+    menu.write_text("/mcp")
+    footer = "Keyboard: ↑/↓ Navigate  enter Actions  esc Exit"
+    rows = iter(["restored editor", f"MCP Servers\n◌ {server_name}\n{footer}",
+                 f"MCP Servers\n✓ orrery-mail Tools: send_message\n✓ {server_name} Tools: test\n{footer}",
+                 "restored editor"])
+    actions = []
+
+    def tmux(argv, **kwargs):
+        match argv[1] if argv[0] == "tmux" else argv[2]:
+            case "display-message":
+                return SimpleNamespace(returncode=0, stdout=IDENTITY)
+            case "capture-pane":
+                return SimpleNamespace(returncode=0, stdout=next(rows))
+            case _:
+                actions.append(argv[2:])
+                return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", tmux)
+    monkeypatch.setattr(agy.time, "sleep", lambda _: None)
+    agy._deliver_first_task(SimpleNamespace(poll=lambda: None), "%4", IDENTITY, None, menu, None,
+                            {"orrery-mail", server_name}, agy.time.monotonic() + 1)
+    assert actions == [
+        ["submit-input", "%4", str(menu), "--prepare-agy-mcp"],
+        ["send-keys", "-t", "%4", "Escape"],
+    ]
+
+
 def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_folder(tmp_path, monkeypatch):
     cwd = tmp_path / "vault"
     own_hooks = cwd / ".agents" / "hooks.json"
@@ -552,6 +583,9 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
     monkeypatch.setattr(agy.subprocess, "check_output", check_output)
     monkeypatch.setattr(agy.subprocess, "run", launch)
     monkeypatch.setattr(agy, "_run_first_task", lambda argv, *, env, **kwargs: launch(argv, env=env).returncode)
+    history = {**agy._history(), "binding": lambda *_: {"history_session_id": SID}}
+    monkeypatch.setattr(agy, "_history", lambda: history)
+    monkeypatch.setattr(agy, "_run_managed_resume", lambda argv, *, env, **kw: launch(argv, env=env).returncode)
     task = tmp_path / "handoff"
     child_resume._atomic_json(task, {"message": {"content": "One initial task."}})
     assert agy.run(runtime, NAME, task_file=task) == 0
@@ -614,6 +648,9 @@ def test_standalone_resume_rotates_the_screen_binding_and_keeps_a_lower_operator
 
     monkeypatch.setattr(agy.subprocess, "run", launch)
     monkeypatch.setattr(agy, "_run_first_task", lambda argv, **kwargs: launch(argv).returncode)
+    history = {**agy._history(), "binding": lambda *_: {"history_session_id": SID}}
+    monkeypatch.setattr(agy, "_history", lambda: history)
+    monkeypatch.setattr(agy, "_run_managed_resume", lambda argv, **kw: launch(argv).returncode)
     task = tmp_path / "handoff"
     child_resume._atomic_json(task, {"message": {"content": "Fixture task"}})
     assert agy.run(runtime, NAME, task_file=task) == 0
@@ -897,6 +934,8 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
         return {"history_binding": "bound", "history_session_id": SID}
 
     monkeypatch.setattr(server.agy_history, "binding", bound)
+    history = {**agy._history(), "binding": lambda *_: {"history_session_id": SID}}
+    monkeypatch.setattr(agy, "_history", lambda: history)
     permission = {"history_session_id": SID, **change}
     assert server.do_jump(NAME, permission=permission, check_only=True) == {"ok": True, "action": "validated"}
     assert not child_resume.tools_record_path(runtime, NAME).exists()
@@ -952,10 +991,18 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
         if host == "wsl":
             assert "WSL_INTEROP=/run/WSL/fixture" in argv
         assert agy.run(runtime, NAME, conversation=SID) == 0
-        child_resume._atomic_json(runtime / "child-agents" / f"{NAME}.agy-status.json",
-                                  {"tmux": IDENTITY, "activity": "wait"})
         return {"ok": True, "adapter": "detached", "tmux_identity": IDENTITY.split("|", 1)[1]}
 
+    def prepared(argv, *, env, identity, servers, **kwargs):
+        assert set(servers) == {"orrery-mail", "orrery-screen" if "computer_use" in change else "chrome-devtools"}
+        result = run(argv, env=env)
+        child_resume._atomic_json(agy._startup_path(runtime, NAME), {
+            "tmux": identity, "conversation": SID, "ready": True,
+            "generation": child_resume.tools_change_generation(),
+        })
+        return result.returncode
+
+    monkeypatch.setattr(agy, "_run_managed_resume", prepared)
     fixture_subprocess = SimpleNamespace(run=run, check_output=agy.subprocess.check_output)
     monkeypatch.setattr(agy, "subprocess", fixture_subprocess)
     monkeypatch.setattr(server, "_launch_claude_resume_tmux", launch)
