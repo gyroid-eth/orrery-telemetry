@@ -6,12 +6,6 @@ import os
 import socket
 import subprocess
 
-try:
-    from dashboard import wsl_anchor
-except ModuleNotFoundError:
-    import wsl_anchor
-
-
 LOG = logging.getLogger(__name__)
 
 
@@ -52,6 +46,12 @@ def _windows_failure(reason, env=None):
 
 
 def _windows_state():
+    # Only the WSL probe needs the POSIX anchor and its file locks.
+    if __package__:
+        from . import wsl_anchor
+    else:
+        import wsl_anchor
+
     powershell = wsl_anchor._powershell()
     if not powershell:
         return _windows_failure("powershell_not_found")

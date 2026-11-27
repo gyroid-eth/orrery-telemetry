@@ -308,8 +308,10 @@ def test_spawn_catalog_reports_my_chrome_health_for_managed_browser_harnesses(mo
 ])
 def test_windows_chrome_probe_logs_one_failure_and_reports_unverified(
         monkeypatch, tmp_path, caplog, failure, reason, socket_state):
+    from dashboard import wsl_anchor
+
     probe = server.chrome_readiness
-    monkeypatch.setattr(probe.wsl_anchor, '_powershell',
+    monkeypatch.setattr(wsl_anchor, '_powershell',
                         lambda: None if failure == 'missing_executable' else 'powershell.exe')
     socket_path = tmp_path / 'private-socket'
     if socket_state == 'present':
@@ -329,7 +331,7 @@ def test_windows_chrome_probe_logs_one_failure_and_reports_unverified(
         assert failure == 'start'
         raise OSError('private start error')
 
-    monkeypatch.setattr(probe.wsl_anchor, 'interop_env', interop_env)
+    monkeypatch.setattr(wsl_anchor, 'interop_env', interop_env)
     monkeypatch.setattr(probe.subprocess, 'run', run)
     message, unavailable = probe.personal_browser_reason(wsl=True)
     assert message.startswith('ORRERY cannot check Windows Chrome from WSL.')
