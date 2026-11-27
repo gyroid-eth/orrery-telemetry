@@ -10,11 +10,15 @@ import re
 try:
     from .provider_stalls import locked_events, save_events
     from .question_screen import parse_question
-    from .terminal_state import AGY_MCP_APPROVAL_CONTROLS, current_modal_activity, normalize
+    from .terminal_state import (
+        AGY_MCP_APPROVAL_CONTROLS, AGY_URL_APPROVAL_TITLE, agy_url_approval, current_modal_activity, normalize,
+    )
 except ImportError:  # executable dashboard/server.py
     from provider_stalls import locked_events, save_events
     from question_screen import parse_question
-    from terminal_state import AGY_MCP_APPROVAL_CONTROLS, current_modal_activity, normalize
+    from terminal_state import (
+        AGY_MCP_APPROVAL_CONTROLS, AGY_URL_APPROVAL_TITLE, agy_url_approval, current_modal_activity, normalize,
+    )
 
 
 WAIT_SECONDS = 20
@@ -220,6 +224,8 @@ def observe(text, program, activity):
                     and any(row.startswith("Computer use needs macOS permissions") for row in rows[-32:])):
                 return Screen("approval", ("Computer use needs macOS permissions",))
         if program == "agy" and len(rows) >= 3:
+            if agy_url_approval(rows):
+                return Screen("approval", (AGY_URL_APPROVAL_TITLE, AGY_MCP_APPROVAL_CONTROLS))
             if rows[-2] == AGY_MCP_APPROVAL_CONTROLS:
                 return Screen("approval", ("Allow calling this tool?", AGY_MCP_APPROVAL_CONTROLS))
             if rows[-2].startswith("↑/↓ Navigate · tab Amend"):

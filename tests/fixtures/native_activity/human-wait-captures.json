@@ -107,6 +107,13 @@
       "active": "    Model\n    Tab / Shift+Tab providers · ↑/↓ model · Enter select · Esc cancel                                       a…\n                                                                                                            t…\n     Recently used   DeepSeek\n\n    ❯ deepseek-official / deepseek-v4.1-flash ✓\n\n    Reasoning effort  ←/→ adjust\n     Off   Low   High   Max\n    The default balance for most tasks.\n\n  ╭────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n  ⌸ ❯                                                                                                      ⛶\n  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n                                                                                               24/131k 0.0%\n   deepseek-v4.1-flash · high · cache 0.0% · ≈ unpriced 11 tok · work                    ctx 0.0% (24/131k)\n"
     },
     {
+      "id": "agy-url-approval",
+      "program": "agy",
+      "version": "1.5.18",
+      "kind": "approval",
+      "active": "Browser action\n───────────────────────────────────────────────────────────────────────────────────────────────────────\n\nexample.com\n\nAllow access to this URL?\n> 1. Yes, allow access\n  2. Yes, and always allow access to 'example.com' in this conversation\n  3. Yes, and always allow access to 'example.com' (Persist to settings.json)\n  4. No, deny access\n  5. No, and always deny access to 'example.com' in this conversation\n  6. No, and always deny access to 'example.com' (Persist to settings.json)\n\n  ↑/↓ Navigate · tab Amend\nauto · Gemini 3.8 Flash (Low) · low\n"
+    },
+    {
       "id": "agy-mcp-approval",
       "program": "agy",
       "version": "1.5.16",
