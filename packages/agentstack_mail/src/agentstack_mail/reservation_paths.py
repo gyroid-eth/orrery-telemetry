@@ -18,6 +18,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
+from .wsl_drvfs import drvfs_metadata
+
 VIRTUAL_PREFIXES = ("tool://", "resource://", "service://")
 GLOB_MARKERS = "*?["
 
@@ -30,6 +32,9 @@ APFS_JAPANESE_CASE_RANGES = (
     (0x31F0, 0x31FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF),
     (0xFF00, 0xFFEF),
 )
+# DrvFs preserves the UTF-16 name. Kana and CJK ranges have no uppercase
+# partners, except fullwidth Latin in the halfwidth/fullwidth forms block.
+DRVFS_JAPANESE_CASE_RANGES = (*APFS_JAPANESE_CASE_RANGES, (0xF900, 0xFAFF))
 _CASE_TRANSLATION = str.maketrans({
     **{code: code + 0x20 for code in range(0x41, 0x5B)},
     **{code: code + 0x20 for code in range(0xFF21, 0xFF3B)},
@@ -127,7 +132,7 @@ def normalize_path(
         value = str(resolved)
     unicode_rule = unicode_rule_at(prefix)
     _unicode_key(value, unicode_rule)  # Unknown Unicode rules cannot grant a lease.
-    case_insensitive = case_insensitive_at(prefix)
+    case_insensitive = unicode_rule == "drvfs" or case_insensitive_at(prefix)
     _case_key(value, case_insensitive, unicode_rule)
     return ReservationPath(
         "filesystem", value, str(prefix), case_insensitive, unicode_rule
@@ -158,6 +163,8 @@ def unicode_rule_at(directory: Path) -> str | None:
 
     directory = _existing_directory(directory)
     try:
+        if sys.platform == "linux" and drvfs_metadata(directory, directory.stat().st_dev) is not None:
+            return "drvfs"
         libc = ctypes.CDLL(None, use_errno=True)
         if sys.platform == "darwin":
             # Darwin statfs64 ABI: bsize/iosize, five uint64 counters, fsid,
@@ -237,7 +244,7 @@ def unicode_rule_at(directory: Path) -> str | None:
 
 
 def _unicode_key(value: str, rule: str | None) -> str:
-    if value.isascii() or rule == "exact":
+    if value.isascii() or rule in {"exact", "drvfs"}:
         return value
     if rule == "apfs":
         # Normalization stability makes the common pre-3.2 repertoire safe on
@@ -304,18 +311,27 @@ def normalize_paths(values: Sequence[str], **kwargs: object) -> list[Reservation
 def _case_key(value: str, fold: bool, unicode_rule: str | None = None) -> str:
     if not fold:
         return value
-    # An ASCII alias alone proves no non-ASCII rules. Only the existing native
-    # APFS detection may select this small pinned profile; other FSs still fail.
+    # An ASCII alias alone proves no non-ASCII rules. Only native filesystem
+    # detection can select an applicable case profile.
     if not value.isascii():
-        if unicode_rule != "apfs":
+        if unicode_rule == "apfs":
+            ranges = APFS_JAPANESE_CASE_RANGES
+        elif unicode_rule == "drvfs":
+            ranges = DRVFS_JAPANESE_CASE_RANGES
+        else:
             raise ReservationError("CASE_RULES_UNKNOWN")
         for character in value:
             code = ord(character)
             if code < 128:
                 continue
-            if (unicodedata.ucd_3_2_0.category(character) == "Cn" or not any(
-                start <= code <= end for start, end in APFS_JAPANESE_CASE_RANGES
-            )):
+            # NTFS upcases individual WCHARs. A supplementary character's
+            # surrogate pair has no uppercase mapping in that table.
+            if unicode_rule == "drvfs" and code >= 0x10000:
+                continue
+            if (
+                (unicode_rule == "apfs" and unicodedata.ucd_3_2_0.category(character) == "Cn")
+                or not any(start <= code <= end for start, end in ranges)
+            ):
                 raise ReservationError("CASE_RULES_UNKNOWN")
     return value.translate(_CASE_TRANSLATION)
 
@@ -361,6 +377,11 @@ def _lexical_overlap(left: ReservationPath, right: ReservationPath) -> bool:
         try:
             if Path(left.value).samefile(right.value):
                 return True
+            if left.unicode_rule == right.unicode_rule == "drvfs":
+                # Distinct existing entries are authoritative on a directory
+                # that opts into case sensitivity. For unresolved names the
+                # lexical check still conservatively covers case aliases.
+                return left.value == right.value
         except FileNotFoundError:
             pass
         except OSError as exc:
@@ -437,8 +458,8 @@ def reservation_scopes(
         visited.add(key)
         result.append(normalize_path(str(canonical.joinpath(*parts[index:]))))
         segment = parts[index]
-        fold = case_insensitive_at(directory)
         unicode_rule = unicode_rule_at(directory)
+        fold = unicode_rule == "drvfs" or case_insensitive_at(directory)
         _unicode_key(segment, unicode_rule)
         last = index == len(parts) - 1
         if last and not any(c in segment for c in GLOB_MARKERS):

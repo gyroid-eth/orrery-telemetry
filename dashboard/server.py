@@ -9217,9 +9217,20 @@ def _suggest_any_spawn_name(attempts: int = 75) -> str | None:
     return None
 
 
+@functools.lru_cache(maxsize=1)
+def _cached_windows_profile(_time_window: int) -> str | None:
+    return _wsl_anchor_module().windows_user_profile()
+
+
+def _spawn_windows_profile() -> str | None:
+    # Directory browsing and typing can hit the catalog several times in a row.
+    # Retry after a brief window if Windows interop was temporarily unavailable.
+    return _cached_windows_profile(int(time.monotonic() // 30)) if _is_wsl() else None
+
+
 def _spawn_roots() -> list[str]:
     raw_roots = os.environ.get("AGENTSTACK_SPAWN_ROOTS", "").split(":")
-    roots = raw_roots if any(raw_roots) else [os.path.expanduser("~")]
+    roots = raw_roots if any(raw_roots) else ["~", _spawn_windows_profile() or ""]
     return [os.path.realpath(os.path.expanduser(root)) for root in roots if os.path.isdir(os.path.expanduser(root))]
 
 
@@ -9276,6 +9287,15 @@ def spawn_directory_suggestions(raw_path: str) -> dict:
 def _spawn_directory_presets() -> list[str]:
     raw_dirs = os.environ.get("AGENTSTACK_SPAWN_DIRS", "").split(":")
     return [value for value in raw_dirs if value]
+
+
+def _spawn_default_directories() -> list[str]:
+    # Keep ~ symbolic for the catalog. The legacy fallback starts in the project.
+    dirs = ["~"] if FRESH_MODE else [d for d in (PROJECT_KEY, "~") if d]
+    profile = _spawn_windows_profile()
+    if profile and profile not in dirs and _resolve_spawn_directory(profile):
+        dirs.append(profile)
+    return dirs
 
 
 _SPAWN_SEARCH_DEPTH = 4
@@ -9546,9 +9566,7 @@ def spawn_names_payload() -> dict:
     adjectives = [line.strip() for line in adjective_text.splitlines() if line.strip()]
     scientists = [line.strip() for line in scientist_text.splitlines() if line.strip()]
     statuses = _spawn_scientist_statuses(adjectives, scientists)
-    # Keep ~ symbolic for the catalog. The launcher expands it when needed.
-    # The legacy fallback starts in the project, with home as a second chip.
-    dirs = _spawn_directory_presets() or (["~"] if FRESH_MODE else [d for d in (PROJECT_KEY, "~") if d])
+    dirs = _spawn_directory_presets() or _spawn_default_directories()
     claude_catalog = _claude_catalog()
     # Check the last child-shell path or the native installer's usual location.
     claude_available = bool(shutil.which(claude_models_mod.child_cli_path()) or
