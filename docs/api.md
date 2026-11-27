@@ -216,7 +216,7 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 
 API 49 は `GET /api/spawn-names` にハーネス別の `browser_modes` を追加します。起動時に `tools.browser_mode` へ `off`、`temporary`、`personal` のいずれかを指定します。従来の Browser 指定との併用はできません。
 
-API 58 は、Mac と WSL で Chrome DevTools MCP の My Chrome を使うハーネスに応じて、`personal_browser_status` に `{reason, unavailable}` を返します。`unavailable: true` は接続先の Chrome が停止中か、リモートデバッグに接続できないことを示します。この場合、起動画面は一時ブラウザーを選び、一時ブラウザーもなければ Off を選びます。
+API 58 は、Mac と WSL で Chrome DevTools MCP の My Chrome を使うハーネスに応じて、`personal_browser_status` に `{reason, unavailable}` を返します。理由がある間、起動画面の自動選択は一時ブラウザー、利用できなければ Off になります。`unavailable: true` は接続先の Chrome が停止中か、リモートデバッグに接続できないことを示し、その場合だけ My Chrome を無効にします。確認の結果が更新されても、利用者が選んだ方式は保持します。
 
 API 53 の macOS カタログは `computer_modes` に `off`、`view`、`control` を返します。View は `tools.screen.access: "read"`、Control は `tools.screen.access: "operate"` を使います。Off は明示した `tools` から画面の指定を外します。スマホの `/view/spawn` は選択を `computer` に渡し、旧クライアントの真偽値も受け付けます。Antigravity で利用できるブラウザのモードは `browser_modes.antigravity` を参照します。
 

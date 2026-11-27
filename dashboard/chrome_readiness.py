@@ -1,6 +1,8 @@
 """Read-only readiness check for Chrome DevTools MCP's default profile."""
 
 from pathlib import Path
+import logging
+import os
 import socket
 import subprocess
 
@@ -8,6 +10,9 @@ try:
     from dashboard import wsl_anchor
 except ModuleNotFoundError:
     import wsl_anchor
+
+
+LOG = logging.getLogger(__name__)
 
 
 _WINDOWS_CHECK = r"""
@@ -37,17 +42,34 @@ try {
 """
 
 
+def _windows_failure(reason, env=None):
+    socket_state = "unknown"
+    if env is not None:
+        path = env.get("WSL_INTEROP")
+        socket_state = ("present" if os.path.exists(path) else "missing") if path else "unset"
+    LOG.warning("Windows Chrome check failed: %s (interop_socket=%s)", reason, socket_state)
+    return "interop"
+
+
 def _windows_state():
     powershell = wsl_anchor._powershell()
     if not powershell:
-        return "interop"
+        return _windows_failure("powershell_not_found")
+    try:
+        env = wsl_anchor.interop_env()
+    except OSError:
+        return _windows_failure("interop_socket_lookup_failed")
     try:
         result = subprocess.run(
             [powershell, "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_CHECK],
-            env=wsl_anchor.interop_env(), capture_output=True, text=True, timeout=3, check=True,
+            env=env, capture_output=True, text=True, timeout=3, check=True,
         )
+    except subprocess.TimeoutExpired:
+        return _windows_failure("powershell_timeout", env)
+    except subprocess.CalledProcessError as error:
+        return _windows_failure(f"powershell_nonzero_exit={error.returncode}", env)
     except (OSError, subprocess.SubprocessError, ValueError):
-        return "interop"
+        return _windows_failure("powershell_start_failed", env)
     answer = result.stdout.strip()
     return answer if answer in {"stopped", "debugging", "ready"} else "unknown"
 

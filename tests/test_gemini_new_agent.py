@@ -295,6 +295,46 @@ def test_spawn_catalog_reports_my_chrome_health_for_managed_browser_harnesses(mo
         assert 'chrome://inspect/#remote-debugging' in entries['dsh']['reason']
 
 
+@pytest.mark.parametrize(('failure', 'reason', 'socket_state'), [
+    ('missing_executable', 'powershell_not_found', 'unknown'),
+    ('socket_lookup', 'interop_socket_lookup_failed', 'unknown'),
+    ('timeout', 'powershell_timeout', 'present'),
+    ('start', 'powershell_start_failed', 'missing'),
+    ('exit', 'powershell_nonzero_exit=7', 'unset'),
+])
+def test_windows_chrome_probe_logs_one_failure_and_reports_unverified(
+        monkeypatch, tmp_path, caplog, failure, reason, socket_state):
+    probe = server.chrome_readiness
+    monkeypatch.setattr(probe.wsl_anchor, '_powershell',
+                        lambda: None if failure == 'missing_executable' else 'powershell.exe')
+    socket_path = tmp_path / 'private-socket'
+    if socket_state == 'present':
+        socket_path.touch()
+
+    def interop_env():
+        if failure == 'socket_lookup':
+            raise OSError('private lookup error')
+        return {} if socket_state == 'unset' else {'WSL_INTEROP': str(socket_path)}
+
+    def run(command, *, timeout, **kwargs):
+        if failure == 'timeout':
+            assert timeout == 3
+            raise subprocess.TimeoutExpired(command, timeout)
+        if failure == 'exit':
+            raise subprocess.CalledProcessError(7, command, stderr='private stderr')
+        assert failure == 'start'
+        raise OSError('private start error')
+
+    monkeypatch.setattr(probe.wsl_anchor, 'interop_env', interop_env)
+    monkeypatch.setattr(probe.subprocess, 'run', run)
+    message, unavailable = probe.personal_browser_reason(wsl=True)
+    assert message.startswith('ORRERY cannot check Windows Chrome from WSL.')
+    assert unavailable is False
+    assert [record.getMessage() for record in caplog.records] == [
+        f'Windows Chrome check failed: {reason} (interop_socket={socket_state})'
+    ]
+
+
 @pytest.mark.parametrize(('running', 'marker', 'connects', 'expected'), [
     (False, None, False, 'stopped'),
     (True, None, False, 'debugging'),
