@@ -490,6 +490,7 @@ def test_start_windows_client_reads_the_pid_and_refuses_unsafe_arguments(tmp_pat
     bin_dir = tmp_path / "bin"
     _script(bin_dir / "powershell.exe", 'echo ORRERY_WSL_PID=31337\n')
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setattr(wsl_anchor, "interop_env", lambda: {"WSL_INTEROP": "/fixture/interop"})
     assert wsl_anchor.start_windows_client("Ubuntu", ["/usr/bin/python3", "x"]) == (31337, "")
     assert wsl_anchor.start_windows_client("Ubuntu", ["/home/a b/python3"]) == (31337, "")
     pid, error = wsl_anchor.start_windows_client("Ubuntu", ["bad\nargument"])
@@ -504,6 +505,7 @@ def test_start_windows_client_waits_for_slow_powershell_and_recovers_a_published
 
     cli_xml = b"#< CLIXML\r\n<Objs>Preparing modules for first use.</Objs>\r\n"
     monkeypatch.setattr(wsl_anchor, "_powershell", lambda: "/fixture/powershell.exe")
+    monkeypatch.setattr(wsl_anchor, "interop_env", lambda: {"WSL_INTEROP": "/fixture/interop"})
 
     def slow_powershell(argv, *, timeout, **kwargs):
         assert timeout >= 60  # Cold PowerShell exceeded the former 30-second deadline.
@@ -527,14 +529,99 @@ def test_start_windows_client_waits_for_slow_powershell_and_recovers_a_published
     )
 
 
-def test_interop_falls_back_to_a_live_socket_when_the_inherited_one_is_gone(tmp_path, monkeypatch):
-    run = tmp_path / "run"
-    run.mkdir()
-    (run / "123_interop").touch()
-    monkeypatch.setenv("WSL_INTEROP", str(run / "99_interop"))  # its window closed
-    assert wsl_anchor.interop_env(str(run))["WSL_INTEROP"] == str(run / "123_interop")
-    (run / "99_interop").touch()
-    assert wsl_anchor.interop_env(str(run))["WSL_INTEROP"] == str(run / "99_interop")
+@pytest.fixture
+def interop_sockets(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    sockets = [tmp_path / name for name in ("123_interop", "456_interop")]
+    for age, socket in enumerate(sockets, start=1):
+        socket.touch()
+        os.utime(socket, (age, age))
+    older, newer = map(str, sockets)
+    monkeypatch.setattr(wsl_anchor, "_interop_selection", None)
+    monkeypatch.delenv("WSL_INTEROP", raising=False)
+    monkeypatch.setattr(wsl_anchor, "_windows_system_program", lambda path: "/fixture/cmd.exe")
+    monkeypatch.setattr(wsl_anchor, "_powershell", lambda: "/fixture/powershell.exe")
+
+    original = wsl_anchor.interop_env
+    monkeypatch.setattr(wsl_anchor, "interop_env", lambda: original(str(tmp_path)))
+    calls = []
+    dead = set()
+
+    def run(argv, *, env, timeout, **kwargs):
+        assert argv == ["/fixture/cmd.exe", "/d", "/c", "exit"]
+        assert 1 <= timeout <= 2
+        path = env["WSL_INTEROP"]
+        calls.append(path)
+        if path in dead:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(wsl_anchor.subprocess, "run", run)
+    return SimpleNamespace(older=older, newer=newer, calls=calls, dead=dead)
+
+
+def test_interop_checks_newest_and_falls_back_to_working_older_socket(interop_sockets, monkeypatch):
+    sockets = interop_sockets
+    sockets.dead.add(sockets.newer)
+    monkeypatch.setenv("WSL_INTEROP", sockets.newer)
+    assert wsl_anchor.interop_env()["WSL_INTEROP"] == sockets.older
+    assert wsl_anchor.interop_env()["WSL_INTEROP"] == sockets.older
+    assert sockets.calls == [sockets.newer, sockets.older]
+    assert os.environ["WSL_INTEROP"] == sockets.newer
+
+
+def test_interop_all_dead_returns_reason_without_launching_powershell(interop_sockets):
+    sockets = interop_sockets
+    sockets.dead.update((sockets.older, sockets.newer))
+    with pytest.raises(wsl_anchor.InteropUnavailable, match="No usable Windows interop socket"):
+        wsl_anchor.interop_env()
+    assert wsl_anchor.start_windows_client("Ubuntu", ["hold"]) == (
+        None, "No usable Windows interop socket. Open a WSL terminal and try again.",
+    )
+    assert sockets.calls == [sockets.newer, sockets.older]
+
+
+def test_interop_reselects_after_cached_socket_stops_working(interop_sockets, monkeypatch):
+    sockets = interop_sockets
+    assert wsl_anchor.interop_env()["WSL_INTEROP"] == sockets.newer
+    sockets.dead.add(sockets.newer)
+    probe = wsl_anchor.subprocess.run
+
+    def run(argv, *, env, timeout, **kwargs):
+        if argv[0] == "/fixture/powershell.exe":
+            assert env["WSL_INTEROP"] == sockets.newer
+            return subprocess.CompletedProcess(argv, 1, b"", b"accept4 failed 110")
+        return probe(argv, env=env, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(wsl_anchor.subprocess, "run", run)
+    pid, error = wsl_anchor.start_windows_client("Ubuntu", ["hold"])
+    assert pid is None and "accept4 failed 110" in error
+    assert wsl_anchor.interop_env()["WSL_INTEROP"] == sockets.older
+    assert sockets.calls == [sockets.newer, sockets.newer, sockets.older]
+
+
+def test_interop_reselects_when_cached_socket_disappears(interop_sockets):
+    sockets = interop_sockets
+    assert wsl_anchor.interop_env()["WSL_INTEROP"] == sockets.newer
+    pathlib.Path(sockets.newer).unlink()
+    assert wsl_anchor.interop_env()["WSL_INTEROP"] == sockets.older
+    assert sockets.calls == [sockets.newer, sockets.older]
+
+
+def test_interop_rechecks_the_order_when_the_cache_expires(interop_sockets, monkeypatch):
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(now=1)
+    monkeypatch.setattr(wsl_anchor, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    sockets = interop_sockets
+    sockets.dead.add(sockets.newer)
+    assert wsl_anchor.interop_env()["WSL_INTEROP"] == sockets.older
+    sockets.dead.clear()
+    assert wsl_anchor.interop_env()["WSL_INTEROP"] == sockets.older
+    clock.now += wsl_anchor.INTEROP_CACHE_SECONDS
+    assert wsl_anchor.interop_env()["WSL_INTEROP"] == sockets.newer
+    assert sockets.calls == [sockets.newer, sockets.older, sockets.newer]
 
 
 # --- what counts as work, in the dashboard --------------------------------------

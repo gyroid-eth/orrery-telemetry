@@ -211,7 +211,10 @@ def tailscale_run(argv, *, timeout=COMMAND_TIMEOUT):
         env = wsl_anchor.interop_env()
     except OSError:
         return None
-    return _run(argv, timeout=timeout, env=env)
+    result = _run(argv, timeout=timeout, env=env)
+    if result is None or result.returncode != 0:
+        wsl_anchor.invalidate_interop((env or {}).get("WSL_INTEROP", ""))
+    return result
 
 
 def _json(argv, *, empty_null=False):

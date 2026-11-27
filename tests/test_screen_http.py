@@ -63,6 +63,54 @@ def test_wsl_catalog_checks_operator_then_windows_relay(monkeypatch, tmp_path, r
         screen_http._windows_driver_reason.cache_clear()
 
 
+def test_wsl_computer_use_reselects_a_socket_after_cua_times_out(monkeypatch, tmp_path):
+    import subprocess
+
+    http_operator.configure(tmp_path)
+    choices = iter(("/fixture/broken_interop", "/fixture/working_interop"))
+    monkeypatch.setattr(screen_http, "interop_env", lambda: {"WSL_INTEROP": next(choices)})
+    invalidated = []
+    monkeypatch.setattr(screen_http, "invalidate_interop", invalidated.append)
+    state = screen_http.state_module(server.HOOKS_DIR)
+    monkeypatch.setattr(state, "_python", lambda *args, **kwargs: "/fixture/mail-python")
+    calls = []
+
+    def run(argv, *, env, timeout, **kwargs):
+        calls.append(env["WSL_INTEROP"])
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0)
+
+    screen_http._windows_driver_reason.cache_clear()
+    monkeypatch.setattr(screen_http.subprocess, "run", run)
+    try:
+        assert screen_http.wsl_computer_use_reason(tmp_path, server.HOOKS_DIR) == ""
+        assert calls == ["/fixture/broken_interop", "/fixture/working_interop"]
+        assert invalidated == ["/fixture/broken_interop"]
+    finally:
+        screen_http._windows_driver_reason.cache_clear()
+
+
+def test_wsl_computer_use_reports_unavailable_when_no_socket_responds(monkeypatch, tmp_path):
+    from dashboard.wsl_anchor import InteropUnavailable
+
+    http_operator.configure(tmp_path)
+    monkeypatch.setenv("WSL_INTEROP", "/fixture/unverified_interop")
+
+    def unavailable():
+        raise InteropUnavailable("No usable Windows interop socket.")
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("the driver should not run without verified interop")
+
+    monkeypatch.setattr(screen_http, "interop_env", unavailable)
+    monkeypatch.setattr(screen_http, "_windows_driver_reason", unexpected)
+    assert screen_http.wsl_launch_interop() == ""
+    assert screen_http.wsl_computer_use_reason(tmp_path, server.HOOKS_DIR) == (
+        "Windows Cua Driver did not answer. Check that its daemon is running."
+    )
+
+
 @contextmanager
 def dashboard(monkeypatch, work, global_mode):
     home = work / "install"
