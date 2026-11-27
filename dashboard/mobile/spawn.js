@@ -16,7 +16,7 @@
   const computerMenu = $('spawn-computer-menu');
   const browserMenu = $('spawn-browser-menu');
   const computerLabels = {off:'Off', view:'View', control:'Control'};
-  const browserLabels = {off:'Off', temporary:'Temporary Chrome', personal:'My Chrome'};
+  const browserLabels = {off:'Off', temporary:'Temporary Chrome', personal:'My Browser'};
   let computerMode = 'off';
   let browserMode = 'off';
   let browserChosen = false;
@@ -82,7 +82,7 @@
   const providerOrder = [...providerIcons.keys(), 'local'];
   const failureReasons = new Map([
     ['unsupported_tools', 'Turn off optional tools or choose another harness.'],
-    ['browser_setup', 'Turn off Browser or set up Chrome on your computer.'],
+    ['browser_setup', 'Check the My Browser settings on your computer or turn off Browser.'],
     ['model_unavailable', 'Choose another model or harness.'],
     ['launch_directory', 'Choose another launch folder.'],
     ['check_graph', 'Check the graph before trying again.'],
@@ -284,9 +284,15 @@
       ? next.browser_modes : null;
   }
 
+  function browserLabel(mode, next) {
+    const browserName = next.personal_browser_status?.browser;
+    return browserLabels[mode] + (mode === 'personal' && browserName ? ' (' + browserName + ')' : '');
+  }
+
   function personalBrowserNotice(next) {
-    const why = browserModes(next)?.includes('personal') && next.personal_browser_status?.reason;
-    return why ? 'My Chrome: ' + why : '';
+    const status = browserModes(next)?.includes('personal') && next.personal_browser_status;
+    return status?.reason ? 'My Browser: ' + status.reason
+      : browserMode === 'personal' && status?.browser ? 'My Browser: ' + status.browser : '';
   }
 
   function syncBrowser(next, reset = false) {
@@ -312,14 +318,14 @@
         : !modes.length ? 'Browser modes are unavailable for this harness.' : '';
       const limited = next.computer_use_transport === 'orrery-screen' && !modes.includes('temporary')
         ? '. Install Google Chrome or Chromium and Node.js inside WSL to use Temporary Chrome.'
-        : '. Other modes need a compatible Chrome setup.';
-      browser.title = extra || 'Browser: ' + browserLabels[browserMode]
+        : '. Other modes need a compatible browser setup.';
+      browser.title = extra || 'Browser: ' + browserLabel(browserMode, next)
         + (modes.length < browserChoices.length ? limited : '');
       browser.setAttribute('aria-label', browser.title);
       for (const [mode, button] of browserChoices) {
         button.hidden = !modes.includes(mode);
         button.disabled = mode === 'personal' && unavailable;
-        button.title = mode === 'personal' ? status?.reason || '' : '';
+        button.title = mode === 'personal' ? status?.reason || browserLabel(mode, next) : '';
         button.setAttribute('aria-pressed', String(mode === browserMode));
       }
       if (!modes.length && browserMenu.matches(':popover-open')) browserMenu.hidePopover();
@@ -551,7 +557,7 @@
     if (!tools.hidden) {
       if (!computerTool.hidden) labels.push(summaryValue('Computer use', 'launch-computer',
         screens ? computerLabels[selection.computer] || 'Unavailable' : selection.computer ? 'On' : 'Off'));
-      if (selection.browser_mode) labels.push(summaryValue('Browser', 'launch-browser', browserLabels[selection.browser_mode]));
+      if (selection.browser_mode) labels.push(summaryValue('Browser', 'launch-browser', browserLabel(selection.browser_mode, route)));
       else if (!modes && canUseBrowser) labels.push(summaryValue('Browser', 'launch-browser', selection.browser ? 'On' : 'Off'));
     }
     $('spawn-summary').replaceChildren(...labels);

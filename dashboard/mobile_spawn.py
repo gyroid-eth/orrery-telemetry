@@ -118,9 +118,12 @@ def _catalog_choices(value):
                                                     if isinstance(modes, list) and mode in modes]
                 if isinstance(personal_browser_status, dict):
                     status = personal_browser_status.get(key)
-                    if isinstance(status, dict) and _text(status.get('reason'), 240):
+                    if isinstance(status, dict):
+                        reason, browser = status.get('reason'), status.get('browser')
                         routes[-1]['personal_browser_status'] = {
-                            'reason': status['reason'], 'unavailable': status.get('unavailable') is True,
+                            'reason': reason if _text(reason, 240) else '',
+                            'unavailable': status.get('unavailable') is True,
+                            **({'browser': browser} if _text(browser, 48) else {}),
                         }
                 if isinstance(computer_modes, list):
                     routes[-1]['computer_modes'] = [mode for mode in _COMPUTER_MODES if mode in computer_modes]
@@ -215,7 +218,8 @@ def _failure_reason(response):
     lines = detail.splitlines() if isinstance(detail, str) else []
     if error == 'unsupported_mcp_selection' or 'Harness prepare failed: unsupported_mcp_selection' in lines:
         return 'unsupported_tools'
-    if error.startswith(('My Chrome requires ', 'Install Node.js to use Chrome DevTools')):
+    if any(line.startswith(('My Browser:', 'My Browser requires ', 'Install Node.js to use Chrome DevTools'))
+           for line in [error, *lines]):
         return 'browser_setup'
     if any(line.startswith('child_resume: tools.browser for a Codex child needs ') for line in [error, *lines]):
         return 'browser_setup'

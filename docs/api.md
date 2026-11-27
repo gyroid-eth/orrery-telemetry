@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":58}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":59}
 ```
 
 version の解決順は [インストール](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md#version)を参照してください。
@@ -216,7 +216,9 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 
 API 49 は `GET /api/spawn-names` にハーネス別の `browser_modes` を追加します。起動時に `tools.browser_mode` へ `off`、`temporary`、`personal` のいずれかを指定します。従来の Browser 指定との併用はできません。
 
-API 58 は、Mac と WSL で Chrome DevTools MCP の My Chrome を使うハーネスに応じて、`personal_browser_status` に `{reason, unavailable}` を返します。理由がある間、起動画面の自動選択は一時ブラウザー、利用できなければ Off になります。`unavailable: true` は接続先の Chrome が停止中か、リモートデバッグに接続できないことを示し、その場合だけ My Chrome を無効にします。確認の結果が更新されても、利用者が選んだ方式は保持します。
+API 59 は macOS と WSL の管理下 My Browser に、ハーネス別の `personal_browser_status` を返します。接続先が分かれば `browser` に名前を返し、準備が必要なら `reason` で案内します。`unavailable: true` は、その機械で使えるブラウザーが見つからなかった場合です。Interop などで診断できない場合も手動選択できます。
+
+API 58 は、Mac と WSL で Chrome DevTools MCP の My Browser を使うハーネスに応じて、`personal_browser_status` に `{reason, unavailable}` を返します。理由がある間、起動画面の自動選択は一時ブラウザー、利用できなければ Off になります。`unavailable: true` は接続先の Chrome が停止中か、リモートデバッグに接続できないことを示し、その場合だけ My Browser を無効にします。確認の結果が更新されても、利用者が選んだ方式は保持します。
 
 API 53 の macOS カタログは `computer_modes` に `off`、`view`、`control` を返します。View は `tools.screen.access: "read"`、Control は `tools.screen.access: "operate"` を使います。Off は明示した `tools` から画面の指定を外します。スマホの `/view/spawn` は選択を `computer` に渡し、旧クライアントの真偽値も受け付けます。Antigravity で利用できるブラウザのモードは `browser_modes.antigravity` を参照します。
 
@@ -730,7 +732,7 @@ API 43 から、停止した Claude の `resume_mode: conversation_only` でも�
 
 API 54 の legacy roster は、権限を表示する行に `permission_controls` を返します。`computer_use` と `browser_use` のそれぞれに、現在の `value`（不明時は null）、根拠の `source` と `observation_reason`、操作可否の `can_change` と `change_reason`、反映方法の `action`（`restart`・`resume`・null）があります。サーバーは操作時に対象と起動設定を改めて検証します。
 
-`browser_use.mode` は `off`、`temporary`（Temporary Chrome）、`personal`（My Chrome）、または方式が不明な場合の null です。`browser_use.options` は起動時に選べる方式を返し、操作できない行では空になります。
+`browser_use.mode` は `off`、`temporary`（Temporary Chrome）、`personal`（My Browser）、または方式が不明な場合の null です。`browser_use.options` は起動時に選べる方式を返し、操作できない行では空になります。
 
 API 45 の旧運用の `/api/jump` では、道具の選択を保存済みで、停止を確認できる Claude／Codex CLI の子に `permission` を指定できます。API 46 は、同じ条件を満たす親なしで生成されたエージェントにも対応します。常駐、Codex App、会話のみの再開、fresh／global は対象外です。旧運用の一覧は `permission_resume_supported` と短い英語の `permission_resume_reason` を返します。
 

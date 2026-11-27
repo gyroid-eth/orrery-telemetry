@@ -134,6 +134,8 @@ def test_deliberate_mail_only_keeps_built_in_tools_in_the_prompt():
 def test_browser_mode_projects_into_each_provider_without_mixing_profiles(tmp_path, monkeypatch, mode, flag):
     monkeypatch.setattr(tools.shutil, 'which', lambda _: '/fixture/npx')
     monkeypatch.setattr(tools.sys, 'platform', 'darwin')
+    result = tools._personal_browser_module()['Result']('brave', 'ready', ('--autoConnect', '--userDataDir', '/fixture/Brave'))
+    monkeypatch.setattr(tools, 'personal_browser', lambda wsl: result)
     spec = tools.normalize(tools=tools.parse_cli(['browser-mode:' + mode]))
     chrome, _ = tools.merge_chrome(spec, False, '')
     assert chrome is (mode == 'personal')
@@ -175,6 +177,8 @@ def test_antigravity_does_not_offer_modes_when_global_chrome_is_active(tmp_path,
 @pytest.mark.parametrize('mode, flag', [('temporary', '--isolated'), ('personal', '--autoConnect')])
 def test_codex_browser_mode_creates_the_mcp_table_if_absent(monkeypatch, mode, flag):
     monkeypatch.setattr(tools.shutil, 'which', lambda _: '/fixture/npx')
+    result = tools._personal_browser_module()['Result']('edge', 'ready', ('--autoConnect', '--userDataDir', '/fixture/Edge'))
+    monkeypatch.setattr(tools, 'personal_browser', lambda wsl: result)
     config = {}
     tools.codex_apply(config, tools.normalize(tools={'browser_mode': mode}))
     assert flag in config['mcp_servers']['chrome-devtools']['args']

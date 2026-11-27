@@ -280,23 +280,27 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch, tmp_path, platform, 
 
 
 @pytest.mark.parametrize(('status', 'unavailable'), [('stopped', True), ('debugging', True), ('ready', False), ('interop', False)])
-def test_spawn_catalog_reports_my_chrome_health_for_managed_browser_harnesses(monkeypatch, status, unavailable):
+def test_spawn_catalog_reports_my_browser_health_for_managed_browser_harnesses(monkeypatch, status, unavailable):
+    monkeypatch.setattr(server, 'HOOKS_DIR', str(ROOT / 'hooks'))
     tools = server._child_tools_module()
     modes = {key:['off','temporary','personal'] for key in ('claude-code','codex','dsh','hermes','antigravity')}
     monkeypatch.setattr(server, '_is_wsl', lambda: True)
     monkeypatch.setattr(tools, 'native_codex_config', lambda **_: {})
     monkeypatch.setattr(tools, 'launch_browser_modes', lambda _: modes)
-    monkeypatch.setattr(server.chrome_readiness, '_windows_state', lambda: status)
+    result = tools._personal_browser_module()['Result'](
+        'brave' if status in ('ready', 'debugging') else None, status)
+    monkeypatch.setattr(tools, 'personal_browser', lambda wsl: result)
 
     catalog = server._spawn_browser_catalog()
     assert catalog['browser_modes'] == modes
-    if status == 'ready':
-        assert 'personal_browser_status' not in catalog
+    entries = catalog['personal_browser_status']
+    assert entries.keys() == modes.keys() - {'claude-code'}
+    assert all(entry['unavailable'] is unavailable for entry in entries.values())
+    if status in ('ready', 'debugging'):
+        assert entries['dsh']['browser'] == 'Brave'
+        assert entries['dsh']['reason'] == result.reason(True)
     else:
-        entries = catalog['personal_browser_status']
-        assert entries.keys() == modes.keys() - {'claude-code'}
-        assert all(entry['unavailable'] is unavailable for entry in entries.values())
-        assert 'chrome://inspect/#remote-debugging' in entries['dsh']['reason']
+        assert entries['dsh']['reason'] and 'browser' not in entries['dsh']
 
 
 @pytest.mark.parametrize(('failure', 'reason', 'socket_state'), [
@@ -306,13 +310,10 @@ def test_spawn_catalog_reports_my_chrome_health_for_managed_browser_harnesses(mo
     ('start', 'powershell_start_failed', 'missing'),
     ('exit', 'powershell_nonzero_exit=7', 'unset'),
 ])
-def test_windows_chrome_probe_logs_one_failure_and_reports_unverified(
+def test_windows_browser_probe_logs_one_failure_and_reports_unverified(
         monkeypatch, tmp_path, caplog, failure, reason, socket_state):
-    from dashboard import wsl_anchor
+    from hooks import personal_browser as probe
 
-    probe = server.chrome_readiness
-    monkeypatch.setattr(wsl_anchor, '_powershell',
-                        lambda: None if failure == 'missing_executable' else 'powershell.exe')
     socket_path = tmp_path / 'private-socket'
     if socket_state == 'present':
         socket_path.touch()
@@ -324,20 +325,23 @@ def test_windows_chrome_probe_logs_one_failure_and_reports_unverified(
 
     def run(command, *, timeout, **kwargs):
         if failure == 'timeout':
-            assert timeout == 3
+            assert timeout == 5
             raise subprocess.TimeoutExpired(command, timeout)
         if failure == 'exit':
             raise subprocess.CalledProcessError(7, command, stderr='private stderr')
         assert failure == 'start'
         raise OSError('private start error')
 
-    monkeypatch.setattr(wsl_anchor, 'interop_env', interop_env)
+    monkeypatch.setattr(probe.runpy, 'run_path', lambda _: {
+        '_powershell': lambda: None if failure == 'missing_executable' else 'powershell.exe',
+        'interop_env': interop_env,
+    })
     monkeypatch.setattr(probe.subprocess, 'run', run)
-    message, unavailable = probe.personal_browser_reason(wsl=True)
-    assert message.startswith('ORRERY cannot check Windows Chrome from WSL.')
-    assert unavailable is False
+    result = probe.discover(wsl=True)
+    assert result.reason(True).startswith('ORRERY cannot check Windows browsers from WSL.')
+    assert result.state == 'interop'
     assert [record.getMessage() for record in caplog.records] == [
-        f'Windows Chrome check failed: {reason} (interop_socket={socket_state})'
+        f'Windows browser check failed: {reason} (interop_socket={socket_state})'
     ]
 
 
@@ -345,27 +349,21 @@ def test_windows_chrome_probe_logs_one_failure_and_reports_unverified(
     (False, None, False, 'stopped'),
     (True, None, False, 'debugging'),
     (True, '12345\n', False, 'debugging'),
-    (True, '12345\n', True, 'ready'),
+    (True, '12345\n/devtools/browser/fixture\n', True, 'ready'),
 ])
-def test_mac_my_chrome_requires_running_process_and_working_debugging_port(
+def test_mac_my_browser_requires_running_process_and_working_debugging_port(
         monkeypatch, tmp_path, running, marker, connects, expected):
-    probe = server.chrome_readiness
+    from hooks import personal_browser as probe
+
     monkeypatch.setattr(probe.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(probe.subprocess, 'run', lambda *a, **k: types.SimpleNamespace(returncode=0 if running else 1))
+    monkeypatch.setattr(probe, '_mac_processes', lambda: [(123, 'chrome', [])] if running else [])
     if marker is not None:
         path = tmp_path / 'Library/Application Support/Google/Chrome/DevToolsActivePort'
         path.parent.mkdir(parents=True)
         path.write_text(marker)
 
-    def connect(address, *, timeout):
-        assert address == ('127.0.0.1', 12345)
-        if not connects:
-            raise ConnectionRefusedError
-        from contextlib import nullcontext
-        return nullcontext()
-
-    monkeypatch.setattr(probe.socket, 'create_connection', connect)
-    assert probe._mac_state() == expected
+    monkeypatch.setattr(probe, '_mac_owns_port', lambda pid, port: connects and (pid, port) == (123, 12345))
+    assert probe._mac_result().state == expected
 
 
 def test_spawn_catalog_marks_gemini_unavailable_before_launch(monkeypatch, tmp_path):

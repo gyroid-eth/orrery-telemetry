@@ -91,7 +91,7 @@ legacy の通知も proxy と同じく本文を2000字まで表示します。�
 
 ### Agent の権限の状態と変更できる条件を分けて表示
 
-旧運用の agent 一覧に Computer use と Browser の状態・根拠・変更可否・理由を追加しました。生成された Claude Code／Codex CLI では、Browser の Off・Temporary Chrome・My Chrome を選び、確認のうえで同じ会話を再開できます。Telemetry API 世代を 54 に上げました。
+旧運用の agent 一覧に Computer use と Browser の状態・根拠・変更可否・理由を追加しました。生成された Claude Code／Codex CLI では、Browser の Off・Temporary Chrome・My Browser を選び、確認のうえで同じ会話を再開できます。Telemetry API 世代を 54 に上げました。
 
 生成された dsh／Hermes でも、親の有無にかかわらず左ペインから切り替え、同じ会話を再開できます。
 
@@ -257,7 +257,7 @@ agent の返事に画像の絶対パスが単独の行で書かれていると�
 
 ### New Agent のブラウザモード
 
-Browser アイコンから Off、Temporary Chrome、My Chrome を選べます。対応する場合の既定は My Chrome です。Temporary Chrome は子専用の一時プロファイルを使います。Chrome が接続許可を求める場合は Mac で応答するとブラウザ操作が進みます。API 49 で `browser_modes` と `tools.browser_mode` を追加しました。
+Browser アイコンから Off、Temporary Chrome、My Browser を選べます。対応する場合の既定は My Browser です。Temporary Chrome は子専用の一時プロファイルを使います。Chrome が接続許可を求める場合は Mac で応答するとブラウザ操作が進みます。API 49 で `browser_modes` と `tools.browser_mode` を追加しました。
 
 ### スマホの New agent で Local の起動設定と失敗理由を表示
 

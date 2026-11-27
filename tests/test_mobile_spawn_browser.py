@@ -54,11 +54,11 @@ def test_local_tool_selection_and_launch_failure(phone, reason, message):
 def test_browser_icon_opens_three_modes_and_posts_the_choice(phone):
     _, js, wait, state = phone
     open_local_editor(phone, lambda: {**local_catalog(), 'browser_modes':{'hermes':['off','temporary','personal']}})
-    assert js("document.querySelector('#spawn-browser').getAttribute('aria-label')") == 'Browser: My Chrome'
+    assert js("document.querySelector('#spawn-browser').getAttribute('aria-label')") == 'Browser: My Browser'
     js("document.querySelector('#spawn-browser').click()")
     wait("document.querySelector('#spawn-browser-menu').matches(':popover-open')")
     assert js("[...document.querySelectorAll('#spawn-browser-menu button:not([hidden])')].map(b=>b.textContent)") == [
-        'Off','Temporary Chrome','My Chrome']
+        'Off','Temporary Chrome','My Browser']
     js("document.querySelectorAll('#spawn-browser-menu button')[1].click()")
     assert js("document.querySelector('#spawn-browser').dataset.browserMode") == 'temporary'
     js("document.querySelector('#spawn-editor').requestSubmit()")
@@ -82,7 +82,7 @@ def test_my_chrome_diagnosis_controls_default_and_manual_choice(phone, modes, fa
     open_local_editor(phone, lambda: {**local_catalog(), 'browser_modes':{'hermes':modes},
         'personal_browser_status':{'hermes':{'reason':reason, 'unavailable':unavailable}}})
     assert js("document.querySelector('#spawn-browser').dataset.browserMode") == fallback
-    assert js("document.querySelector('#spawn-notice').textContent") == 'My Chrome: ' + reason
+    assert js("document.querySelector('#spawn-notice').textContent") == 'My Browser: ' + reason
     js("document.querySelector('#spawn-browser').click()")
     wait("document.querySelector('#spawn-browser-menu').matches(':popover-open')")
     assert js("document.querySelector('#spawn-browser-menu button:last-child').disabled") is unavailable
@@ -90,7 +90,33 @@ def test_my_chrome_diagnosis_controls_default_and_manual_choice(phone, modes, fa
         js("document.querySelector('#spawn-browser-menu button:last-child').click()")
         assert js("document.querySelector('#spawn-browser').dataset.browserMode") == 'personal'
     js("document.querySelector('#spawn-editor').requestSubmit()")
-    assert js("document.querySelector('#spawn-notice').textContent") == 'My Chrome: ' + reason
+    assert js("document.querySelector('#spawn-notice').textContent") == 'My Browser: ' + reason
+
+
+@pytest.mark.parametrize('ready', [True, False])
+def test_mobile_my_browser_names_the_chosen_brave_profile_or_setup(phone, ready):
+    _, js, wait, state = phone
+    reason = '' if ready else 'Open brave://inspect/#remote-debugging in Brave and enable remote debugging.'
+    open_local_editor(phone, lambda: {**local_catalog(),
+        'browser_modes': {'hermes': ['off', 'temporary', 'personal']},
+        'personal_browser_status': {'hermes': {'browser': 'Brave', 'reason': reason, 'unavailable': not ready}},
+    })
+    assert js("document.querySelector('#spawn-notice').textContent") == 'My Browser: ' + (reason or 'Brave')
+    assert js("document.querySelector('#spawn-browser').getAttribute('aria-label')") == (
+        'Browser: My Browser (Brave)' if ready else 'Browser: Temporary Chrome'
+    )
+    js("document.querySelector('#spawn-browser').click()")
+    wait("document.querySelector('#spawn-browser-menu').matches(':popover-open')")
+    assert js("document.querySelectorAll('#spawn-browser-menu button')[2].disabled") is not ready
+    js("document.querySelector('#spawn-browser-menu').hidePopover();document.querySelector('#spawn-editor').requestSubmit()")
+    assert js("document.querySelector('#spawn-summary [aria-label^=Browser]').getAttribute('aria-label')") == (
+        'Browser: My Browser (Brave)' if ready else 'Browser: Temporary Chrome'
+    )
+    state['spawn_receipt'] = {'state':'ready','name':'FixtureCurie'}
+    js("document.querySelector('#spawn-confirm').click()")
+    wait("document.querySelector('#spawn-notice').textContent.includes('is ready')")
+    [posted] = [body for operation, body in state['calls'] if operation == 'spawn']
+    assert posted['browser_mode'] == ('personal' if ready else 'temporary')
 
 
 def test_switching_to_antigravity_hides_tools_and_clears_the_launch_selection(phone):
