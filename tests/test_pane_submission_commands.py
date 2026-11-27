@@ -226,6 +226,63 @@ def test_watcher_confirms_a_wide_character_suffix_in_dsh_welcome(visible_chars, 
     assert not submission['ready'](view, notice + ' Different ending.')
 
 
+@pytest.mark.parametrize('case', ['fresh', 'retry', 'no-receipt', 'other-receipt', 'typed', 'wrong-lines', 'wrong-size'])
+def test_watcher_checks_narrow_dsh_paste_card_and_its_receipt(monkeypatch, tmp_path, case):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    submit = submission['submit']
+    frames = submit.__globals__
+    lock = tmp_path / 'pane.lock'
+    monkeypatch.setitem(frames, 'try_lock', lambda view: os.open(lock, os.O_CREAT | os.O_RDWR, 0o600))
+    ticks = itertools.count()
+    monkeypatch.setitem(frames, 'time', SimpleNamespace(
+        monotonic=lambda: next(ticks) * .01, sleep=lambda _: None))
+    text = 'ORRERY Mail notification: message from Tester [normal]: ' + '日本語🧪' * 200
+    chars = len(text.encode('utf-16-le')) // 2 - (case == 'wrong-size')
+    lines = 2 if case == 'wrong-lines' else 1
+    top = '  ╭' + '─' * 40 + '╮'
+    bottom = '  ╰' + '─' * 40 + '╯'
+    editor = '  ⌸ ❯ ' + ' ' * 36 + '⛶'
+    pill = f'▸ {lines} lines・{chars} chars・hover to peek'
+    if case != 'typed':
+        pill = f'\x1b[38;5;145m{pill}\x1b[39m'
+    idle = [top, editor, bottom]
+    pending = [top, editor, '      ' + pill, '', bottom]
+    screen = idle if case == 'fresh' else pending
+    effects = []
+
+    def tmux(*args, input=None):
+        nonlocal screen
+        operation = args[0]
+        if operation == 'display-message':
+            cursor = 1 if screen is idle else 3
+            meta = f'/tmp/fixture.sock\t100\t%1\t200\t{cursor}\t0\t6\t1\tdsh'
+            return subprocess.CompletedProcess(args, 0, '\n'.join([meta, *screen, '']), '')
+        effects.append(operation)
+        if operation == 'load-buffer':
+            assert input == text
+        if operation == 'paste-buffer':
+            screen = pending
+        if operation == 'send-keys':
+            assert args[-1] == 'C-m'
+            screen = idle
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    if case not in ('fresh', 'no-receipt'):
+        meta = '/tmp/fixture.sock\t100\t%1\t200\t3\t0\t6\t1\tdsh'
+        view = submission['frame'](meta, pending, '%1')
+        receipt_text = text.replace('Tester', 'Sample') if case == 'other-receipt' else text
+        lock.write_bytes(submission['_notice_paste_digest'](view, receipt_text))
+
+    reasons = []
+    result = submit(tmux, lambda: True, '%1', text, on_wait=reasons.append)
+    if case == 'fresh':
+        assert result == 'accepted' and effects == ['load-buffer', 'paste-buffer', 'send-keys', 'delete-buffer']
+    elif case == 'retry':
+        assert result == 'accepted' and effects == ['send-keys']
+    else:
+        assert result == 'refused' and not effects and reasons == ['editor_not_empty']
+
+
 @pytest.mark.parametrize('editor,editor_text,selection,accepted', [
     ('claude', '/log', '/log', True),
     ('claude', '/log', '/login', False),
@@ -697,7 +754,8 @@ def test_watcher_submits_a_scrolled_agy_mail_notice(monkeypatch, tmp_path, case)
 
 
 @pytest.mark.parametrize('case', ['fresh', 'retry', 'different', 'cursor-inside'])
-def test_watcher_submits_a_classic_hermes_notice_with_its_prompt_scrolled_off(monkeypatch, case):
+@pytest.mark.parametrize('compact', [False, True])
+def test_watcher_submits_a_hermes_notice_with_its_prompt_scrolled_off(monkeypatch, case, compact):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
     monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
@@ -706,7 +764,8 @@ def test_watcher_submits_a_classic_hermes_notice_with_its_prompt_scrolled_off(mo
         monotonic=lambda: next(ticks) * .01, sleep=lambda _: None))
     border = '─' * 80
     status = ' ☤ fixture-model │ ~18.6K/1M │ [░░░░░░░░░░] ~2% ─ Fetch canonical task'
-    idle = [status, border, '❯ ', border]
+    bottom = [] if compact else [border]
+    idle = [status, border, '❯ ', *bottom]
     tail = [
         'ox fetch needed): This is a synthetic initial task.',
         'Report the price and arrival date of the blue bicycle.',
@@ -722,7 +781,8 @@ def test_watcher_submits_a_classic_hermes_notice_with_its_prompt_scrolled_off(mo
     draft = tail[:]
     if case == 'different':
         draft[-1] = 'Unique marker: HERMES-FIXTURE-4918.'
-    screen = idle if case == 'fresh' else [status, border, *draft, border]
+    pending = [status, border, *draft, *bottom]
+    screen = idle if case == 'fresh' else pending
     effects = []
     reasons = []
 
@@ -730,7 +790,7 @@ def test_watcher_submits_a_classic_hermes_notice_with_its_prompt_scrolled_off(mo
         nonlocal screen
         operation = args[0]
         if operation == 'display-message':
-            row = len(screen) - 2
+            row = len(screen) - 1 - len(bottom)
             column = (2 if screen is idle or case == 'cursor-inside' else len(draft[-1]))
             metadata = f'/tmp/fixture.sock\t100\t%1\t200\t{row}\t0\t{column}\t\tbash'
             return subprocess.CompletedProcess(args, 0, '\n'.join([metadata, *screen, '']), '')
@@ -738,7 +798,7 @@ def test_watcher_submits_a_classic_hermes_notice_with_its_prompt_scrolled_off(mo
         if operation == 'load-buffer':
             assert input == notice
         elif operation == 'paste-buffer':
-            screen = [status, border, *draft, border]
+            screen = pending
         elif operation == 'send-keys':
             assert args[-1] == 'C-m'
             screen = idle
@@ -754,6 +814,17 @@ def test_watcher_submits_a_classic_hermes_notice_with_its_prompt_scrolled_off(mo
     else:
         assert result == 'refused' and not effects
         assert reasons == ['editor_not_empty']
+
+
+@pytest.mark.parametrize('previous_width', [44, 46])
+def test_hermes_scrolled_draft_caret_after_an_exact_width_row(previous_width):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    border = '─' * 46
+    rows = ['☤ fixture · 16s', border, *['日本語'] * 6, '終' * (previous_width // 2), '']
+    metadata = '/tmp/fixture.sock\t100\t%1\t200\t9\t0\t0\t1\thermes'
+    observed = submission['frame'](metadata, rows, '%1')
+    text = 'ORRERY Mail notification: message from Tester [normal]: ' + ''.join(rows[2:])
+    assert submission['ready'](observed, text) is (previous_width == 46)
 
 
 def test_expired_submit_after_load_still_deletes_its_buffer(monkeypatch):

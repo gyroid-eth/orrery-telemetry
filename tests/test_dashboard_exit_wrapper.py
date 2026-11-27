@@ -114,7 +114,7 @@ def test_exit_leaves_a_finished_shell_for_the_operator(monkeypatch):
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="requires tmux")
-@pytest.mark.parametrize("screen", ["model", "approval", "composer"])
+@pytest.mark.parametrize("screen", ["model", "approval", "composer", "hermes", "hermes-wrong", "hermes-edited"])
 def test_exit_keys_on_a_private_tmux_server(monkeypatch, tmp_path, screen):
     # Keep the Unix socket path below the platform limit even under xdist.
     import tempfile
@@ -130,7 +130,20 @@ options = {
     "approval": "Do you want to make this edit to demo.txt?\r\n❯ 1. Yes\r\n  2. No\r\nEsc to cancel",
     "composer": "› ",
 }
-os.write(1, b"\x1b[?2004h" + options[screen].encode())
+draft = ""
+def show_hermes():
+    menu = ""
+    if draft.startswith("/"):
+        candidate = "/exit-other" if screen == "hermes-wrong" else "/exit"
+        menu = f"\r\n\x1b[48;5;234m {candidate} description...\x1b[0m"
+    text = " ☤ fixture-model · 42s\r\n" + "─" * 46 + "\r\n❯ " + draft + menu
+    os.write(1, (f"\x1b[2J\x1b[H{text}\x1b[3;{3 + len(draft)}H").encode())
+
+os.write(1, b"\x1b[?2004h")
+if screen.startswith("hermes"):
+    show_hermes()
+else:
+    os.write(1, options[screen].encode())
 if screen == "composer":
     os.write(1, b"\r\n? for shortcuts\x1b[1;3H")
 capture.touch()
@@ -145,12 +158,22 @@ while True:
             os.write(1, b"\x1b[1;3H\x1b[K")
         else:
             os.write(1, data.replace(b"\x1b[200~", b"").replace(b"\x1b[201~", b""))
+    elif screen.startswith("hermes"):
+        if b"\r" in data:
+            draft = ""
+        elif b"\x7f" in data:
+            draft = draft[:-data.count(b"\x7f")]
+        else:
+            draft += data.replace(b"\x1b[200~", b"").replace(b"\x1b[201~", b"").decode()
+            if screen == "hermes-edited" and draft == "/exit":
+                draft += " user draft"
+        show_hermes()
 """
     with tempfile.TemporaryDirectory(prefix="exit-test-", dir=pathlib.Path("/tmp").resolve()) as directory:
         tmux = ["tmux", "-S", str(pathlib.Path(directory) / "s"), "-f", "/dev/null"]
         env = {k: v for k, v in os.environ.items() if k not in {"TMUX", "TMUX_PANE", "LC_ALL"}}
         env["LC_CTYPE"] = "C.UTF-8"
-        subprocess.run([*tmux, "new-session", "-d", "-s", "ExitProbe", "-x", "80", "-y", "20",
+        subprocess.run([*tmux, "new-session", "-d", "-s", "ExitProbe", "-x", "46" if screen.startswith("hermes") else "80", "-y", "27",
                         shlex.join([sys.executable, "-I", "-c", tui, str(received), screen])],
                        env=env, check=True, capture_output=True, text=True, timeout=5)
         try:
@@ -160,15 +183,24 @@ while True:
                                               proof_reader=lambda *a, **kw: [])
             monkeypatch.setattr(server, "_legacy_tmux_consumer", lambda: consumer)
             monkeypatch.setattr(server, "lookup_agent", lambda _: {"category": "agent", "attached": False})
-            monkeypatch.setattr(server, "_agent_program", lambda _: "codex")
+            monkeypatch.setattr(server, "_agent_program", lambda _: "hermes" if screen.startswith("hermes") else "codex")
             end = time.monotonic() + 5
             while not received.exists() and time.monotonic() < end:
                 time.sleep(.02)
             assert received.exists()
             result = server.do_exit("ExitProbe")
-            if screen == "composer":
+            if screen in ("composer", "hermes"):
                 assert result["ok"], result
                 assert received.read_bytes() == b"\x1b[200~/exit\x1b[201~\r"
+            elif screen in ("hermes-wrong", "hermes-edited"):
+                assert not result["ok"] and "Cannot confirm /exit" in result["error"], result
+                keys = b"\x7f" * 5 if screen == "hermes-wrong" else b""
+                assert received.read_bytes() == b"\x1b[200~/exit\x1b[201~" + keys
+                capture = subprocess.run([*tmux, "capture-pane", "-p", "-t", "ExitProbe"],
+                                         env=env, check=True, capture_output=True, text=True, timeout=5)
+                assert ("❯ /exit user draft" in capture.stdout) is (screen == "hermes-edited")
+                if screen == "hermes-wrong":
+                    assert "/exit" not in capture.stdout
             else:
                 assert "Close any selection or approval" in result["error"], result
                 assert received.read_bytes() == b""
