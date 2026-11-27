@@ -138,6 +138,24 @@ def _signal_files(tmp_path: Path) -> list[Path]:
     return sorted((tmp_path / "signals").rglob("*.signal"))
 
 
+@pytest.mark.parametrize("tool", ["mark_message_read", "acknowledge_message"])
+def test_explicit_receipt_clears_only_that_messages_signal(monkeypatch, tmp_path, tool):
+    _configure(monkeypatch, tmp_path, AGENTSTACK_MAIL_NOTIFICATIONS_ENABLED="true",
+               AGENTSTACK_MAIL_SIGNAL_CLEAR_GRACE_SECONDS="60")
+    payload = asyncio.run(_send(tmp_path, "Read this exact message"))["deliveries"][0]["payload"]
+    signal, = _signal_files(tmp_path)
+    other = signal.with_name(f"{payload['id'] + 1}.signal")
+    other.touch()
+
+    async def receipt():
+        async with Client(app.build_mcp_server()) as client:
+            await client.call_tool(tool, {"project_key": str(tmp_path / "project"),
+                                         "agent_name": "GreenCastle", "message_id": payload["id"]})
+
+    asyncio.run(receipt())
+    assert _signal_files(tmp_path) == [other]
+
+
 def test_default_grace_lets_a_fresh_signal_survive_a_racing_fetch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

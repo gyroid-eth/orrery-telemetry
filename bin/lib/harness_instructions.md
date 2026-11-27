@@ -41,6 +41,8 @@ before editing an unassigned shared area. Never bypass or approve guards.
 
 ## Waiting For Replies
 
+After sending your completion report or a question that blocks your work, end your turn and keep the session open. Replies arrive as ORRERY Mail notifications. Do not wait in a sleep loop.
+
 Use notifications or an available documented wait. Otherwise save progress and
 end the turn. Do not use fetch polling, custom watchers or pane input to wait
 for or deliver messages.

@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":57}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":58}
 ```
 
 See [Installation](https://github.com/gyroid-eth/orrery/blob/master/docs/en/telemetry-install.md#version) for version resolution order.
@@ -216,6 +216,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 ## GET `/api/spawn-names`
 
 API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
+
+API 58 can return a `personal_browser_status` entry `{reason, unavailable}` per harness that uses Chrome DevTools MCP for My Chrome on macOS or WSL. When the entry carries a reason, the launch form defaults to Temporary Chrome if offered, or Off otherwise. The form only disables My Chrome when `unavailable: true` confirms that Chrome is stopped or its debugging endpoint is unreachable. A new check preserves any mode the user has selected.
 
 On macOS, the API 53 catalog lists `off`, `view`, and `control` in `computer_modes`. View uses `tools.screen.access: "read"` and Control uses `tools.screen.access: "operate"`. For Off, omit the screen selection from the explicit `tools` object. Mobile `/view/spawn` sends one of the modes as `computer` and still accepts the boolean from older clients. See `browser_modes.antigravity` for the available Antigravity browser modes.
 
@@ -664,6 +666,7 @@ The response includes at least these diagnostics:
   "actionable_signal_count":0,
   "orphan_signal_count":0,
   "signal_sessions_known":true,
+  "blocked_recipients":[],
   "last_success_age_s":4,
   "recent_results":{"success":3}
 }
@@ -672,6 +675,8 @@ The response includes at least these diagnostics:
 The header indicator uses the watcher process, signal backlog, most recent success time, and delivery results from the last ten minutes.
 
 API 11 keeps `signal_count` as the total, including legacy signals, and adds `actionable_signal_count`, `orphan_signal_count` and `signal_sessions_known`. Only signals at least 24 hours old with a confirmed absent tmux recipient and no persistent headless runtime manifest are orphans. Measurement failures keep all signals actionable. A stopped watcher or more than 50 actionable signals is `red`; a pending actionable signal with no success in the last 120 seconds is `yellow`; otherwise health is `green`.
+
+`blocked_recipients` lists recipients whose terminal notification has remained unresolved for at least three minutes and still has a corresponding signal. These delays turn the health indicator `yellow` even when other recipients are receiving notifications. The `red` conditions take precedence. The dashboard Mail indicator shows the affected recipients.
 
 ## GET `/portrait`
 

@@ -315,9 +315,12 @@ tmux() {
             ;;
     esac
 }
-for REASON in editor_not_empty editor_not_empty editor_not_empty editor_not_empty input_not_found ""; do
+for REASON in editor_not_empty editor_not_empty editor_not_empty editor_not_empty input_not_found; do
     deliver_worker "$1/777.signal" ProbeAgent 777 Sender "fixture" normal 0
 done
+cp "$STATE_FILE" "$1/blocked.json"
+REASON=""
+deliver_worker "$1/777.signal" ProbeAgent 777 Sender "fixture" normal 0
 '''
     result = subprocess.run(["/bin/bash", "-c", script, "fixture", str(tmp_path)],
                             capture_output=True, text=True, check=True, timeout=20)
@@ -326,8 +329,11 @@ done
         "Waiting: agent=ProbeAgent message=777 attempts=3 reason=editor_not_empty",
         "Waiting: agent=ProbeAgent message=777 attempts=5 reason=input_not_found",
     ]
+    blocked = json.loads((tmp_path / "blocked.json").read_text())["ProbeAgent:777"]
+    assert 0 < blocked["editor_blocked_since_epoch"] <= blocked["last_attempt_epoch"]
     row = json.loads((tmp_path / "state.json").read_text())["ProbeAgent:777"]
     assert row["last_result"] == "success" and "wait_count" not in row
+    assert "editor_blocked_since_epoch" not in row
 
 
 # --- real fswatch on Linux -------------------------------------------------------

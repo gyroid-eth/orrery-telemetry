@@ -20,12 +20,25 @@ def native_section():
     return SKILL.read_text().split(START, 1)[1].split(END, 1)[0]
 
 
-def test_claude_codex_procedure_remains_byte_identical():
+def test_claude_codex_procedure_matches_reviewed_text():
     # Protect the reviewed procedure, including show_files and the macOS screen options.
     before, remainder = SKILL.read_bytes().split(START.encode(), 1)
     _, after = remainder.split(END.encode(), 1)
     assert hashlib.sha256(before + after).hexdigest() == (
-        '24647c264bd6958b4ae0ee1825ff8c7f2eb69cdd94454e85b6ffc46377baaced')
+        'ad38b858c31d332271c424c90a9f600dc486ef730c315bafb6d14d64473c8b28')
+
+
+def test_child_completion_instructions_agree_across_harnesses():
+    instruction = ("After sending your completion report or a question that blocks your work, "
+                   "end your turn and keep the session open. Replies arrive as ORRERY Mail notifications. "
+                   "Do not wait in a sleep loop.")
+    for path in ("claude/CLAUDE.md", "codex/AGENTS.md", "bin/lib/harness_instructions.md",
+                 "templates/fresh/claude/CLAUDE.md", "templates/fresh/codex/AGENTS.md",
+                 "skills/delegate/SKILL.md"):
+        assert instruction in (ROOT/path).read_text(), path
+    gemini = (ROOT/"hooks/spawn_gemini_preregistered.sh").read_text()
+    lines = re.findall(r'^\s*"(After sending[^"]+|Replies arrive[^"]+)"', gemini, re.M)
+    assert ''.join(lines).strip() == instruction
 
 
 def test_documented_request_uses_current_public_api_contract():

@@ -2,11 +2,13 @@
 
 from pathlib import Path
 import runpy
+from types import SimpleNamespace
 
 import pytest
 
 
-frame = runpy.run_path(str(Path(__file__).resolve().parents[1] / "bin/lib/pane_submission.py"))["frame"]
+submission = runpy.run_path(str(Path(__file__).resolve().parents[1] / "bin/lib/pane_submission.py"))
+frame = submission["frame"]
 BORDER = "─" * 80
 METADATA = "/unused/tmux.sock\t100\t%1\t200\t1\t0\t2\t1\tpython"
 
@@ -60,3 +62,72 @@ def test_hermes_compact_hint_requires_an_adjacent_status_bar():
     lines = ["Earlier output mentioned ☤ Hermes", "─" * 56, f"❯ \x1b[3m{HERMES_IDLE_HINT}\x1b[0m"]
     view = frame(metadata, lines, "%1")
     assert not view.hermes and view.draft == HERMES_IDLE_HINT
+
+
+@pytest.mark.parametrize(('editor', 'rows', 'command', 'argv'), [
+    ('claude', [BORDER, '❯ ', BORDER], '2.1.332', '/home/demo/.local/share/claude/versions/2.1.332'),
+    ('codex', ['', '› '], 'codex-x86_64-un', ''),
+    ('agy', [BORDER, '> ', BORDER, 'Gemini 4 Neon (Low) · low'], 'agy', ''),
+    ('agy', [BORDER, '> ', BORDER, 'Gemini 4 Neon (Low) · low'], 'mainthread',
+     'node /home/demo/node_modules/@google/gemini-cli/dist/index.js'),
+    ('dsh', [BORDER, '⌸ ❯ ', BORDER], 'mainthread', 'node /home/demo/node_modules/@deepseek-ai/dsh/lib/bin.js'),
+    ('hermes', [BORDER, '❯ ', BORDER, ' ☤ fixture status'], 'python3', 'python3 -m hermes_cli.main'),
+])
+def test_unknown_paste_mode_requires_the_matching_editor_in_the_foreground_group(
+    monkeypatch, editor, rows, command, argv,
+):
+    metadata = "/unused/tmux.sock\t100\t%1\t200\t1\t0\t2\t\tbash"
+    view = frame(metadata, rows, '%1')
+    assert view.empty and view.editor == editor
+    paste = submission['confirm_wrapped_editor']
+    processes = paste.__globals__
+    editor_group = 200
+
+    def ps(*args):
+        if args[0] == '-ww':
+            return argv + '\n'
+        return (
+            '200 100 200 200 pts/3 Ss bash\n'
+            '201 200 200 200 pts/3 S bash\n'
+            f'202 201 {editor_group} 200 pts/3 S+ {command}\n'
+        )
+
+    monkeypatch.setitem(processes, '_process_columns', ps)
+    monkeypatch.setitem(processes, 'sys', SimpleNamespace(platform='darwin'))
+    monkeypatch.setitem(processes, '_editor_has_terminal_input', lambda pid, tty: True)
+    text = 'First line\nSecond line'
+    assert not view.allows_paste(text)
+    assert paste(view).allows_paste(text)
+    assert not paste(view).allows_paste('First line\nSecond line\x1b[A')
+    editor_group = 202  # A background descendant does not own the foreground.
+    assert not paste(view).allows_paste(text)
+
+
+@pytest.mark.parametrize(('platform', 'exe', 'argv0', 'confirmed'), [
+    ('linux', '/home/demo/.local/bin/agy', 'renamed-process', True),
+    ('linux', None, '/home/demo/.local/bin/agy', True),
+    ('darwin', None, '/Users/demo/.local/bin/agy', True),
+    ('linux', '/home/demo/.local/bin/not-agy', '/home/demo/.local/bin/not-agy', False),
+])
+def test_native_agy_under_a_shell_requires_its_executable_or_argv0(
+    monkeypatch, platform, exe, argv0, confirmed,
+):
+    metadata = '/unused/tmux.sock\t100\t%1\t200\t1\t0\t2\t\tbash'
+    view = frame(metadata, [BORDER, '> ', BORDER, 'auto'], '%1')
+    confirm = submission['confirm_wrapped_editor']
+    scope = confirm.__globals__
+    monkeypatch.setitem(scope, 'sys', SimpleNamespace(platform=platform))
+    monkeypatch.setitem(scope, '_process_columns', lambda *args:
+                        '200 100 200 200 pts/3 Ss bash\n202 200 200 200 pts/3 S+ launcher\n')
+    monkeypatch.setitem(scope, '_process_argv', lambda pid: [argv0, '--mode', 'auto', '/tmp/agy'])
+    monkeypatch.setitem(scope, '_editor_has_terminal_input', lambda pid, tty: (pid, tty) == (202, 'pts/3'))
+
+    def readlink(path):
+        assert path == '/proc/202/exe'
+        if exe is None:
+            raise FileNotFoundError(path)
+        return exe
+
+    monkeypatch.setitem(scope, 'os', SimpleNamespace(readlink=readlink))
+    assert view.editor == 'agy' and view.empty
+    assert confirm(view).allows_paste('First line\nSecond line') is confirmed

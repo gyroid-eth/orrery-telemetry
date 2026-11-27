@@ -49,7 +49,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 57
+API_GENERATION = 58
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -71,9 +71,10 @@ if __name__ == '__main__':
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
-    from dashboard import codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
+    from dashboard import chrome_readiness, codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
     from dashboard.local_model_makers import LOCAL_MAKER_ASSETS
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
+    import chrome_readiness
     import codex_models
     import mail_signals
     import provider_stalls
@@ -2423,7 +2424,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
     if (kind in {"claude", "codex", "antigravity"} and registration and transcript and not parent
             and not os.path.lexists(Path(RUNTIME_DIR) / "child-agents" / f"{name}.json")
             and (kind != "codex" or provenance.get("launch_origin") == "standalone")
-            and (kind != "antigravity" or sys.platform == "darwin")
+            and (kind != "antigravity" or sys.platform in {"darwin", "linux"})
             and (kind != "claude" or spec is None or spec.get("standalone") is True)):
         parent_state = "top"
         permission_reason = _standalone_permission_block(registration, name)
@@ -5863,6 +5864,11 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expect
             environment["AGENTSTACK_TOOLS_CHANGE_GENERATION"] = generation
         if os.environ.get("AGENTSTACK_SCREEN_PYTHON"):
             environment["AGENTSTACK_SCREEN_PYTHON"] = os.environ["AGENTSTACK_SCREEN_PYTHON"]
+        if node := os.environ.get("AGENTSTACK_DSH_NODE"):
+            environment["AGENTSTACK_DSH_NODE"] = node
+        if _is_wsl():
+            if interop := _screen_http().wsl_launch_interop():
+                environment["WSL_INTEROP"] = interop
         context = Path(HOOKS_DIR) / "project-context.sh"
         command = (
             ". " + shlex.quote(str(context)) + ' && agentstack_apply_workspace_context "$PWD" "$AGENTSTACK_PROJECT_KEY" && exec '
@@ -8745,7 +8751,13 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
             servers = selection.claude_mcp_definitions(claude_json, cwd)
             if provider in harness_runtime.HARNESSES:
                 servers = {**(config.get("mcp_servers") or {}), **servers}
-        spec = selection.normalize(old["base"], selection.change_permission(old["tools"], permission, servers))
+        wsl_agy = provider == "antigravity" and _is_wsl()
+        if wsl_agy and permission.get("computer_use") in ("view", "control"):
+            reason = _spawn_computer_catalog().get("computer_use_reason")
+            if reason:
+                raise ValueError(reason)
+        spec = selection.normalize(old["base"], selection.change_permission(
+            old["tools"], permission, servers, managed_screen=wsl_agy))
         if provider == "claude":
             selection.check_provider(spec, provider)
             if "browser_mode" in permission:
@@ -9476,6 +9488,40 @@ def _spawn_browser_modes():
     return tools.launch_browser_modes(config)
 
 
+def _spawn_browser_catalog():
+    tools = _child_tools_module()
+    config = tools.native_codex_config(resume=_child_resume_module())
+    modes = tools.launch_browser_modes(config)
+    catalog = {"browser_modes": modes}
+    wsl = _is_wsl()
+    harnesses = {key for key in ("codex", "dsh", "hermes", "antigravity") if "personal" in modes.get(key, ())}
+    if harnesses and (sys.platform == "darwin" or wsl):
+        # Claude's personal mode uses Claude in Chrome. An explicit Codex
+        # channel can likewise connect to a different Chrome installation.
+        if "codex" in harnesses:
+            custom = tools._native_codex_browser(config, explicit=True)
+            if custom and any(arg.split("=", 1)[0] == "--channel" for arg in custom[1].get("args", ())):
+                harnesses.discard("codex")
+        if harnesses:
+            reason, unavailable = chrome_readiness.personal_browser_reason(wsl=wsl)
+            if reason:
+                catalog["personal_browser_status"] = {
+                    key: {"reason": reason, "unavailable": unavailable} for key in sorted(harnesses)
+                }
+    return catalog
+
+
+def _spawn_computer_catalog():
+    if _is_wsl():
+        reason = ("Computer use is unavailable in this launch mode." if FRESH_MODE or GLOBAL_MODE else
+                  _screen_http().wsl_computer_use_reason(_env_path("AGENTSTACK_HOME", "~/.agentstack"), HOOKS_DIR))
+        return {"computer_use": not reason, "computer_use_transport": "orrery-screen",
+                "computer_modes": ["off"] if reason else ["off", "view", "control"],
+                **({"computer_use_reason": reason} if reason else {})}
+    return {"computer_use": sys.platform == "darwin",
+            **({"computer_modes": ["off", "view", "control"]} if sys.platform == "darwin" and not FRESH_MODE else {})}
+
+
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     if sys.platform == "win32":
@@ -9512,8 +9558,7 @@ def spawn_names_payload() -> dict:
     local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
         os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
     return {
-        "computer_use": sys.platform == "darwin",
-        **({"computer_modes": ["off", "view", "control"]} if sys.platform == "darwin" and not FRESH_MODE else {}),
+        **_spawn_computer_catalog(),
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
@@ -9521,7 +9566,7 @@ def spawn_names_payload() -> dict:
         "dirs": dirs,
         "native_browser_dirs": _native_browser_directories(dirs) if local_catalog and not FRESH_MODE else [],
         "supports_browser_off": not FRESH_MODE,
-        **({"browser_modes": _spawn_browser_modes()} if not FRESH_MODE else {}),
+        **(_spawn_browser_catalog() if not FRESH_MODE else {}),
         "models": list(claude_models),
         "default_model": claude_default,
         "providers": [
@@ -10402,7 +10447,7 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
         if error:
             return error
         if (spec.provider not in ("claude", "codex") and spec.program not in harness_runtime.HARNESSES
-                and (spec.program != "antigravity" or sys.platform != "darwin")
+                and (spec.program != "antigravity" or not spec.standalone_supported)
                 and (payload.get("tools") or payload.get("base") not in (None, "default"))):
             return {"ok": False,
                     "error": f"base and tools are not supported for provider: {spec.provider}"}
@@ -10488,6 +10533,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     if standalone and not spec.standalone_supported:
         return {"ok": False,
                 "error": f"standalone not supported for provider {provider}"}
+    if _is_wsl() and {"screen:read:orrery-screen", "screen:operate:orrery-screen"}.intersection(spec.provider_args):
+        reason = _spawn_computer_catalog().get("computer_use_reason")
+        if reason:
+            return {"ok": False, "error": reason}
     if requested_name and re.fullmatch(
             r"[A-Z][A-Za-z]{1,63}(?:-[A-Z][A-Za-z]{1,63})?",
             requested_name) is None:
@@ -10587,7 +10636,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         result.update(extra)
         return result
 
-    requires_child_binding = provider in {"claude", "codex"} or (provider == "gemini" and sys.platform == "darwin")
+    requires_child_binding = provider in {"claude", "codex"} or (provider == "gemini" and spec.standalone_supported)
     if requires_child_binding and (
         type(registered_agent_id) is not int or registered_agent_id <= 0
     ):
@@ -10846,6 +10895,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     env = os.environ.copy()
     # Provider values first: the identity/context keys below always win.
     env.update(_spawn_env_overrides(payload, spec))
+    if _is_wsl() and {"screen:read:orrery-screen", "screen:operate:orrery-screen", "browser-mode:personal"}.intersection(
+            spec.provider_args):
+        if interop := _screen_http().wsl_launch_interop():
+            env["WSL_INTEROP"] = interop
     # A dashboard request states Claude in Chrome explicitly (spec.provider_args);
     # the CLI env defaults would otherwise turn an unchecked box back on.
     env.pop("AGENTSTACK_CLAUDE_CHILD_CHROME", None)
@@ -11174,9 +11227,9 @@ def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
     else:
         live = sessions[session]
         selector = live["session_id"]
-        expected = f'{session}|{live["created"]}|{live["server_pid"]}'
-        if _tmux(["display-message", "-t", selector, "-p", "#{session_name}|#{session_created}|#{pid}"]).strip() != expected:
-            return {"ok": False, "error": "The agent's tmux session changed before exit"}
+    target_format = "#{session_name}|#{session_created}|#{pid}|#{pane_id}"
+    def observed_target():
+        return _tmux(["display-message", "-t", selector, "-p", target_format]).strip()
 
     actions = []
     if target.get("attached"):
@@ -11214,10 +11267,18 @@ def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
         actions.extend(["provider-headless:antigravity", "interrupt-sent"])
         return {"ok": True, "session": session, "actions": actions}
 
+    observed = observed_target()
+    fields = observed.split("|")
+    if (len(fields) != 4 or fields[0] != session or not all(field.isdigit() for field in fields[1:3])
+            or not re.fullmatch(r"%\d+", fields[3])
+            or sessions is not None and fields[1:3] != [str(live["created"]), str(live["server_pid"])]):
+        return {"ok": False, "error": "The agent's tmux session changed before exit"}
+    pane = fields[3]
+
     # pane で動いているプロセスを確認
     # Claude Code は Python プロセス → "Python" / シェルゾンビは "zsh"/"bash" 等
     _SHELL_PROCS = {"zsh", "bash", "sh", "fish", "csh", "tcsh", "dash"}
-    pane_cmd_r = _tmux_run(['display-message', '-t', selector, '-p', '#{pane_current_command}'], capture_output=True, text=True)
+    pane_cmd_r = _tmux_run(['display-message', '-t', pane, '-p', '#{pane_current_command}'], capture_output=True, text=True)
     pane_cmd = pane_cmd_r.stdout.strip().lower()
 
     # build_agents() resolves Codex liveness from the shared process snapshot
@@ -11225,43 +11286,27 @@ def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
     # still classified from pane_current_command plus the title glyph, and on
     # macOS every Claude session is `zsh > claude` (the pane leader is the
     # shell), so a Claude whose title carries no glyph is "finished" while its
-    # REPL is alive. The descendant walk stays as the last guard: a shell
-    # `exit` is typed only when nothing agent-like runs below the pane.
+    # REPL is alive. The descendant walk keeps those wrapped agents eligible.
     agent_proc = ""
     if pane_cmd in _SHELL_PROCS and target["category"] == "finished":
-        agent_proc = _pane_agent_process(selector)
+        agent_proc = _pane_agent_process(pane)
         if agent_proc:
             actions.append(f"wrapper-shell:{pane_cmd}>{agent_proc}")
 
-    shell_exit = pane_cmd in _SHELL_PROCS and target["category"] == "finished" and not agent_proc
-    def send_exit(*keys):
-        if sessions is not None and _tmux(["display-message", "-t", selector, "-p",
-                                           "#{session_name}|#{session_created}|#{pid}"]).strip() != expected:
-            raise RuntimeError("The agent's tmux session changed before exit")
-        r = _tmux_run(['send-keys', '-t', selector, *keys], capture_output=True, text=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"tmux send-keys failed: {r.stderr.strip()}")
-    try:
-        if verified_program in harness_runtime.HARNESSES and not shell_exit:
-            pane = _tmux(["capture-pane", "-p", "-t", selector])
-            if harness_activity.parse_activity(pane, program) in {"work", "ask", "question"}:
-                send_exit("C-c" if program == "hermes" else "Escape")
-                deadline = time.monotonic() + 6
-                while time.monotonic() < deadline:
-                    pane = _tmux(["capture-pane", "-p", "-t", selector])
-                    if harness_activity.parse_activity(pane, program) == "wait":
-                        break
-                    time.sleep(0.2)
-                else:
-                    raise RuntimeError("The terminal did not return to its input prompt after interrupt")
-                actions.append("interrupted")
-        actions.append(_MODE_API['request_provider_exit'](
-            send=send_exit, interrupt=None, shell_exit=shell_exit, pause=time.sleep))
-    except RuntimeError as exc:
-        return {"ok": False, "error": str(exc)}
-    if shell_exit:
-        actions.append(f"zombie-pane:{pane_cmd}")
-
+    if pane_cmd in _SHELL_PROCS and target["category"] == "finished" and not agent_proc:
+        return {"ok": False, "error": "The agent has already exited. Close the remaining shell from its terminal."}
+    interrupt_key = None
+    if verified_program in harness_runtime.HARNESSES:
+        interrupt_key = "C-c" if program == "hermes" else "Escape"
+    error, interrupted = _MODE_API['runtime_tmux_api']()['submit_terminal_exit'](
+        lambda *args, **kwargs: _tmux_run(list(args), timeout=3, capture_output=True, text=True, **kwargs),
+        lambda: observed_target() == observed, pane, interrupt_key=interrupt_key,
+        activity=lambda screen: harness_activity.parse_activity(screen, program))
+    if error:
+        return {"ok": False, "error": error}
+    if interrupted:
+        actions.append("interrupted")
+    actions.append("exit-sent")
     return {"ok": True, "session": session, "actions": actions}
 
 
@@ -11395,14 +11440,19 @@ def mail_watcher_health() -> dict:
         "status": "unknown",
     }
 
+    state: dict = {}
     if os.path.exists(NOTIFY_STATE_FILE):
         try:
             with open(NOTIFY_STATE_FILE, encoding="utf-8") as f:
-                state = json.load(f)
+                saved = json.load(f)
+                if isinstance(saved, dict):
+                    state = saved
             latest_success = 0
             counts: dict[str, int] = {}
             cutoff = now - 600
             for entry in state.values():
+                if not isinstance(entry, dict):
+                    continue
                 lr = entry.get("last_result", "")
                 la = entry.get("last_attempt_epoch", 0) or 0
                 if la >= cutoff:
@@ -11417,7 +11467,7 @@ def mail_watcher_health() -> dict:
         except (json.JSONDecodeError, OSError):
             pass
 
-    result.update(mail_signals.counts(_signal_agent_dirs(), RUNTIME_DIR, now))
+    result.update(mail_signals.counts(_signal_agent_dirs(), RUNTIME_DIR, now, notification_state=state))
 
     # 配送本体は mail-watcher に統合。GUI launchd domain が使えない環境でも
     # watcher 自身が持つ pidfile と command line を照合して実プロセスを判定する。
@@ -11449,7 +11499,7 @@ def mail_watcher_health() -> dict:
     #         が無いだけの健全 idle も green とし、誤警報 (健全なのに yellow) を防ぐ。
     if not watcher or signals > 50:
         result["status"] = "red"
-    elif signals > 0 and (age is None or age > 120):
+    elif result["blocked_recipients"] or (signals > 0 and (age is None or age > 120)):
         result["status"] = "yellow"
     else:
         result["status"] = "green"
