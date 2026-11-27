@@ -645,7 +645,8 @@ def submit_terminal_exit(command, admit, pane, *, interrupt_key=None, activity=N
         nonlocal reason
         reason = value
 
-    status = submission['submit'](guarded_command, admitted, pane, '/exit', on_wait=on_wait)
+    status = submission['submit'](guarded_command, admitted, pane, '/exit', on_wait=on_wait,
+                                  discard_unsubmitted=True)
     if entered:
         return None, interrupted
     if status == 'unknown':
