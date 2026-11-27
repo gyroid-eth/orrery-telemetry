@@ -211,22 +211,23 @@ def test_bound_tree_and_pixel_coordinates():
 def test_pinned_platform_tool_definitions_and_command(monkeypatch, platform, binary, args):
     monkeypatch.setenv("AGENTSTACK_CUA_DRIVER", "/fixture/" + binary)
     monkeypatch.setenv("AGENTSTACK_SCREEN_BINDING_FILE", "/fixture/private")
-    monkeypatch.setenv("WSL_DISTRO_NAME", "Fixture")
     monkeypatch.setenv("WSL_INTEROP", "/fixture/interop")
     monkeypatch.setenv("WSLENV", "AGENTSTACK_SCREEN_BINDING_FILE/w")
     monkeypatch.setenv("CUA_DRIVER_RS_TELEMETRY_ENABLED", "true")
     monkeypatch.setenv("CUA_DRIVER_RS_UPDATE_CHECK", "true")
     params = driver_parameters(platform)
     assert params.command == "/fixture/" + binary
-    assert params.args == args
+    assert params.args == args and params.env["WSL_INTEROP"] == "/fixture/interop"
     assert "AGENTSTACK_SCREEN_BINDING_FILE" not in params.env
-    legacy_env = {key: os.environ[key] for key in (
-        "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY",
-        "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "WSL_INTEROP", "WSL_DISTRO_NAME",
-    ) if key in os.environ}
-    if platform == "darwin":
-        legacy_env.update(CUA_DRIVER_RS_TELEMETRY_ENABLED="false", CUA_DRIVER_RS_UPDATE_CHECK="false")
-    assert params.env == legacy_env
+    assert params.env["CUA_DRIVER_RS_TELEMETRY_ENABLED"] == "false"
+    assert params.env["CUA_DRIVER_RS_UPDATE_CHECK"] == "false"
+    if platform == "windows":
+        assert set(params.env["WSLENV"].split(":")) == {
+            "CUA_DRIVER_RS_TELEMETRY_ENABLED/w",
+            "CUA_DRIVER_RS_UPDATE_CHECK/w",
+        }
+    else:
+        assert "WSLENV" not in params.env
     definitions = SCHEMAS[platform]
     assert set(definitions) == set(contract.TOOLS)
     read = public_schema(definitions["get_window_state"], "get_window_state")
@@ -237,8 +238,9 @@ def test_pinned_platform_tool_definitions_and_command(monkeypatch, platform, bin
 
 
 @pytest.mark.parametrize("version", ["0.55.0", "0.56.0"])
-def test_macos_driver_receives_opt_outs_after_executable_change(monkeypatch, tmp_path, version):
-    binary = tmp_path / version / "cua-driver"
+@pytest.mark.parametrize(("platform", "name"), [("darwin", "cua-driver"), ("windows", "cua-driver.exe")])
+def test_driver_receives_opt_outs_after_executable_change(monkeypatch, tmp_path, version, platform, name):
+    binary = tmp_path / version / name
     binary.parent.mkdir()
     binary.write_text(
         "#!/bin/sh\n"
@@ -251,7 +253,7 @@ def test_macos_driver_receives_opt_outs_after_executable_change(monkeypatch, tmp
     monkeypatch.setenv("CUA_DRIVER_RS_TELEMETRY_ENABLED", "true")
     monkeypatch.setenv("CUA_DRIVER_RS_UPDATE_CHECK", "true")
 
-    params = driver_parameters("darwin")
+    params = driver_parameters(platform)
     output = subprocess.check_output([params.command, *params.args], env=params.env, text=True)
 
     assert output.splitlines() == [version, "false", "false"]
