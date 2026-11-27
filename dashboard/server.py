@@ -11448,14 +11448,19 @@ def mail_watcher_health() -> dict:
         "status": "unknown",
     }
 
+    state: dict = {}
     if os.path.exists(NOTIFY_STATE_FILE):
         try:
             with open(NOTIFY_STATE_FILE, encoding="utf-8") as f:
-                state = json.load(f)
+                saved = json.load(f)
+                if isinstance(saved, dict):
+                    state = saved
             latest_success = 0
             counts: dict[str, int] = {}
             cutoff = now - 600
             for entry in state.values():
+                if not isinstance(entry, dict):
+                    continue
                 lr = entry.get("last_result", "")
                 la = entry.get("last_attempt_epoch", 0) or 0
                 if la >= cutoff:
@@ -11470,7 +11475,7 @@ def mail_watcher_health() -> dict:
         except (json.JSONDecodeError, OSError):
             pass
 
-    result.update(mail_signals.counts(_signal_agent_dirs(), RUNTIME_DIR, now))
+    result.update(mail_signals.counts(_signal_agent_dirs(), RUNTIME_DIR, now, notification_state=state))
 
     # 配送本体は mail-watcher に統合。GUI launchd domain が使えない環境でも
     # watcher 自身が持つ pidfile と command line を照合して実プロセスを判定する。
@@ -11502,7 +11507,7 @@ def mail_watcher_health() -> dict:
     #         が無いだけの健全 idle も green とし、誤警報 (健全なのに yellow) を防ぐ。
     if not watcher or signals > 50:
         result["status"] = "red"
-    elif signals > 0 and (age is None or age > 120):
+    elif result["blocked_recipients"] or (signals > 0 and (age is None or age > 120)):
         result["status"] = "yellow"
     else:
         result["status"] = "green"
