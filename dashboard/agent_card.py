@@ -155,7 +155,7 @@ def antigravity_tool_permissions(spec, computer=None, *, screen_live=False):
                    else {"browser_use_source": "launch"}))
 
 
-def permission_controls(row, browser_options=()):
+def permission_controls(row, browser_options=(), *, browser_unavailable=None):
     """Pair a display value with the action available for this roster row."""
     computer = row.get("computer_use")
     browser = row.get("browser_use")
@@ -205,6 +205,10 @@ def permission_controls(row, browser_options=()):
     if action and browser_reason:
         browser_control.update(can_change=False, change_reason=browser_reason, action=None)
     browser_control.update(mode=mode, options=list(browser_options) if browser_control["can_change"] else [])
+    if action and browser_unavailable:
+        unavailable = {option: detail for option, detail in browser_unavailable.items() if option not in browser_options}
+        if unavailable:
+            browser_control["unavailable"] = unavailable
     return controls
 
 

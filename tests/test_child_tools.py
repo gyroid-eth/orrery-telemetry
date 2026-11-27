@@ -1256,11 +1256,18 @@ def test_wsl_node_without_linux_chrome_does_not_offer_temporary_browser(tmp_path
         "args": [r"C:\fixture\node_modules\npm\bin\npx-cli.js"],
     })
     monkeypatch.setattr(child_tools.shutil, "which", lambda name: "/fixture/chrome.exe" if name == "google-chrome" else None)
-    choices = child_tools.launch_browser_modes({}, home=tmp_path)
+    unavailable = {}
+    choices = child_tools.launch_browser_modes({}, home=tmp_path, unavailable=unavailable)
     assert choices == {key: ["off", "personal"] for key in
                        ("claude-code", "codex", "dsh", "hermes", "antigravity")}
+    assert unavailable["temporary"]["reason"] == child_tools.WSL_TEMPORARY_BROWSER_MISSING
+    assert unavailable["temporary"]["command"] == child_tools.WSL_TEMPORARY_BROWSER_INSTALL
     with pytest.raises(child_tools.ToolsError, match="inside WSL"):
         child_tools._browser_mcp("temporary")
+    monkeypatch.setattr(child_tools.shutil, "which", lambda name: "/fixture/chromium" if name == "chromium" else None)
+    unavailable = {}
+    choices = child_tools.launch_browser_modes({}, home=tmp_path, unavailable=unavailable)
+    assert not unavailable and all("temporary" in modes for modes in choices.values())
 
 
 def test_wsl_personal_chrome_uses_windows_node_and_autoconnect(tmp_path, monkeypatch):

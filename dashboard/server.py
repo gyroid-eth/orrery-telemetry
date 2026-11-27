@@ -2627,6 +2627,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
            for rt in runtime_by_name.values()):
         codex_catalog = (*codex_models.DEFAULT_MODELS, *codex_models.discover_models())
     permission_browser_modes = None
+    permission_browser_unavailable = {}
     for row in rows:
         name = row["name"]
         row['annot'] = annotations.get(name)
@@ -2677,12 +2678,12 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                        permission_resume_reason=_resume_unavailable(row["resume_capability"])["error"])
         if row["permission_resume_supported"] and permission_browser_modes is None:
             try:
-                permission_browser_modes = _spawn_browser_modes()
+                permission_browser_modes = _spawn_browser_modes(unavailable=permission_browser_unavailable)
             except (OSError, RuntimeError, ValueError):
                 permission_browser_modes = {}
         browser_kind = "claude-code" if row.get("harness_kind") == "claude" else row.get("harness_kind")
         browser_options = (permission_browser_modes or {}).get(browser_kind, ("off",))
-        controls = agent_card.permission_controls(row, browser_options)
+        controls = agent_card.permission_controls(row, browser_options, browser_unavailable=permission_browser_unavailable)
         if controls is not None:
             row["permission_controls"] = controls
             if not any(control["can_change"] for control in controls.values()):
@@ -9567,10 +9568,10 @@ def _native_browser_directories(dirs):
     return available
 
 
-def _spawn_browser_modes():
+def _spawn_browser_modes(*, unavailable=None):
     tools = _child_tools_module()
     config = tools.native_codex_config(resume=_child_resume_module())
-    return tools.launch_browser_modes(config)
+    return tools.launch_browser_modes(config, unavailable=unavailable)
 
 
 def _spawn_browser_catalog():
