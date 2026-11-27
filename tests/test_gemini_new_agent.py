@@ -211,7 +211,7 @@ def test_gemini_dry_run_does_not_create_handoffs_or_launch(monkeypatch, gemini_e
     assert result["effort"] == "medium" and result["dir"] == str(gemini_env.repo)
     assert result["argv"] == [str(gemini_env.adapter), "--pre-registered", "Sunny-Curie",
                               "--child-token-file", "<child-token-file>", "--model",
-                              "gemini-3.8-flash-medium", "--worktree",
+                              "gemini-3.8-flash-medium",
                               "implement the requested change", str(gemini_env.repo)]
     assert result["launcher_env"]["AGENTSTACK_GEMINI_TASK_FILE"] == "<gemini-task-file>"
     assert gemini_env.launches.launched == [] and gemini_env.launches.mcp_calls == []
@@ -266,8 +266,9 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
             "runtime": True,
             "transcript": False,
             "standalone": True,
-            "worktree_required": True,
-            "resources_required": True,
+            "resources": True,
+            "worktree_required": False,
+            "resources_required": False,
         },
     }
 
@@ -361,24 +362,18 @@ def test_spawn_catalog_honors_gemini_model_override(monkeypatch):
     assert gemini["default_model"] == "gemini-test-a"
 
 
-def test_effort_policy_has_one_owner(monkeypatch, tmp_path):
+def test_effort_policy_has_one_owner(monkeypatch, gemini_env):
     entrypoint = (ROOT / "dashboard" / "provider_server.py").read_text(encoding="utf-8")
     assert "effort_required" not in entrypoint
     assert "effort_default" not in entrypoint
 
     # Flipping the one declaration moves catalog, validation, and UI together.
     monkeypatch.setitem(gemini_runtime.CAPABILITIES, "effort_required", False)
-    gemini = next(
-        provider for provider in server.spawn_names_payload()["providers"]
-        if provider["id"] == "gemini"
-    )
+    gemini = gemini_runtime._catalog_item(list(gemini_runtime._DEFAULT_MODELS))
     assert gemini["capabilities"]["effort_required"] is False
     assert gemini["effort_default"] == "high"
-    result = server.do_spawn({
-        "parent": "Parent", "task": "work", "dir": str(tmp_path),
-        "provider": "gemini", "model": "gemini-3.8-flash-high",
-    })
-    assert result == {"ok": False, "error": "resources required for provider gemini"}
+    result = server.do_spawn(_gemini_payload(gemini_env, effort=None, resources=None, dry_run=True))
+    assert result["ok"] and result["effort"] == "high"
 
 
 def test_direct_cli_launchers_keep_historical_high_effort_fallback():
@@ -390,7 +385,8 @@ def test_direct_cli_launchers_keep_historical_high_effort_fallback():
 
 @pytest.mark.parametrize("kernel", ["Darwin", "Linux"])
 def test_direct_gemini_delegation_passes_tools_to_the_interactive_adapter(tmp_path, kernel):
-    repo = _make_repo(tmp_path)
+    folder = tmp_path / "plain folder"
+    folder.mkdir()
     home = tmp_path / "install"
     fake_bin = tmp_path / "bin"
     _executable(fake_bin / "agy", "#!/bin/sh\n")
@@ -419,24 +415,33 @@ def test_direct_gemini_delegation_passes_tools_to_the_interactive_adapter(tmp_pa
         "FIXTURE_ADAPTER_ARGS": str(out),
     }
     result = _REAL_RUN(["/bin/bash", str(ROOT / "hooks/spawn_gemini_child.sh"),
-                        "--resources", "src/**", "--tools", "browser-mode:temporary", "Fixture task", str(repo)],
+                        "--tools", "browser-mode:temporary", "Fixture task", str(folder)],
                        env=env, text=True, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
     argv = out.read_text().splitlines()
     assert argv[argv.index("--tools") + 1] == "browser-mode:temporary"
-    assert argv[-2:] == ["", str(repo.resolve())]
+    assert "--worktree" not in argv and "--standalone" not in argv
+    assert argv[-2:] == ["", str(folder.resolve())]
 
 
-def test_gemini_spawn_requires_declared_resources(tmp_path):
-    result = server.do_spawn({
-        "parent": "Parent-Curie",
-        "task": "inspect the dashboard",
-        "dir": str(tmp_path),
-        "provider": "gemini",
-        "model": "gemini-3.8-flash-high",
-        "effort": "high",
-    })
-    assert result == {"ok": False, "error": "resources required for provider gemini"}
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+@pytest.mark.parametrize("resources", ["notes.md", None])
+def test_delegated_gemini_launches_in_non_git_folder(gemini_env, monkeypatch, platform, resources):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform=platform))
+    monkeypatch.setattr(gemini_runtime, "_git", lambda *_: pytest.fail("a worktree was not requested"))
+    picked = gemini_env.tmp / "shared folder"
+    picked.mkdir()
+    payload = _gemini_payload(gemini_env, dir=str(picked), resources=resources)
+    preview = server.do_spawn(dict(payload, dry_run=True))
+    assert preview["ok"] and not preview["worktree"]
+    assert not gemini_env.launches.mcp_calls
+    result = server.do_spawn(payload)
+    assert result["ok"] and not result["standalone"] and not result["worktree"]
+    [(argv, kwargs)] = gemini_env.launches.launched
+    assert "--standalone" not in argv and "--worktree" not in argv and argv[-1] == str(picked)
+    assert kwargs["env"]["PARENT_AGENT"] == "Parent"
+    assert kwargs["env"]["AGENTSTACK_GEMINI_RESOURCES"] == (resources or "")
+    assert not list(picked.iterdir())
 
 
 def test_gemini_spawn_requires_explicit_effort(tmp_path):
@@ -877,9 +882,9 @@ def test_preflight_failures_do_not_register_junk_identities(gemini_env, monkeypa
 
     plain = tmp_path / "plain"
     plain.mkdir()
-    attempt("git", dir=str(plain))
-    attempt("base", worktree_base="no-such-rev")
-    attempt("base-option", worktree_base="--output=/tmp/x")
+    attempt("git", dir=str(plain), worktree=True)
+    attempt("base", worktree=True, worktree_base="no-such-rev")
+    attempt("base-option", worktree=True, worktree_base="--output=/tmp/x")
     attempt("parent", parent="Missing")
 
     gemini_env.adapter.chmod(0o644)
@@ -900,7 +905,7 @@ def test_preflight_failures_do_not_register_junk_identities(gemini_env, monkeypa
 # Dispatch contract, identity, and task authority
 # --------------------------------------------------------------------------- #
 def test_gemini_spawn_dispatches_existing_preregistered_adapter(gemini_env):
-    result = server.do_spawn(_gemini_payload(gemini_env))
+    result = server.do_spawn(_gemini_payload(gemini_env, worktree=True))
 
     assert result["ok"] is True
     assert result["provider"] == "gemini"
@@ -1352,9 +1357,9 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
         "provider": "gemini", "model": "gemini-3.8-flash-high", "effort": "medium",
     }
     assert out["geminiSelected"] | {"payload": None} == {
-        "worktree": True, "locked": True, "resourcesShown": True, "resources": "",
+        "worktree": False, "locked": False, "resourcesShown": True, "resources": "",
         "effort": "", "launchDisabled": True,
-        "status": "resources are required for this provider", "statusError": False,
+        "status": "select an effort for this provider", "statusError": False,
         "payload": None,
     }
     assert out["geminiResourcesOnly"]["launchDisabled"] is True
@@ -1365,13 +1370,13 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     assert out["geminiReady"]["statusError"] is False
     assert out["geminiReady"]["payload"] == {
         **base_payload, "provider": "gemini", "model": "gemini-3.8-flash-high",
-        "effort": "medium", "resources": "src/**", "worktree": True,
+        "effort": "medium", "resources": "src/**",
     }
     fixed = out["geminiFixed"]
     assert fixed["effortHidden"] and not fixed["launchDisabled"]
     assert fixed["payload"] == {
         **base_payload, "provider": "gemini", "model": "gemini-pro-orchestrator",
-        "resources": "tests/**", "worktree": True,
+        "resources": "tests/**",
     }
     for key, provider, model, effort in (
             ("claudeAfterGemini", "claude", "claude-sonnet-5", None),
@@ -1388,8 +1393,7 @@ def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     assert out["claudeChoiceRestored"]["worktree"] is True
     assert out["claudeChoiceRestored"]["locked"] is False
     assert out["claudeChoiceRestored"]["payload"]["worktree"] is True
-    assert out["restoredGeminiMissing"]["status"] == (
-        "resources are required for this provider")
+    assert out["restoredGeminiMissing"]["status"] == "select an effort for this provider"
     assert out["restoredGeminiMissing"]["statusError"] is False
     assert out["restoredGeminiReady"]["status"] == "restored saved task draft · /repo"
     assert out["restoredGeminiReady"]["statusError"] is False
@@ -1534,9 +1538,12 @@ def _mail_calls(run) -> list[str]:
         return []
 
 
-@pytest.mark.parametrize("isolation", [False, True])
+@pytest.mark.parametrize(("parent", "isolation", "resources"), [
+    ("", False, ""), ("", True, ""),
+    ("FixtureParent", False, ""), ("FixtureParent", False, "notes.md"),
+])
 @pytest.mark.parametrize("kernel", ["Darwin", "Linux"])
-def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, isolation, kernel):
+def test_bash_adapter_runs_with_private_config(tmp_path, parent, isolation, resources, kernel):
     selected = _make_repo(tmp_path) if isolation else tmp_path / "vault"
     selected.mkdir(exist_ok=True)
     home = tmp_path / "install"
@@ -1549,8 +1556,16 @@ def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, i
         "GROUP='fixture-reader'\nHOOKS=('SessionStart',)\n"
         "if __name__=='__main__': print('fixture-launch')\n")
     _executable(hooks / "cleanup-child-agent.sh", "#!/bin/sh\nexit 0\n")
-    for helper in ("agentstack-gemini-child-mail", "agentstack-gemini-stream", "agentstack-gemini-mcp"):
+    for helper in ("agentstack-gemini-stream", "agentstack-gemini-mcp"):
         _executable(home / "bin" / helper, "#!/bin/sh\nexit 99\n")
+    reservation = tmp_path / "reservation"
+    _executable(home / "bin/agentstack-gemini-child-mail",
+                f"#!{sys.executable}\n" + """
+import os, sys
+from pathlib import Path
+assert sys.argv[1] == "reserve"
+Path(os.environ["FIXTURE_RESERVATION"]).write_text("\\n".join(sys.argv[1:]) + "\\n")
+""")
     fake_bin = tmp_path / "commands"
     _executable(fake_bin / "uname", f"#!/bin/sh\nprintf '%s\\n' {kernel}\n")
     capture = tmp_path / "launch.json"
@@ -1624,27 +1639,39 @@ else:
     task.write_text("One canonical task.")
     result = _REAL_RUN(
         ["/bin/bash", str(ADAPTER), "--pre-registered", "FixtureAgy", "--child-token-file", str(token),
-         "--standalone", *(["--worktree"] if isolation else []), "--model", "gemini-fixture",
+         *([] if parent else ["--standalone"]), *(["--worktree"] if isolation else []), "--model", "gemini-fixture",
          "preview", str(selected)],
         env={**os.environ, "HOME":str(tmp_path), "PATH":f"{fake_bin}:{os.environ['PATH']}",
-             "PARENT_AGENT":"Unrelated", "AGENTSTACK_HOME":str(home), "AGENTSTACK_HOOKS_DIR":str(hooks),
+             "PARENT_AGENT":parent or "Unrelated", "AGENTSTACK_HOME":str(home), "AGENTSTACK_HOOKS_DIR":str(hooks),
              "AGENTSTACK_LABEL_PREFIX":"org.agentstack.test.gemini-adapter",
              "AGENTSTACK_PYTHON":sys.executable, "AGENTSTACK_RUNTIME_DIR":str(runtime),
              "AGENTSTACK_DSH_NODE":str(tmp_path / "local node/bin/node"),
              "AGENTSTACK_WORKTREE_ROOT":str(tmp_path / "worktrees"), "AGENTSTACK_PROJECT_KEY":"/fixture",
-             "AGENTSTACK_GEMINI_TASK_FILE":str(task), "FIXTURE_CAPTURE":str(capture)},
+             "AGENTSTACK_GEMINI_TASK_FILE":str(task), "AGENTSTACK_GEMINI_RESOURCES":resources,
+             "FIXTURE_CAPTURE":str(capture), "FIXTURE_RESERVATION":str(reservation)},
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
     observed = json.loads(capture.read_text())
     launched_folder = tmp_path / "worktrees/FixtureAgy" if isolation else selected
     assert observed["cwd"] == str(launched_folder)
-    assert observed["parent"] is None
+    assert observed["parent"] == (parent or None)
     assert observed["node"] == str(tmp_path / "local node/bin/node")
     assert "-i" not in observed["args"]
     delivered = capture.with_suffix(".task").read_text()
     assert delivered.count("One canonical task.") == 1
-    assert "independent Antigravity agent" in delivered
+    if parent:
+        assert f"a delegated Antigravity child of {parent}" in delivered
+        assert '"to": ["FixtureParent"]' in delivered
+    else:
+        assert "independent Antigravity agent" in delivered
+    if resources:
+        reservation_args = reservation.read_text().splitlines()
+        assert reservation_args[reservation_args.index("--paths") + 1] == resources
+        assert reservation_args[reservation_args.index("--worktree") + 1] == str(selected)
+        assert str(selected / resources) in delivered
+    else:
+        assert not reservation.exists()
     assert not any((directory / ".agents").exists() for directory in (selected, launched_folder))
     assert not list((runtime / "child-agents").glob("*.agy-config"))
     assert not token.exists() and not binding.exists() and not task.exists()

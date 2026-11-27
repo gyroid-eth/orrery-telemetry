@@ -397,7 +397,8 @@ def test_startup_marker_applies_only_to_current_launch(managed):
     assert agy._startup_state(runtime, NAME, IDENTITY + "-old") == {}
 
 
-def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_folder(tmp_path, monkeypatch):
+@pytest.mark.parametrize("parent", ["", "FixtureParent"])
+def test_private_launch_rebuilds_configuration_without_touching_selected_folder(tmp_path, monkeypatch, parent):
     cwd = tmp_path / "vault"
     own_hooks = cwd / ".agents" / "hooks.json"
     own_hooks.parent.mkdir(parents=True)
@@ -414,14 +415,18 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
     monkeypatch.setenv("TMUX_PANE", "%4")
     monkeypatch.setattr(server, "RUNTIME_DIR", str(runtime))
     monkeypatch.chdir(cwd)
-    agy.prepare(runtime, NAME, PROJECT, "", source=source, cwd=cwd,
-                binary=sys.executable, model="gemini-fixture", effort="high", standalone=True)
+    agy.prepare(runtime, NAME, PROJECT, parent, source=source, cwd=cwd,
+                binary=sys.executable, model="gemini-fixture", effort="high",
+                standalone=not parent, shared_workspace=bool(parent))
     state_path = runtime / "child-agents" / f"{NAME}.json"
     state = child_resume._load_state(state_path)
-    assert agy.launch_parent(state) == "" and "parent_agent" not in state
+    assert agy.launch_parent(state) == parent
+    assert state.get("parent_agent") == (parent or None)
     assert state["gemini_launch"]["cwd"] == str(cwd.resolve())
     card = server._agent_card_fields({"name": NAME, "program": "antigravity"}, {}, {}, REGISTRATION, ())
-    assert card["parent_state"] == "top" and card["parent_agent"] is None
+    assert card["parent_agent"] == (parent or None)
+    if not parent:
+        assert card["parent_state"] == "top"
     assert own_hooks.read_text() == '{"existing":{}}'
 
     def check_output(argv, **_kwargs):
@@ -437,7 +442,9 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
             return SimpleNamespace(returncode=0)
         added = Path(argv[argv.index("--add-dir") + 1])
         assert added.parent == state_path.parent and added != cwd
-        assert "PARENT_AGENT" not in env and "AGENTSTACK_PROXY_PARENT_AGENT" not in env
+        assert env.get("PARENT_AGENT") == (parent or None)
+        if not parent:
+            assert "AGENTSTACK_PROXY_PARENT_AGENT" not in env
         assert env["AGENTSTACK_AGY_HISTORY_LAUNCH"] == "fixture-nonce"
         assert Path.cwd() == cwd.resolve()
         settings = json.loads(argv[argv.index("--settings") + 1])
@@ -467,7 +474,7 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
     assert agy.run(runtime, NAME, conversation=SID) == 0
     assert len(launches) == 2
     assert launches[0][0] == "-i" and launches[0][1].endswith("\n\nOne initial task.")
-    assert '"to": ["<recipient agent name>"]' in launches[0][1]
+    assert json.dumps({"to": [parent or "<recipient agent name>"]})[:-1] in launches[0][1]
     assert "ServerName: chrome-devtools" not in launches[0][1]
     assert launches[1] == ["--conversation", SID]
     assert not state_path.with_suffix(".agy-config").exists()

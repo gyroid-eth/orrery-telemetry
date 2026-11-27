@@ -51,6 +51,9 @@ PRINT_TIMEOUT="${AGENTSTACK_GEMINI_PRINT_TIMEOUT:-30m}"
 RESOURCE_TTL="${AGENTSTACK_GEMINI_RESOURCE_TTL:-14400}"
 WORKTREE_ROOT="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/worktrees}"
 WORKTREE_BASE_REV=""
+USE_WORKTREE=false
+INTERACTIVE=false
+case "$(uname -s)" in Darwin|Linux) INTERACTIVE=true ;; *) USE_WORKTREE=true ;; esac
 RESOURCES=""
 UNSAFE_NO_RESOURCES=false
 
@@ -63,16 +66,17 @@ CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: spawn_gemini_child.sh [options] --resources "path1,path2" "<task>" [WORKDIR]
+Usage: spawn_gemini_child.sh [options] "<task>" [WORKDIR]
 
 Options:
   --model MODEL           Antigravity model slug (default gemini-3.8-flash-high)
   --tools SPEC            macOS Computer use (screen, screen:read, or mcp:orrery-screen)
   --effort LEVEL          low, medium, or high (default high)
-  --resources CSV         resources to reserve before launch (required)
+  --resources CSV         optional reservations relative to the launch directory
   --resource-ttl SEC      reservation TTL (default 14400)
+  --worktree              create a Git worktree for the child
   --worktree-base REV     worktree base revision (default current HEAD)
-  --unsafe-no-resources   explicit opt-out from reservations
+  --unsafe-no-resources   explicit opt-out for the legacy non-interactive launcher
 EOF
 }
 
@@ -93,9 +97,11 @@ while [[ "${1:-}" == --* ]]; do
     --resource-ttl)
       [[ $# -ge 2 ]] || { usage; exit 2; }
       RESOURCE_TTL="$2"; shift 2 ;;
+    --worktree)
+      USE_WORKTREE=true; shift ;;
     --worktree-base)
       [[ $# -ge 2 ]] || { usage; exit 2; }
-      WORKTREE_BASE_REV="$2"; shift 2 ;;
+      WORKTREE_BASE_REV="$2"; USE_WORKTREE=true; shift 2 ;;
     --unsafe-no-resources)
       UNSAFE_NO_RESOURCES=true; shift ;;
     -h|--help)
@@ -113,10 +119,11 @@ WORK_DIR="${2:-$PWD}"
 [[ -n "$TASK" ]] || { usage; exit 2; }
 [[ -d "$WORK_DIR" ]] || { echo "$PROG: workdir does not exist: $WORK_DIR" >&2; exit 2; }
 [[ -n "$PROJECT_KEY" ]] || { echo "$PROG: AGENTSTACK_PROJECT_KEY is required" >&2; exit 2; }
-if [[ -z "$RESOURCES" && "$UNSAFE_NO_RESOURCES" != true ]]; then
+if [[ "$INTERACTIVE" != true && -z "$RESOURCES" && "$UNSAFE_NO_RESOURCES" != true ]]; then
   echo "$PROG: --resources or --unsafe-no-resources is required" >&2
   exit 2
 fi
+[[ "$WORKTREE_BASE_REV" != -* ]] || { echo "$PROG: worktree base must not start with '-'" >&2; exit 2; }
 case "$EFFORT" in
   low|medium|high) ;;
   *) echo "$PROG: invalid effort '$EFFORT' (expected low, medium, or high)" >&2; exit 2 ;;
@@ -148,16 +155,15 @@ fi
 
 agentstack_apply_workspace_context "$WORK_DIR" "$PROJECT_KEY" || exit 1
 WORK_DIR="$AGENTSTACK_PROJECT_WORK_DIR"
-SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
-[[ -n "$SOURCE_REPO" ]] || { echo "$PROG: delegated Gemini children require a git repository" >&2; exit 1; }
-if [[ -n "$WORKTREE_BASE_REV" ]]; then
-  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify "$WORKTREE_BASE_REV^{commit}" 2>/dev/null || true)"
-else
-  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify HEAD 2>/dev/null || true)"
+if [[ "$USE_WORKTREE" == true ]]; then
+  SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -n "$SOURCE_REPO" ]] || { echo "$PROG: a Gemini worktree requires a git repository" >&2; exit 1; }
+  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify "${WORKTREE_BASE_REV:-HEAD}^{commit}" 2>/dev/null || true)"
+  [[ -n "$BASE_REV" ]] || { echo "$PROG: could not resolve worktree base" >&2; exit 1; }
+  mkdir -p "$WORKTREE_ROOT"
 fi
-[[ -n "$BASE_REV" ]] || { echo "$PROG: could not resolve worktree base" >&2; exit 1; }
 
-mkdir -p "$RUNTIME_DIR" "$WORKTREE_ROOT"
+mkdir -p "$RUNTIME_DIR"
 chmod 700 "$RUNTIME_DIR" 2>/dev/null || true
 TOKEN_FILE="$RUNTIME_DIR/gemini-preregister-$$.token"
 TASK_RAW_FILE="$RUNTIME_DIR/gemini-task-$$.txt"
@@ -250,14 +256,13 @@ CHILD_NAME="$(
 [[ -n "$CHILD_NAME" ]] || { echo "$PROG: child preregistration returned no name" >&2; exit 1; }
 PREREGISTERED=true
 
-case "$(uname -s)" in Darwin|Linux)
-  if [[ -z "$RESOURCES" ]]; then
-    echo "$PROG: interactive Antigravity children require declared resources" >&2
-    exit 2
-  fi
+if [[ "$INTERACTIVE" == true ]]; then
   ( umask 077 && printf '%s' "$TASK" > "$TASK_RAW_FILE" )
   adapter_args=(--pre-registered "$CHILD_NAME" --child-token-file "$TOKEN_FILE" --model "$MODEL")
   adapter_args+=(${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"})
+  if [[ "$USE_WORKTREE" == true ]]; then
+    adapter_args+=(--worktree)
+  fi
   if [[ -n "$WORKTREE_BASE_REV" ]]; then
     adapter_args+=(--worktree-base "$WORKTREE_BASE_REV")
   fi
@@ -271,7 +276,7 @@ case "$(uname -s)" in Darwin|Linux)
     "${adapter_args[@]}" "" "$WORK_DIR"
   trap - EXIT
   exit 0
-;; esac
+fi
 
 BRANCH_NAME="exp/$CHILD_NAME"
 WORKTREE_DIR="$WORKTREE_ROOT/$CHILD_NAME"

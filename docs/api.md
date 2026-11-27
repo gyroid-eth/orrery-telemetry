@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":58}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":59}
 ```
 
 version の解決順は [インストール](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md#version)を参照してください。
@@ -930,7 +930,7 @@ Codex のモデル省略または `sol` で既定を変更した場合、preview
 
 `standalone: true` では `parent` を空に固定し、`PARENT_AGENT` を subprocess environment から削除します。synthetic self-mail は作らず、task の先頭4000文字を launcher へ直接渡します。通常 child は parent を sender とする inbox message と、parent 自身への BCC の audit trail を作り（BCC には通知が出ないので、parent が自分の依頼で起こされない）、登録 summary / launcher prompt は先頭80文字です。Antigravity の依頼は別に task Mail を作らず、専用 launcher が CLI へ渡します。
 
-API 50 の `gemini` は、macOS で `/api/spawn-names` に `capabilities.standalone: true` を返します。親なしでは `dir` が作業フォルダになり、`worktree: true` を選んだ場合だけ Git が必要です。親付きの起動には従来どおり worktree と `resources` が必要です。
+API 59 の `gemini` は、Mac と Linux（WSL を含む）で `dir` を使って親なし・親付きのどちらでも起動できます。Git が必要なのは `worktree: true` を指定したときです。親付きの `resources` は任意で、作業フォルダからの相対パスを指定します。worktree を選んだ場合は、そのルートからの相対パスになります。カタログは `resources: true`、`worktree_required: false`、`resources_required: false` を返します。
 
 Claude provider に `effort` を渡すと拒否します。Codex は正式な `gpt-*` IDをcacheにないという理由では拒否せず、明示 `AGENTSTACK_CODEX_MODELS` がある場合だけmembershipを制限します。UI はモデル別 effort 情報を候補表示と無指定時の既定に使い、明示 effort はそのまま Codex CLI へ渡して最終判定を任せます。無指定の model と effort は設定された既定を使い、未設定なら従来規則に従います。系統別の短縮名は新鮮な catalog の候補の最新版に追従し、新鮮な catalog に該当がなければ拒否し、未取得・期限切れでは同梱値を使います。Claude は local catalog の有無や期限とは独立して、正しい形式の正式IDを受け付けます。明示的な `AGENTSTACK_CLAUDE_MODELS` は厳格な許可リストとして扱い、不正な設定ではClaudeの起動を拒否します。Claude の固定既定は `claude-opus-5-5` で、許可リストから除外した状態でモデルを省略すると拒否します。別モデルへは置き換えません。詳細は [Claude model catalog](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-configuration.md#claude-model-catalog) を参照してください。
 

@@ -82,7 +82,7 @@ This product skill is installed at `${AGENTSTACK_HOME:-$HOME/.agentstack}/skills
 
 検索先を今回だけ切り替える場合、上の `payload` に `web_search: "exa"` または `web_search: "searxng"` を追加します。URL・資格は共通の managed spawn manifest の設定を使います。省略時はその設定、共通設定も無ければ従来の動作です。内部 launcher の指定は `--web-search exa|searxng` ですが、delegate は上の API を使ってください。
 
-For an **Antigravity child** requested with `gemini` or `antigravity`, choose provider `gemini` from the same catalog and use `POST /api/spawn`. Select its formal model ID, choose an explicit `effort` (`low`, `medium`, or `high`), and provide `resources` as a comma-separated string of repository-relative paths. Include the task, parent and working directory as above. The launcher creates a worktree and holds the declared reservations. Use the shared spawn-status and Mail follow-up steps. On macOS the child remains available after sending its report.
+For an **Antigravity child** requested with `gemini` or `antigravity`, choose provider `gemini` from the same catalog and use `POST /api/spawn`. Select its formal model ID and any explicit `effort` required by the catalog. Include the task, parent and working directory as above. On macOS and Linux (including WSL), use `worktree: true` when you want an isolated Git worktree. To reserve files at launch, supply `resources` as comma-separated paths relative to the launch directory. The child takes reservations before editing files. Use the shared spawn-status and Mail follow-up steps. The child remains available after sending its report.
 <!-- native-delegate:end -->
 ## Environment
 

@@ -112,6 +112,10 @@ def _guard_config(cwd):
     return path
 
 
+def _uses_launch_config(plan):
+    return plan.get("standalone") or plan.get("shared_workspace")
+
+
 def validate_plan(plan):
     if not isinstance(plan, dict):
         raise ValueError("Antigravity child launch settings are missing")
@@ -119,8 +123,8 @@ def validate_plan(plan):
     info = cwd.stat()
     if (not cwd.is_absolute() or cwd.resolve() != cwd or not cwd.is_dir()
             or [info.st_dev, info.st_ino] != plan["workspace_file_id"]):
-        raise ValueError("Antigravity child worktree was replaced or moved")
-    if not plan.get("standalone"):
+        raise ValueError("Antigravity's working directory was replaced or moved")
+    if not _uses_launch_config(plan):
         path = _guard_config(cwd)
         if (path.is_symlink() or child_resume._load_state(path) != _configured_hooks(plan["python"])):
             raise ValueError("Antigravity child reservation hook is unavailable")
@@ -141,14 +145,14 @@ def launch_parent(state):
 
 
 def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effort,
-            standalone=False, tools=()):
+            standalone=False, shared_workspace=False, tools=()):
     cwd = cwd.resolve(strict=True)
     binary = shutil.which(binary)
     if not binary or not history_helper().is_file():
         raise ValueError("Antigravity CLI and Reader are required for a managed interactive child")
     if standalone == bool(parent):
         raise ValueError("Antigravity launch requires exactly one of standalone or a parent")
-    path = None if standalone else _guard_config(cwd)
+    path = None if standalone or shared_workspace else _guard_config(cwd)
     if path is not None and (path.exists() or path.is_symlink()):
         raise ValueError("The worktree already has .agents/hooks.json")
     info = cwd.stat()
@@ -157,6 +161,9 @@ def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effor
             "model": model, "effort": effort, "tools": list(tools)}
     if standalone:
         plan["standalone"] = True
+    elif shared_workspace:
+        plan["shared_workspace"] = True
+    if path is None:
         validate_standalone_config(plan)
     else:
         hooks = _configured_hooks(plan["python"])
@@ -257,11 +264,11 @@ def _workspace_mcp_snapshot(runtime, state, cwd):
 def validate_permission_selection(runtime, state, spec):
     plan = state["gemini_launch"]
     cwd = validate_plan(plan)
-    child_tools.agy_validate_selection(spec, cwd=cwd if plan.get("standalone") else None)
+    child_tools.agy_validate_selection(spec, cwd=cwd if _uses_launch_config(plan) else None)
     mode = spec["tools"].get("browser_mode")
     if mode in ("temporary", "personal"):
         child_tools._browser_mcp(mode)
-    if not plan.get("standalone"):
+    if not _uses_launch_config(plan):
         _workspace_mcp_snapshot(runtime, state, cwd)
     child_tools.check_screen_relay(spec)
 
@@ -477,7 +484,8 @@ def run(runtime, name, task_file=None, conversation=None):
     else:
         env.pop("PARENT_AGENT", None)
         env.pop("AGENTSTACK_PROXY_PARENT_AGENT", None)
-    if conversation and not plan.get("standalone"):
+    private_config = _uses_launch_config(plan)
+    if conversation and not private_config:
         count = env.get("GIT_CONFIG_COUNT", "0")
         index = int(count) if count.isdecimal() else 0
         env[f"GIT_CONFIG_KEY_{index}"] = "core.excludesFile"
@@ -489,24 +497,23 @@ def run(runtime, name, task_file=None, conversation=None):
     status_path.unlink(missing_ok=True)
     config_dir = workspace_mcp = written_mcp = None
     try:
-        standalone = plan.get("standalone") is True
         changed = permission_selection(runtime, state, conversation) if conversation else None
         screen_mode = "off"
-        if standalone or conversation is None or changed:
+        if private_config or conversation is None or changed:
             spec = changed["selection"] if changed else _tool_selection(plan)
-            if changed and not standalone:
+            if changed and not private_config:
                 workspace_mcp = _workspace_mcp_snapshot(runtime, state, cwd)
             mcp_path = (workspace_mcp[0] if workspace_mcp else
-                        None if standalone else _delegated_mcp_path(cwd))
+                        None if private_config else _delegated_mcp_path(cwd))
             change_screen = changed and changed.get("computer_use_changed") and child_resume.tools_change_generation()
             generation = uuid.uuid4().hex
             mcp, screen_mode = child_tools.agy_launch_config(
                 _mail_server()["command"], spec, runtime=str(runtime), project=project, child=name,
                 mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
-                generation=generation, cwd=cwd if standalone else None,
+                generation=generation, cwd=cwd if private_config else None,
                 resume_from=(plan.get("screen_generation") or "") if conversation and not change_screen else None,
             )
-            if standalone:
+            if private_config:
                 directory = path.with_suffix(".agy-config")
                 _configure_standalone(directory, plan, mcp)
                 config_dir = directory
@@ -612,14 +619,14 @@ def guard(event, cwd, *, runtime):
                 or any(part.casefold() == ".git" for part in target.relative_to(cwd).parts)
                 or target in {(cwd / ".agents" / filename).resolve()
                               for filename in ("hooks.json", "mcp_config.json")}):
-            return {"decision": "deny", "reason": "Edit files only in the child worktree"}
+            return {"decision": "deny", "reason": "Edit files only in the launch directory"}
         inputs["file_path"] = str(target)
         mode = WRITE_TOOLS[name]
     elif name == "run_command":
         workdir = (cwd / Path(args.get("Cwd") or cwd)).resolve()
         if (args.get("BypassSandbox") or not workdir.is_relative_to(cwd)
                 or any(workdir.is_relative_to(root) for root in protected)):
-            return {"decision": "deny", "reason": "Use a sandboxed command inside the child worktree"}
+            return {"decision": "deny", "reason": "Use a sandboxed command inside the launch directory"}
         inputs["command"] = args["CommandLine"]
         cwd = workdir
         overwrite = {"Cwd": str(cwd)}
@@ -653,6 +660,7 @@ def main():
     setup.add_argument("model")
     setup.add_argument("effort")
     setup.add_argument("--standalone", action="store_true")
+    setup.add_argument("--shared-workspace", action="store_true")
     setup.add_argument("--tools", action="append", default=[])
     launch = actions.add_parser("run")
     group = launch.add_mutually_exclusive_group(required=True)
@@ -679,7 +687,7 @@ def main():
     if args.action == "prepare":
         prepare(runtime, name, os.environ["AGENTSTACK_PROJECT_KEY"], os.environ.get("PARENT_AGENT", ""),
                 source=args.source, cwd=args.cwd, binary=args.binary, model=args.model, effort=args.effort,
-                standalone=args.standalone, tools=args.tools)
+                standalone=args.standalone, shared_workspace=args.shared_workspace, tools=args.tools)
     elif args.action == "run":
         return run(runtime, name, args.task_file, args.conversation)
     elif args.action == "status":

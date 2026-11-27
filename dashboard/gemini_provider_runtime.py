@@ -42,8 +42,7 @@ CAPABILITIES = {
     "resume": False,
     "runtime": True,
     "transcript": False,
-    "worktree_required": True,
-    "resources_required": True,
+    "resources": True,
 }
 _ADAPTER_NAME = "spawn_gemini_preregistered.sh"
 _HELPER_NAMES = (
@@ -227,7 +226,9 @@ def _catalog_item(models: list[str]) -> dict:
         "model_efforts": model_efforts,
         "effort_default": "" if CAPABILITIES["effort_required"] else "high",
         "provider_key": "google",
-        "capabilities": {**CAPABILITIES, "standalone": sys.platform in {"darwin", "linux"}},
+        "capabilities": {**CAPABILITIES, "standalone": sys.platform in {"darwin", "linux"},
+                         "worktree_required": sys.platform not in {"darwin", "linux"},
+                         "resources_required": sys.platform not in {"darwin", "linux"}},
     }
 
 
@@ -237,9 +238,8 @@ def _catalog_item(models: list[str]) -> dict:
 def normalize_resources(raw: Any) -> str:
     """Return the canonical comma-separated resource form or raise ValueError.
 
-    Resources are reservation patterns relative to the repository root that
-    the child's isolated worktree mirrors.  Anything that could name a path
-    outside that root is rejected rather than rewritten.
+    Resources are reservation patterns relative to the selected working folder
+    or to the root of an explicitly requested worktree.
     """
     if raw is None:
         raw = ""
@@ -632,7 +632,8 @@ def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
     work_dir = request["work_dir"]
     if not os.path.isdir(work_dir):
         return {}, f"dir does not exist: {work_dir}"
-    if not request["standalone"] or request["worktree"]:
+    resource_root = work_dir
+    if request["worktree"] or sys.platform not in {"darwin", "linux"}:
         git = _which("git", _launch_path())
         if not git:
             return {}, "git not found for provider gemini"
@@ -645,10 +646,11 @@ def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
         if not _git(git, "-C", source_repo, "rev-parse", "--verify", "--quiet",
                     f"{base_rev}^{{commit}}"):
             return {}, f"could not resolve worktree base for provider gemini: {base_rev}"
-        if resources:
-            boundary = resource_boundary_error(source_repo, resources)
-            if boundary:
-                return {}, boundary
+        resource_root = source_repo
+    if resources:
+        boundary = resource_boundary_error(resource_root, resources)
+        if boundary:
+            return {}, boundary
     if not base._project_key():
         return {}, "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"
     if not (request["standalone"] or request["dry_run"]) and not base._runtime_agent_token(request["parent"]):
@@ -814,6 +816,8 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
             if payload.get("resources") not in (None, ""):
                 return {"ok": False, "error": "resources require a parent for provider gemini"}
             resources = ""
+        elif payload.get("resources") in (None, "") and standalone_supported:
+            resources = ""
         else:
             try:
                 resources = normalize_resources(payload.get("resources"))
@@ -826,7 +830,7 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
             tools = base._child_tools_module()
             try:
                 selection = tools.normalize(tools=payload.get("tools"))
-                cwd = request["work_dir"] if request["standalone"] and not request["worktree"] else None
+                cwd = request["work_dir"] if standalone_supported and not request["worktree"] else None
                 tools.agy_validate_selection(selection, cwd=cwd)
                 mode = selection["tools"].get("browser_mode")
                 if mode in ("temporary", "personal"):
@@ -845,7 +849,7 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
                 provider_args=tools_args,
                 effort=effort,
                 standalone_supported=standalone_supported,
-                worktree_required=not request["standalone"],
+                worktree_required=not standalone_supported,
                 # The adapter hands the full task to Antigravity and reports the
                 # result itself; a task mail would be a second, conflicting copy.
                 task_mail=False,

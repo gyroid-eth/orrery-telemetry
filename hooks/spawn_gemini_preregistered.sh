@@ -69,7 +69,7 @@ while [[ "${1:-}" == --* ]]; do
       GEMINI_TOOLS+=(--tools "$2"); shift 2 ;;
     --model) MODEL="${2:-}"; shift 2 ;;
     --worktree) USE_WORKTREE=true; shift ;;
-    --worktree-base) WORKTREE_BASE_REV="${2:-}"; shift 2 ;;
+    --worktree-base) WORKTREE_BASE_REV="${2:-}"; USE_WORKTREE=true; shift 2 ;;
     --standalone) STANDALONE=true; shift ;;
     *) echo "$PROG: unknown option: $1" >&2; usage; exit 2 ;;
   esac
@@ -86,9 +86,12 @@ if [[ "$STANDALONE" == true ]]; then
   export PARENT_AGENT=""
 else
   [[ -n "${PARENT_AGENT:-}" ]] || { echo "$PROG: PARENT_AGENT is required" >&2; exit 2; }
-  [[ -n "$RESOURCES" ]] || { echo "$PROG: Gemini dashboard launch requires declared resources" >&2; exit 2; }
-  USE_WORKTREE=true
+  if [[ "$INTERACTIVE" == 0 ]]; then
+    [[ -n "$RESOURCES" ]] || { echo "$PROG: Gemini dashboard launch requires declared resources" >&2; exit 2; }
+    USE_WORKTREE=true
+  fi
 fi
+[[ "$WORKTREE_BASE_REV" != -* ]] || { echo "$PROG: worktree base must not start with '-'" >&2; exit 2; }
 [[ -n "$TASK_FILE" && -s "$TASK_FILE" ]] || { echo "$PROG: full task handoff file is missing" >&2; exit 2; }
 [[ -d "$WORK_DIR" ]] || { echo "$PROG: workdir does not exist: $WORK_DIR" >&2; exit 2; }
 case "$MODEL" in gemini-pro-orchestrator|gemini-pro-orchestrator-*) EFFORT="" ;; esac
@@ -326,7 +329,7 @@ if root:
 print(",".join(canonical))
 PY
 }
-if [[ "$STANDALONE" != true ]]; then
+if [[ -n "$RESOURCES" ]]; then
   RESOURCES="$(validate_resources)" || exit 2
 fi
 
@@ -360,7 +363,9 @@ INTERACTIVE_PREPARED=false
 RESERVATION_SCOPE=()
 RESERVATION_TOKEN="$DURABLE_TOKEN"
 if [[ "$INTERACTIVE" == 1 ]]; then
-  RESERVATION_SCOPE=(--worktree "$WORKTREE_DIR")
+  reservation_root="$WORK_DIR"
+  if [[ "$USE_WORKTREE" == true ]]; then reservation_root="$WORKTREE_DIR"; fi
+  RESERVATION_SCOPE=(--worktree "$reservation_root")
   RESERVATION_TOKEN="$CHILD_TOKEN_FILE"
 fi
 
@@ -397,7 +402,7 @@ cleanup_failure() {
     rm -f "$TASK_EVENT_FILE" "$RUNNER_FILE" "$MCP_CONFIG" "$DURABLE_TOKEN" "$GIT_EXCLUDES_FILE" "$TASK_FILE"
     if [[ "$INTERACTIVE_PREPARED" == true ]]; then
       rm -f "$RUNTIME_DIR/child-agents/$CHILD_NAME.json" "$RUNTIME_DIR/child-agents/$CHILD_NAME.agy-status.startup"
-      if [[ "$STANDALONE" == true ]]; then
+      if [[ "$STANDALONE" == true || "$USE_WORKTREE" != true ]]; then
         rm -rf "$RUNTIME_DIR/child-agents/$CHILD_NAME.agy-config"
       fi
     fi
@@ -434,19 +439,20 @@ if [[ "$USE_WORKTREE" == true ]]; then
   agentstack_apply_workspace_context "$WORKSPACE_DIR" "$PROJECT_KEY" || exit 1
 fi
 
-if [[ "$STANDALONE" != true ]]; then
+if [[ -n "$RESOURCES" ]]; then
+  # Check the files in the directory the child actually uses.
+  RESOURCES="$(validate_resources "$WORKSPACE_DIR")" || exit 2
+  mail_helper reserve --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
+    --token-file "$RESERVATION_TOKEN" --paths "$RESOURCES" --ttl "$RESOURCE_TTL" ${RESERVATION_SCOPE[@]+"${RESERVATION_SCOPE[@]}"}
+  RESERVED=true
+fi
+
+if [[ "$STANDALONE" != true && "$USE_WORKTREE" == true ]]; then
 # Linked worktrees share .git/info/exclude. Use a child-owned excludes file
 # injected only into the Antigravity runner instead of mutating shared repo
 # metadata, so overlapping delegated children cannot remove each other's rule.
 GIT_EXCLUDES_FILE="$RUNTIME_DIR/gemini-git-excludes-$CHILD_NAME"
 ( umask 077 && printf '%s\n' '.agents/mcp_config.json' '.agents/hooks.json' > "$GIT_EXCLUDES_FILE" )
-
-# The worktree is what the child sees; check it before reserving anything.
-RESOURCES="$(validate_resources "$WORKTREE_DIR")" || exit 2
-
-mail_helper reserve --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
-  --token-file "$RESERVATION_TOKEN" --paths "$RESOURCES" --ttl "$RESOURCE_TTL" ${RESERVATION_SCOPE[@]+"${RESERVATION_SCOPE[@]}"}
-RESERVED=true
 
 if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev/null 2>&1; then
   echo "$PROG: tracked .agents/mcp_config.json exists; refusing to overwrite it" >&2
@@ -471,33 +477,45 @@ PY
 fi
 fi
 
-"$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKSPACE_DIR" "$INTERACTIVE" <<'PY'
+"$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKSPACE_DIR" "$INTERACTIVE" "$USE_WORKTREE" <<'PY'
 import json, os, sys
 from pathlib import Path
-raw_path, event_path, child, parent, resources, worktree, interactive = sys.argv[1:8]
+raw_path, event_path, child, parent, resources, worktree, interactive, use_worktree = sys.argv[1:9]
 workspace_root = Path(worktree).resolve(strict=False)
 task = open(raw_path, encoding="utf-8").read()
-# validate_resources already produced canonical repository-relative entries,
-# so each one anchors lexically inside the worktree.
+# validate_resources already produced canonical paths relative to workspace_root.
 anchored_resources = [
     os.fspath(workspace_root / item) for item in resources.split(",") if item
 ]
 resource_text = "\n".join(f"- {item}" for item in anchored_resources) or "- (explicitly none)"
+if use_worktree == "true":
+    resource_scope = (
+        "Use the worktree-anchored resource paths below. Do not search the source checkout, $HOME, or parent directories for them. "
+        "If a declared resource is absent from this worktree, report that exact failure instead of searching elsewhere. "
+        "Any matching path mentioned in the canonical task refers to the worktree-anchored path below. "
+    )
+    resource_heading = "Declared resources (worktree-anchored):"
+else:
+    resource_scope = (
+        "Use the workspace-anchored resource paths below. Do not search $HOME or parent directories for them. "
+        "If a declared resource is absent from this workspace, report that exact failure. "
+        "Any matching path mentioned in the canonical task refers to the workspace-anchored path below. "
+    )
+    resource_heading = "Declared resources (workspace-anchored):"
+reservation_note = "The launcher already reserved the declared resources. " if anchored_resources else ""
 prefix = (
     f"You are {child}, a delegated Antigravity child of {parent}. "
     f"Your active workspace root is {workspace_root}. "
-    "Work only in this isolated worktree. The launcher already reserved the declared resources. "
+    f"Work only in this workspace. {reservation_note}"
     "Resolve every relative path in the task and every declared resource strictly against this workspace root. "
-    "Use the worktree-anchored resource paths below. Do not search the source checkout, $HOME, or parent directories for them. "
-    "If a declared resource is absent from this worktree, report that exact failure instead of searching elsewhere. "
-    "Any matching path mentioned in the canonical task refers to the worktree-anchored path below. "
+    f"{resource_scope}"
     "Do not register another ORRERY identity. "
     + (f"Report to {parent} using the ORRERY Mail MCP send_message tool, then stay available for follow-up Mail. "
        "Use the native file edit tools and hold a file reservation for every edit. "
        "After a resume, obtain any needed reservations again.\n"
        if interactive == "1" else "The launcher will report your final result to the parent automatically.\n")
     +
-    f"Declared resources (worktree-anchored):\n{resource_text}\n\nCanonical task:\n"
+    f"{resource_heading}\n{resource_text}\n\nCanonical task:\n"
 ) if parent else (
     f"You are {child}, an independent Antigravity agent. Your working directory is {workspace_root}. "
     "Use the existing bound ORRERY Mail identity. Take a reservation before editing any file. "
@@ -514,6 +532,8 @@ if [[ "$INTERACTIVE" == 1 ]]; then
   interactive_args=(${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"})
   if [[ "$STANDALONE" == true ]]; then
     interactive_args+=(--standalone)
+  elif [[ "$USE_WORKTREE" != true ]]; then
+    interactive_args+=(--shared-workspace)
   fi
   AGENT_NAME="$CHILD_NAME" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" \
     "$PYTHON_BIN" "$INTERACTIVE_HELPER" prepare "$CHILD_TOKEN_FILE" "$WORKSPACE_DIR" "$GEMINI_BIN" "$MODEL" "$EFFORT" ${interactive_args[@]+"${interactive_args[@]}"}

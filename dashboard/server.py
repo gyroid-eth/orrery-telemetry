@@ -49,7 +49,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 58
+API_GENERATION = 59
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -5789,7 +5789,7 @@ def _gemini_resume_material(session, *, live=None):
         raise
     except (OSError, ValueError, KeyError, TypeError):
         raise _ResumeCapabilityError("config_unrestorable", "Antigravity launch settings are unavailable") from None
-    if state["gemini_launch"].get("standalone"):
+    if state["gemini_launch"].get("standalone") or state["gemini_launch"].get("shared_workspace"):
         try:
             if changed:
                 interactive["validate_permission_selection"](runtime, state, changed["selection"])
@@ -5854,6 +5854,7 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expect
             "AGENTSTACK_WORKTREE_ROOT": _worktree_root(),
             "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": project,
             **({"AGENTSTACK_PORT": str(PORT)} if (state["gemini_launch"].get("standalone") is True
+                or state["gemini_launch"].get("shared_workspace") is True
                 or expected_history_session_id is not None or module.tools_record_path(runtime, session).is_file()) else {}),
             "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
             "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,
