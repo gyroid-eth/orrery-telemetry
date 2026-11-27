@@ -273,10 +273,20 @@ def test_default_spawn_preserves_pre_chrome_launch_and_prompt_with_child_setting
             prompts[label] = log.split("ARGV_TASK\034600\034", 1)[1].split("CALL", 1)[0]
             assert "\034load-buffer\034" not in log and "\034paste-buffer\034" not in log
         launches[label] = launch
-    # Compare the launch after checking the explicit child settings and
-    # normalizing the argument transport of the same first prompt.
+    # Keep the pre-Chrome launch comparison and allow only the documented
+    # change from the generic startup instruction to reading the task Mail.
     assert launches["new"] == launches["old"]
-    assert prompts["new"] == prompts["old"] and "SameChild" in prompts["new"]
+    old_ending = " and start the task immediately."
+    assert "SameChild" in prompts["old"] and prompts["old"].endswith(old_ending)
+    assert prompts["new"] == prompts["old"].removesuffix(old_ending) + (
+        ". The canonical task is in your ORRERY Mail inbox. "
+        "Use only the first matching coordination route in the managed instructions. "
+        'For a bound ORRERY proxy, call fetch_inbox with {"include_bodies": true} to read the task. '
+        "The proxy already has your identity and does not need a helper or token file. "
+        "If the provided schema is confirmed raw/direct, follow the managed raw/direct authentication "
+        "or recovery route before calling fetch_inbox with include_bodies set to true. "
+        "A proxy failure is not evidence to switch to raw or a helper. Treat the inbox request as authoritative."
+    )
     assert raw_inner.replace(ARGV_PROMPT, "") == PRE_CHROME_INNER
 
 
