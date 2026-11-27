@@ -366,8 +366,9 @@ def generate(document):
             raise ValueError('inherited_mcp_conflict')
         screen = selection.get('managed_screen')
         browser = selection.get('managed_browser')
+        browser_mode = selection.get('browser_mode')
         if ((selection.get('inherit') is False and any(name != PLUGIN for name in enabled))
-                or ((screen or selection.get('browser_mode') is not None)
+                or ((screen or browser_mode is not None)
                     and any(name not in (PLUGIN, 'orrery-telegram', 'orrery-web-search')
                             for name in enabled))):
             # Portable plugins can append MCP servers after config is loaded.
@@ -455,9 +456,14 @@ def generate(document):
                           for task in tasks},
             'delegation': _helper_route(native_provider, facts['helper_model']),
         }
+        managed_disabled = []
         if sys.platform == "darwin":
-            # Hermes also exposes a bundled Cua Driver toolset. A generated
-            # Mac child reaches the driver only through the ORRERY MCP relay.
+            # A generated Mac child reaches Cua Driver through the ORRERY MCP relay.
+            managed_disabled.append('computer_use')
+        if browser_mode is not None:
+            # Explicit Browser modes own browser automation, including Off.
+            managed_disabled.append('browser')
+        if managed_disabled:
             disabled = existing.get('agent', {}).get('disabled_toolsets') or []
             if isinstance(disabled, str):
                 try:
@@ -468,7 +474,7 @@ def generate(document):
             if not isinstance(disabled, (list, tuple)):
                 disabled = []
             overlay['agent']['disabled_toolsets'] = list(dict.fromkeys(
-                [*(name.strip() for name in disabled if isinstance(name, str) and name.strip()), 'computer_use']))
+                [*(name.strip() for name in disabled if isinstance(name, str) and name.strip()), *managed_disabled]))
         if telegram is not None:
             overlay['telegram'] = telegram
             overlay['plugins']['enabled'].append('orrery-telegram')

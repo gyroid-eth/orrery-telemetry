@@ -86,6 +86,7 @@ class ThinConfig(unittest.TestCase):
             self.assertNotIn(option, plan['argv'])
         overlay = config.read(Path(plan['config_dir']) / 'config.yaml')
         self.assertEqual(overlay['display']['busy_input_mode'], 'queue')
+        self.assertNotIn('browser', overlay['agent'].get('disabled_toolsets', []))
         self.assertEqual(overlay['auxiliary']['vision']['model'], 'fixture-main')
         self.assertNotIn('security', overlay)
         self.assertNotIn('max_tokens', json.dumps(overlay))
@@ -129,6 +130,33 @@ class ThinConfig(unittest.TestCase):
         self.save(self.profile / 'config.yaml', raw)
         with self.assertRaisesRegex(ValueError, 'inherited_mcp_conflict'):
             project('temporary', temporary)
+
+    def test_managed_browser_modes_disable_the_builtin_toolset(self):
+        from hooks import child_tools
+
+        self.save(self.profile / 'config.yaml', {
+            'agent': {'disabled_toolsets': "['memory']"},
+            'mcp_servers': {'old-browser': {'command': '/fixture/old-browser'}},
+        })
+        mail = config.read(self.document['mcp_config'])['mcpServers']
+        for platform in ('linux', 'darwin'):
+            for mode, flag in (('personal', '--autoConnect'), ('temporary', '--isolated'), ('off', None)):
+                with self.subTest(platform=platform, mode=mode), patch.object(config.sys, 'platform', platform), \
+                        patch.object(child_tools.shutil, 'which', return_value='/fixture/npx'):
+                    selection = child_tools.native_plan(child_tools.normalize(tools={'browser_mode': mode}),
+                        cwd=str(self.base), claude_json=str(self.base / 'absent.json'))
+                    self.save(Path(self.document['mcp_config']), {'mcpServers': {**mail, **selection['servers']}})
+                    plan = self.generate(mcp_selection=selection)
+                    overlay = config.read(Path(plan['config_dir']) / 'config.yaml')
+                    disabled = ['memory', 'computer_use'] if platform == 'darwin' else ['memory']
+                    self.assertEqual(overlay['agent']['disabled_toolsets'], [*disabled, 'browser'])
+                    servers = overlay['mcp_servers']
+                    active = mail.keys() | ({'chrome-devtools'} if flag else set())
+                    self.assertEqual({name for name, server in servers.items() if server['enabled']}, active)
+                    if flag:
+                        self.assertIn(flag, servers['chrome-devtools']['args'])
+                    raw = config.read(self.profile / 'config.yaml')
+                    self.assertEqual(raw['agent']['disabled_toolsets'], "['memory']")
 
     def test_mac_overlays_disable_bundled_computer_use_and_only_expose_managed_screen(self):
         from hooks import child_tools
