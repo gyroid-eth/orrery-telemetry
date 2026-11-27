@@ -139,6 +139,14 @@ def driver_parameters(platform):
     keys = ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY",
             "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "WSL_INTEROP", "WSL_DISTRO_NAME")
     env = {key: os.environ[key] for key in keys if key in os.environ}
+    opt_outs = {
+        "CUA_DRIVER_RS_TELEMETRY_ENABLED": "false",
+        "CUA_DRIVER_RS_UPDATE_CHECK": "false",
+    }
+    env.update(opt_outs)
+    if platform == "windows":
+        # Export only the opt-outs across WSL interop to the MCP executable.
+        env["WSLENV"] = ":".join(f"{key}/w" for key in opt_outs)
     return StdioServerParameters(command=binary, args=args, env=env)
 
 
