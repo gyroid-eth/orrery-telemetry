@@ -270,22 +270,24 @@ def test_default_spawn_matches_the_pre_chrome_launcher_exactly(tmp_path):
     # Without --claude-chrome the child is launched exactly as before, and gets
     # exactly the prompt it got before; only how the prompt travels changed.
     assert launches["new"] == launches["old"]
-    assert prompts["new"] == prompts["old"] and "SameChild" in prompts["new"]
+    check, task = prompts["new"].split("\n\n", 1)
+    assert "ORRERY Mail MCP send_message" in check
+    assert task == prompts["old"] and "SameChild" in task
     assert raw_inner.replace(ARGV_PROMPT, "") == PRE_CHROME_INNER
 
 
 @pytest.mark.parametrize("warm_model", ["opus", "sonnet"])
-def test_default_spawn_cold_starts_for_mac_screen_policy_and_uses_warm_pool_elsewhere(tmp_path, warm_model):
+def test_default_delegated_spawn_cold_starts_with_its_own_mail_proxy(tmp_path, warm_model):
     env, workdir = _launch_env(tmp_path)
     env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
     result = _spawn(tmp_path, env, workdir, "WarmChild", "--model", warm_model)
     assert result.returncode == 0, result.stderr
-    if sys.platform == 'darwin':
-        assert not (tmp_path / 'warm.log').exists()
-        assert '--disallowed-tools mcp__computer-use' in _new_session(env)[-1]
-        return
+    assert not (tmp_path / "warm.log").exists()
+    launch = _new_session(env)
     model = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5"}[warm_model]
-    assert (tmp_path / "warm.log").read_text() == f"claim-model WarmChild {model}\n"
+    assert f"CLAUDE_CHILD_MODEL={model}" in launch
+    if sys.platform == "darwin":
+        assert "--disallowed-tools mcp__computer-use" in launch[-1]
 
 
 @pytest.mark.parametrize("pool", [
@@ -307,15 +309,15 @@ def test_a_claim_that_cannot_promise_the_model_falls_back_to_cold_start(tmp_path
 
 
 
-def test_a_claim_reporting_another_model_is_stopped(tmp_path):
+def test_a_delegated_launch_skips_a_warm_process_without_its_bound_proxy(tmp_path):
     env, workdir = _launch_env(tmp_path)
     _simulate_linux_launcher(tmp_path)
     env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
-    env["FAKE_WARM_REPORT"] = "LyingChild claude-opus-7"
-    result = _spawn(tmp_path, env, workdir, "LyingChild", "--model", "opus")
-    assert result.returncode != 0
-    assert "reported 'LyingChild claude-opus-7' instead of 'LyingChild claude-opus-5-5'" in result.stderr
-    assert "Cold start" not in result.stderr
+    result = _spawn(tmp_path, env, workdir, "ColdChild", "--model", "opus")
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "warm.log").exists()
+    assert "Cold start" in result.stderr
+    assert "CLAUDE_CHILD_MODEL=claude-opus-5-5" in _new_session(env)
 
 
 @pytest.mark.parametrize("status", ["opus ready\nsonnet ready", "opus ready (claude-opus-5)\nsonnet ready (claude-sonnet-5)"])
@@ -903,11 +905,12 @@ def test_new_agent_form_offers_chrome_only_for_claude():
 
 
 
-def test_warm_handoff_refuses_a_different_resolved_identity(tmp_path):
-    env,workdir=_launch_env(tmp_path)
+def test_delegated_spawn_does_not_send_task_to_a_warm_identity(tmp_path):
+    env, workdir = _launch_env(tmp_path)
     _simulate_linux_launcher(tmp_path)
-    env['AGENTSTACK_HOOKS_DIR']=str(_hooks_with_warm_pool(tmp_path))
-    env['FAKE_WARM_IDENTITY_OVERRIDE']='AnotherIdentity'
-    result=_spawn(tmp_path,env,workdir,'WarmChild','--model','opus')
-    assert result.returncode!=0 and 'LAUNCH_IDENTITY_UNAVAILABLE' in result.stderr
-    assert 'load-buffer' not in (tmp_path/'tmux.log').read_text()
+    env["AGENTSTACK_HOOKS_DIR"] = str(_hooks_with_warm_pool(tmp_path))
+    env["FAKE_WARM_IDENTITY_OVERRIDE"] = "AnotherIdentity"
+    result = _spawn(tmp_path, env, workdir, "WarmChild", "--model", "opus")
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "warm.log").exists()
+    assert "load-buffer" not in (tmp_path / "tmux.log").read_text()

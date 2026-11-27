@@ -251,13 +251,13 @@ def validate_permission_selection(runtime, state, spec):
     child_tools.check_screen_relay(spec)
 
 
-def _managed_mail_approval_rules(home, cwd, config_dir):
+def _managed_mail_approval_rules(home, cwd, config_dir, *, wrapper=None):
     """Grant by tool name only when that name resolves to the child Mail wrapper."""
     configs = [("global", home / ".gemini" / "config" / "mcp_config.json"),
                ("workspace", Path(cwd) / ".agents" / "mcp_config.json")]
     if config_dir is not None:
         configs.append(("launch", config_dir / ".agents" / "mcp_config.json"))
-    managed = _mail_server()
+    managed = _mail_server() if wrapper is None else {"command": str(wrapper), "args": []}
     found = False
     for scope, path in configs:
         try:
@@ -276,6 +276,24 @@ def _managed_mail_approval_rules(home, cwd, config_dir):
     return [f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS] if found else []
 
 
+def _configured_permissions(home):
+    try:
+        configured = json.loads((home / ".gemini/antigravity-cli/settings.json").read_text())
+    except FileNotFoundError:
+        return {}
+    return configured.get("permissions") or {}
+
+
+def headless_mail_settings(home, cwd, wrapper):
+    rule = "mcp(orrery-mail/send_message)"
+    if rule not in _managed_mail_approval_rules(home, cwd, None, wrapper=wrapper):
+        return {}
+    permissions = _configured_permissions(home)
+    return {"permissions": {**permissions, "allow": list(dict.fromkeys(
+        [*permissions.get("allow", ()), rule]
+    ))}}
+
+
 def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None):
     if (prompt is None) == (conversation is None):
         raise ValueError("Provide the first task or an existing conversation")
@@ -285,11 +303,7 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
                     "command": shlex.join([plan["python"], str(Path(__file__).resolve()), "status"]),
                 }}
     home = Path.home()
-    try:
-        configured = json.loads((home / ".gemini/antigravity-cli/settings.json").read_text())
-    except FileNotFoundError:
-        configured = {}
-    permissions = configured.get("permissions") or {}
+    permissions = _configured_permissions(home)
     if screen_mode is None:
         screen_mode = child_tools.screen_mode(_tool_selection(plan))
     screen_permissions = []
@@ -528,11 +542,17 @@ def main():
     group.add_argument("--conversation")
     actions.add_parser("status")
     actions.add_parser("guard")
+    headless = actions.add_parser("headless-mail-settings")
+    headless.add_argument("cwd", type=Path)
+    headless.add_argument("wrapper", type=Path)
     for action in ("ready", "wake-ready"):
         ready = actions.add_parser(action)
         ready.add_argument("name")
         ready.add_argument("identity")
     args = parser.parse_args()
+    if args.action == "headless-mail-settings":
+        print(json.dumps(headless_mail_settings(Path.home(), args.cwd, args.wrapper)))
+        return 0
     runtime = Path(os.environ["AGENTSTACK_RUNTIME_DIR"])
     if args.action in {"ready", "wake-ready"}:
         activity = read_status(runtime, args.name, args.identity).get("activity")

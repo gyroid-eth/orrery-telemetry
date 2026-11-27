@@ -433,7 +433,12 @@ def _codex_entrypoint_layout(tmp_path: Path, layout: str) -> dict[str, Path]:
         for relative in (
             "bin/agentstack-preregister-child",
             "hooks/spawn_child.sh",
+            "hooks/child-mail-readiness.sh",
+            "hooks/child_tools.py",
+            "hooks/screen_state.py",
             "hooks/codex-bin.sh",
+            "integrations/codex_app/src/agentstack_codex_app/child_mail_readiness.py",
+            "integrations/codex_app/src/agentstack_codex_app/agent_mail_client.py",
             "dashboard/codex_models.py",
             "hooks/child_resume.py",
             "hooks/prepare-codex-session-binding.py",
@@ -473,7 +478,8 @@ def _fake_codex_launch_env(
         "{ printf 'CALL'; for arg in \"$@\"; do printf '\\034%s' \"$arg\"; done; "
         "printf '\\035\\n'; } >> \"$FAKE_TMUX_LOG\"\n"
         "case \"${1:-}\" in\n"
-        "  new-session) : > \"$FAKE_TMUX_ALIVE\" ;;\n"
+        "  new-session) : > \"$FAKE_TMUX_ALIVE\"\n"
+        "    for attempt in \"$AGENTSTACK_RUNTIME_DIR\"/.mail-start-*; do echo ready > \"$attempt/verdict\"; done ;;\n"
         # This binding fixture launches a running child. An idle model header
         # alone makes the launcher exhaust its initial-task watch; fake sleep
         # removes the delays but still leaves 30 polls near the outer timeout.
@@ -493,6 +499,8 @@ def _fake_codex_launch_env(
         "fi\n",
     )
     _executable(fake_bin / "claude", "#!/bin/bash\nexit 0\n")
+    _executable(fake_bin / "mail-proxy", "#!/bin/bash\nexit 0\n")
+
 
     fake_register = tmp_path / "fake-register.sh"
     fake_register.write_text(
@@ -548,7 +556,7 @@ def _fake_codex_launch_env(
             "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
             "AGENTSTACK_REGISTER_LIB": str(fake_register),
             "AGENTSTACK_ENV_FILE": "",
-            "AGENTSTACK_MCP_PROXY": str(tmp_path / "missing-proxy"),
+            "AGENTSTACK_MCP_PROXY": str(fake_bin / "mail-proxy"),
             "AGENTSTACK_MCP_URL": "http://127.0.0.1:9/mcp",
             "AGENTSTACK_MAIL_ENV": str(tmp_path / "missing-mail-env"),
             "AGENTSTACK_MAIL_HTTP_BEARER_MODE": "disabled",
@@ -1062,8 +1070,8 @@ def test_no_arg_codex_spawn_rejects_untrusted_canonical_state_before_cli(
         if failure_mode == "prepare_failure":
             empty_hooks = tmp_path / "hooks-without-prepare"
             empty_hooks.mkdir()
-            shutil.copy2(ROOT / "hooks" / "child_resume.py", empty_hooks)
-            shutil.copy2(ROOT / "hooks" / "codex-bin.sh", empty_hooks)
+            for filename in ("child_resume.py", "child_tools.py", "screen_state.py", "codex-bin.sh"):
+                shutil.copy2(ROOT / "hooks" / filename, empty_hooks)
             copy_client_library(tmp_path)
             env["AGENTSTACK_HOOKS_DIR"] = str(empty_hooks)
     env["AGENTSTACK_CODEX_LAUNCH_BINDING"] = "/parent/launch.json"

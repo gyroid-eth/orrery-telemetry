@@ -839,7 +839,8 @@ def test_spawn_directory_search_http_preserves_browsing(monkeypatch, tmp_path):
         httpd.server_close()
 
 
-def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, tmp_path):
+@pytest.mark.parametrize("mail_failure", [False, True])
+def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, tmp_path, mail_failure):
     """The page closes its modal at once; the verdict arrives via spawn-status."""
     import threading as _threading
     import time as _time
@@ -853,6 +854,19 @@ def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, 
             assert release.wait(timeout=5), "launcher wait was never released"
             return 0
 
+    def start(*args, stderr, **kwargs):
+        if not mail_failure:
+            return SlowProc()
+
+        class FailedMailProc(SlowProc):
+            def wait(self, timeout=None):
+                super().wait(timeout)
+                stderr.write(b"[spawn_child] mail startup failure: OtherAgent: wrong reason\n")
+                stderr.write(b"[spawn_child] mail startup failure: QuietCurie: send_message was not confirmed\n")
+                return 1
+
+        return FailedMailProc()
+
     def mcp(method, args, timeout=15):
         return {"ok": True, "data": {"id": 73, "name": "QuietCurie", "registration_token": "tok"} if method == "register_agent" else {}}
 
@@ -862,7 +876,7 @@ def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, 
     monkeypatch.setattr(server, "_project_key", lambda: "/project")
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
     monkeypatch.setattr(server, "_mcp_call", mcp)
-    monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: SlowProc())
+    monkeypatch.setattr(server.subprocess, "Popen", start)
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
 
     started = _time.monotonic()
@@ -877,8 +891,13 @@ def test_async_spawn_returns_pending_and_settles_in_the_background(monkeypatch, 
     while server.spawn_launch_status("QuietCurie")["state"] == "launching" and _time.monotonic() < deadline:
         _time.sleep(0.05)
     status = server.spawn_launch_status("QuietCurie")
-    assert status["state"] == "ready", status
-    assert status["result"]["tmux_session"] == "QuietCurie"
+    if mail_failure:
+        assert status["state"] == "failed", status
+        assert status["error"].startswith("send_message was not confirmed")
+        assert "wrong reason" not in status["error"]
+    else:
+        assert status["state"] == "ready", status
+        assert status["result"]["tmux_session"] == "QuietCurie"
     assert server.spawn_launch_status("Nobody")["ok"] is False
 
 

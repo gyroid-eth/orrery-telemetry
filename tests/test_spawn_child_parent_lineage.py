@@ -52,6 +52,8 @@ def _codex_child(tmp_path: pathlib.Path, name: str, *extra: str, profile: bool =
     env, workdir = _fake_launch_env(tmp_path, codex=True)
     if profile:
         _enable_fake_codex_profile(tmp_path, env)
+    else:
+        env["AGENTSTACK_MCP_PROXY"] = str(tmp_path / "missing-proxy")
     handoff = _codex_handoff(tmp_path, name)
     task = tmp_path / "task.md"
     task.write_text("restarted task", encoding="utf-8")
@@ -175,7 +177,7 @@ def test_a_codex_child_without_its_proxy_does_not_inherit_the_bridge_lineage(tmp
     `bootstrap` goes to the Bridge, which has never seen this child or its
     parent. That combination cannot report the parent, so it is refused before
     the CLI starts. Without the plugin there is no `bootstrap` at all and the
-    existing shared-endpoint fallback stays as it was.
+    new Mail startup check refuses the shared-endpoint fallback as well.
     """
     name = "NoProxy"
     env, args = _codex_child(tmp_path, name, profile=False)
@@ -195,5 +197,6 @@ def test_a_codex_child_without_its_proxy_does_not_inherit_the_bridge_lineage(tmp
         assert not _launched(env)
         assert "parent" in result.stderr.lower()
     else:
-        assert result.returncode == 0, result.stderr
-        assert _launched(env)
+        assert result.returncode != 0, result.stderr
+        assert not _launched(env)
+        assert "no bound ORRERY Mail proxy" in result.stderr

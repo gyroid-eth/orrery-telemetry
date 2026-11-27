@@ -1422,7 +1422,7 @@ if sys.argv[1] == "reserve" and os.environ.get("FAKE_BLOCK_RESERVE"):
 
 def _adapter_run(tmp_path: pathlib.Path, resources: str, block_reserve: bool = False,
                  links: dict[str, str] | None = None, root_escape: bool = True,
-                 effort: str = "medium"):
+                 effort: str = "medium", mail_ready: bool | None = None):
     repo = _make_repo(tmp_path, links, root_escape)
     home = tmp_path / "home"
     _executable(home / "bin" / "agentstack-gemini-child-mail", _FAKE_MAIL_HELPER)
@@ -1431,6 +1431,19 @@ def _adapter_run(tmp_path: pathlib.Path, resources: str, block_reserve: bool = F
     fake_bin = tmp_path / "fake-bin"
     _executable(fake_bin / "agy", "#!/bin/sh\n")
     _executable(fake_bin / "tmux", "#!/bin/sh\n")
+    if mail_ready is not None:
+        _executable(fake_bin / "uname", "#!/bin/sh\nprintf 'Linux\\n'\n")
+        _executable(fake_bin / "tmux", """#!/bin/bash
+case "$1" in
+  new-session)
+    cp "$AGENTSTACK_RUNTIME_DIR/gemini-task-Child.ndjson" "$FIXTURE_CAPTURE"
+    if [[ "$FIXTURE_READY" == 1 ]]; then
+      for attempt in "$AGENTSTACK_RUNTIME_DIR"/.mail-start-*; do echo ready > "$attempt/verdict"; done
+    fi
+    ;;
+  has-session) [[ "$FIXTURE_READY" == 1 ]] ;;
+esac
+""")
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     token = runtime / "one-shot.token"
@@ -1458,6 +1471,8 @@ def _adapter_run(tmp_path: pathlib.Path, resources: str, block_reserve: bool = F
         "AGENTSTACK_GEMINI_EFFORT": effort,
         "PARENT_AGENT": "Parent",
         "FAKE_MAIL_LOG": str(tmp_path / "mail.log"),
+        "FIXTURE_CAPTURE": str(tmp_path / "prompt.ndjson"),
+        "FIXTURE_READY": str(int(bool(mail_ready))),
     }
     if block_reserve:
         env["FAKE_BLOCK_RESERVE"] = str(marker)
@@ -1470,6 +1485,23 @@ def _adapter_run(tmp_path: pathlib.Path, resources: str, block_reserve: bool = F
     return types.SimpleNamespace(proc=proc, repo=repo, task=task, marker=marker,
                                  runtime=runtime, worktree=tmp_path / "worktrees" / "Child",
                                  mail_log=tmp_path / "mail.log")
+
+
+@pytest.mark.parametrize("mail_ready", [True, False])
+def test_headless_antigravity_reports_ready_only_after_mail_confirmation(tmp_path, mail_ready):
+    run = _adapter_run(tmp_path, "src/**", mail_ready=mail_ready)
+    stdout, stderr = run.proc.communicate(timeout=20)
+    event = json.loads((tmp_path / "prompt.ndjson").read_text())
+    content = event["message"]["content"]
+    assert content.index("ORRERY Mail MCP send_message") < content.index("Canonical task:")
+    assert not list(run.runtime.glob(".mail-start-*"))
+    if mail_ready:
+        assert (run.proc.returncode, stdout.strip()) == (0, "Child"), stderr
+        assert run.worktree.is_dir()
+    else:
+        assert run.proc.returncode != 0 and stdout == ""
+        assert "the child exited before confirming orrery-mail send_message" in stderr
+        assert not run.worktree.exists()
 
 
 def _mail_calls(run) -> list[str]:

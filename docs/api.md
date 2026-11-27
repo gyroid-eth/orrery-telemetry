@@ -951,7 +951,7 @@ spawn は generated `env.sh` の `AGENTSTACK_MCP_URL`（未設定時は `http://
 
 ## 非同期 spawn と `GET /api/spawn-status`
 
-`POST /api/spawn` に `"async": true` を付けると、child の登録と launcher の起動まで済ませた時点で応答を返します（`ok: true, pending: true`、`child_name` 等は同期時と同じ field）。REPL の readiness 判定と task 注入の確認（Codex の子では、起動引数で渡した最初の task がこの起動の記録に入ったかの確認。Codex の history binding が無い環境では確かめられず、最大90秒待ってから `ready` になります）は background で続き、結果は次で読みます。
+`POST /api/spawn` に `"async": true` を付けると、child の登録と launcher の起動まで済ませた時点で応答を返します（`ok: true, pending: true`、`child_name` 等は同期時と同じ field）。REPL の起動と task の受け渡しは background で確認します。親ありの Claude Code・Codex・dsh・Hermes・Antigravity は、初回ターンで ORRERY Mail の `send_message` を呼んでから `ready` になります。この確認は Mail を配送しません。確認できなければ `failed` になり、`error` に理由が入ります。ORRERY Mail に接続できれば launcher から親にも知らせます。結果は次で読みます。
 
 ```bash
 curl -s 'http://127.0.0.1:8770/api/spawn-status?name=WindyFermi'

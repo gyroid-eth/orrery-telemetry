@@ -25,6 +25,8 @@ if __package__ in {None, ""}:
         AgentMailError,
         HttpJsonRpcTransport,
     )
+    from agentstack_codex_app.child_mail_readiness import SUBJECT as STARTUP_SUBJECT
+    from agentstack_codex_app.child_mail_readiness import confirm as confirm_child_startup
     from agentstack_codex_app.hook_entry import runtime_dir_from_env  # type: ignore
     from agentstack_codex_app.identity_store import (  # type: ignore
         IdentityStore,
@@ -37,6 +39,8 @@ else:
         AgentMailError,
         HttpJsonRpcTransport,
     )
+    from .child_mail_readiness import SUBJECT as STARTUP_SUBJECT
+    from .child_mail_readiness import confirm as confirm_child_startup
     from .hook_entry import runtime_dir_from_env
     from .identity_store import IdentityStore, external_id_for
     from .snapshot import SnapshotStore
@@ -259,6 +263,16 @@ class AgentStackProxy:
         _optional_text(topic, "topic", 64)
         if importance not in _IMPORTANCE:
             raise ProxyError("importance must be low, normal, high, or urgent")
+        if subject == STARTUP_SUBJECT and binding["surface"] == "direct":
+            if os.environ.get("AGENTSTACK_PROXY_SERVER_NAME") != "orrery-mail":
+                raise ProxyError("call send_message through the orrery-mail MCP server for the startup check")
+            runtime = os.environ.get("AGENTSTACK_RUNTIME_DIR")
+            if not runtime:
+                raise ProxyError("the ORRERY Mail startup check is not active")
+            try:
+                return confirm_child_startup(Path(runtime), body_md, binding, recipients)
+            except OSError as exc:
+                raise ProxyError("the ORRERY Mail startup check has expired or is unavailable") from exc
         return self.agent_mail.send_message(
             project_key=binding["project_key"],
             agent_name=binding["agent_name"],

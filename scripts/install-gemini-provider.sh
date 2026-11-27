@@ -105,6 +105,8 @@ INSTALLED_SERVICE_RUNNER="$INSTALL_DIR/dashboard/service_runner.py"
 CORE_REQUIRED_FILES=(
   "bin/lib/agentstack-register.sh"
   "hooks/project-context.sh"
+  "hooks/child-mail-readiness.sh"
+  "integrations/codex_app/src/agentstack_codex_app/child_mail_readiness.py"
 )
 CORE_REQUIRED_EXECUTABLES=(
   "bin/agentstack-preregister-child"

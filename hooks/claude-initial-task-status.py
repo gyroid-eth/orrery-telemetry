@@ -53,6 +53,7 @@ _TEXT_LIMIT = 2000
 # child's name) without depending on the rest of the wording.
 _HEAD_CHARS = 80
 _MAIL_TOOL_SUFFIX = "orrery-mail__send_message"
+_MAIL_STARTUP_SUBJECT = "ORRERY child startup check"
 
 
 def _projects_dir(raw: str) -> Path:
@@ -107,10 +108,13 @@ class FirstTurn:
         for block in content if isinstance(content, list) else []:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 name = str(block.get("name", ""))
-                self.tools.append(name)
                 if name.endswith(_MAIL_TOOL_SUFFIX):
-                    # Only a message addressed to the parent is the report.
+                    # The launcher already checked startup. This probe is not
+                    # progress on the delegated task or a report to the parent.
                     data=block.get("input") or {}
+                    if data.get("subject") == _MAIL_STARTUP_SUBJECT:
+                        continue
+                    # Only a message addressed to the parent is the report.
                     if self.parent_agent_id is not None:
                         recipients=data.get("to_agent_ids")
                         addressed=(type(self.parent_agent_id) is int and self.parent_agent_id>0
@@ -120,6 +124,7 @@ class FirstTurn:
                         recipients=data.get("to")
                         addressed=isinstance(recipients,list) and (not self.parent or self.parent in recipients)
                     if addressed:self.report_ids.add(str(block.get("id", "")))
+                self.tools.append(name)
         text = _content_text(content)
         if text:
             self.texts.append(text)

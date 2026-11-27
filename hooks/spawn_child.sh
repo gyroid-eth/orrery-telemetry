@@ -111,6 +111,7 @@ HOOKS_DIR="${AGENTSTACK_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CODEX_MODEL_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dashboard/codex_models.py"
 CLAUDE_MODEL_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dashboard/claude_models.py"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+. "$(dirname "${BASH_SOURCE[0]}")/child-mail-readiness.sh"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
 MCP_URL="${AGENTSTACK_MCP_URL:-${MCP_URL:-http://127.0.0.1:18765/mcp}}"
@@ -2097,6 +2098,7 @@ spawn_note() {
 # the last such line as the launch error (the cockpit toast), instead of only
 # the launcher's exit status; everything else stays in the log tail.
 spawn_reason() {
+    SPAWN_LAST_REASON="$1"
     spawn_note "reason: $1"
 }
 
@@ -3194,10 +3196,16 @@ start_harness_child() {
     ensure_child_proxy_parent before claude || return 1
     CHILD_MCP_CONFIG="$(write_child_mcp_config "$CHILD_NAME" "$CHILD_TOKEN_FILE")"
     if [[ -z "$CHILD_MCP_CONFIG" ]]; then
-        echo "Error: harness requires the product-bound ORRERY Mail proxy" >&2
+        if [[ -n "$PARENT_NAME" ]]; then
+            child_mail_fail "$PARENT_NAME" "$CHILD_TOKEN_FILE" "the child has no bound ORRERY Mail proxy."
+        else
+            echo "Error: harness requires the product-bound ORRERY Mail proxy" >&2
+        fi
         return 1
     fi
     ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || return 1
+    child_mail_begin "$PARENT_NAME" "$HARNESS" "$CHILD_TOKEN_FILE" || return 1
+    prompt="$(child_mail_prompt "$prompt")"
     prompt_file="$CHILD_STATE_DIR/$CHILD_NAME.harness-prompt.$CHILD_REGISTRATION_GENERATION.txt"
     printf '%s' "$prompt" | "${AGENTSTACK_PYTHON:-python3}" -c \
         'import os,sys;fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);f=os.fdopen(fd,"w");f.write(sys.stdin.read());f.close()' \
@@ -3224,6 +3232,7 @@ start_harness_child() {
     HARNESS_START_PENDING=false
     [[ -z "$PRE_REGISTERED" ]] || PRE_REGISTERED_SESSION_STARTED=true
     sleep 1
+    child_mail_wait "$PARENT_NAME" "$CHILD_TOKEN_FILE" "$HARNESS_STATE/native-exit.status" || return 1
     tmux has-session -t "=$CHILD_NAME" 2>/dev/null || return 1
     if [[ -e "$HARNESS_STATE/native-exit.status" ]]; then
         echo "Error: native exited during startup" >&2
@@ -3361,6 +3370,7 @@ if [[ -n "$PRE_REGISTERED" ]]; then
     PRE_REGISTERED_MANAGED_ADDED=false
     PRE_REGISTERED_UNRETIRED=false
     cleanup_preregister_failure() {
+        child_mail_end
         if [[ "$PRE_REGISTERED_SUCCESS" == true ]]; then
             return
         fi
@@ -3593,6 +3603,8 @@ PY
             exit 1
         fi
         ensure_child_proxy_parent after codex "$CHILD_CODEX_HOME" || exit 1
+        child_mail_require_proxy "$PARENT_NAME" "$CHILD_TOKEN_FILE" "$CHILD_CODEX_HOME" || exit 1
+        child_mail_begin "$PARENT_NAME" codex "$CHILD_TOKEN_FILE" || exit 1
         if ! CHILD_LAUNCH_INFO="$(
             prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
         )"; then
@@ -3630,6 +3642,7 @@ ${TASK}"
             CODEX_PROMPT="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
         fi
         CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
+        CODEX_PROMPT="$(child_mail_prompt "$CODEX_PROMPT")"
         if ! CODEX_PROMPT_FILE="$(write_codex_prompt_file "$CHILD_NAME" "$CODEX_PROMPT")"; then
             echo "Error: could not prepare the Codex task for $CHILD_NAME" >&2
             exit 1
@@ -3694,6 +3707,7 @@ ${TASK}"
                 ;;
             2)
                 echo "[spawn_child/pre-reg] Aborting: the child exited before starting its task (check the codex flags above)." >&2
+                child_mail_check_early_failure "$PARENT_NAME" "$CHILD_TOKEN_FILE" "${SPAWN_LAST_REASON:-}"
                 exit 1
                 ;;
         esac
@@ -3755,9 +3769,11 @@ ${TASK}"
         fi
         CHILD_PROMPT+="$TOOLS_PROMPT_BLOCK"
 
+        # A warm process has already discovered its MCP tools under its
+        # original identity. Delegated startup needs the new child's proxy.
         WARM_CLAIMED=false
         WARM_STATUS=$(bash "$WARM_POOL" status 2>/dev/null || true)
-        if [[ "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true \
+        if [[ -z "$PARENT_NAME" && "$CLAUDE_CHILD_CHROME" != true && "$CHILD_TOOLS_RESTRICTIVE" != true \
                 && -z "$CLAUDE_CHILD_TOOL_FLAGS" && -z "$CHILD_DEFAULT_TOOLS_NOTICE" && -f "$WARM_POOL" ]] \
             && warm_pool_has_model "$WARM_TYPE" "$CHILD_MODEL" "$WARM_STATUS"; then
             echo "[spawn_child/pre-reg] Claiming warm pool session ($WARM_TYPE, $CHILD_MODEL)..." >&2
@@ -3783,12 +3799,15 @@ ${TASK}"
                 exit 1
             fi
             ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
+            child_mail_require_proxy "$PARENT_NAME" "$CHILD_TOKEN_FILE" "$CHILD_MCP_CONFIG" || exit 1
             if [[ -n "$CHILD_MCP_CONFIG" ]]; then
                 echo "[spawn_child/pre-reg] Child MCP proxy config: $CHILD_MCP_CONFIG" >&2
             else
                 echo "[spawn_child/pre-reg] No MCP proxy available; child uses the shared ORRERY Mail endpoint" >&2
             fi
+            child_mail_begin "$PARENT_NAME" claude-code "$CHILD_TOKEN_FILE" || exit 1
             if ! CHILD_PROMPT="$(claude_argv_prompt "$CHILD_NAME" "$CHILD_PROMPT")" \
+                || ! CHILD_PROMPT="$(child_mail_prompt "$CHILD_PROMPT")" \
                 || ! CLAUDE_CHILD_PROMPT_FILE="$(write_claude_first_prompt "$CHILD_NAME" "$CHILD_PROMPT")"; then
                 echo "[spawn_child/pre-reg] Aborting: could not write the first prompt in $CHILD_STATE_DIR." >&2
                 exit 1
@@ -3812,6 +3831,7 @@ ${TASK}"
             SPAWN_TRAP_SESSION="$CHILD_NAME"
 
             if ! wait_for_claude_ready "$CHILD_NAME" "spawn_child/pre-reg"; then
+                child_mail_check_early_failure "$PARENT_NAME" "$CHILD_TOKEN_FILE" "${SPAWN_LAST_REASON:-}"
                 exit 1
             fi
             sleep 1
@@ -3838,6 +3858,7 @@ ${TASK}"
         CLAUDE_START_CHECK=true
     fi
 
+    child_mail_wait "$PARENT_NAME" "$CHILD_TOKEN_FILE" || exit 1
     open_child_terminal "$CHILD_NAME"
 
     if [[ "$USE_WORKTREE" == true ]]; then
@@ -3863,7 +3884,7 @@ ${TASK}"
         claude_watch_initial_task "$CHILD_NAME" "$PARENT_NAME" "$CHILD_TOKEN_FILE" "$CHILD_PROMPT"
     fi
     if [[ "$USE_CODEX" == true && "$INJECTION_VERIFIED" != true ]]; then
-        spawn_note "start_unconfirmed: $CHILD_NAME; registration retained, first-task start and readiness are not confirmed. Await its normal Mail report or verified launch receipt; do not spawn a replacement."
+        spawn_note "start_unconfirmed: $CHILD_NAME; registration retained, first-task start is not confirmed. Await its normal Mail report or verified launch receipt; do not spawn a replacement."
     fi
     echo "$CHILD_NAME"
     exit 0
@@ -4241,6 +4262,7 @@ SPAWN_COMPLETED=false
 CHILD_SESSION_STARTED=false
 CHILD_SESSION_START_PENDING=false
 cleanup_on_failure() {
+    child_mail_end
     if [[ "$SPAWN_COMPLETED" == true ]]; then
         return
     fi
@@ -4501,6 +4523,8 @@ elif [[ "$USE_CODEX" == true ]]; then
         exit 1
     fi
     ensure_child_proxy_parent after codex "$CHILD_CODEX_HOME" || exit 1
+    child_mail_require_proxy "$PARENT_NAME" "$CHILD_TOKEN_FILE" "$CHILD_CODEX_HOME" || exit 1
+    child_mail_begin "$PARENT_NAME" codex "$CHILD_TOKEN_FILE" || exit 1
     if ! CHILD_LAUNCH_INFO="$(
         prepare_codex_launch_binding "$CHILD_STATE_DIR/$CHILD_NAME.json" startup "$CODEX_MCP_PROFILE"
     )"; then
@@ -4532,6 +4556,7 @@ elif [[ "$USE_CODEX" == true ]]; then
     # Codex startup: inject a bootstrap prompt that points the child to inbox.
     CODEX_PROMPT="$(build_codex_mail_task_prompt "$CHILD_NAME" "$PARENT_NAME")"
     CODEX_PROMPT="$(append_codex_mcp_profile_notice "$CODEX_PROMPT")"
+    CODEX_PROMPT="$(child_mail_prompt "$CODEX_PROMPT")"
     if ! CODEX_PROMPT_FILE="$(write_codex_prompt_file "$CHILD_NAME" "$CODEX_PROMPT")"; then
         echo "Error: could not prepare the Codex task for $CHILD_NAME" >&2
         exit 1
@@ -4592,6 +4617,7 @@ elif [[ "$USE_CODEX" == true ]]; then
             ;;
         2)
             echo "[spawn_child] Aborting: the child exited before starting its task (check the codex flags above)." >&2
+            child_mail_check_early_failure "$PARENT_NAME" "$CHILD_TOKEN_FILE" "${SPAWN_LAST_REASON:-}"
             exit 1
             ;;
     esac
@@ -4624,7 +4650,10 @@ else
         exit 1
     fi
     ensure_child_proxy_parent after claude "$CHILD_MCP_CONFIG" || exit 1
+    child_mail_require_proxy "$PARENT_NAME" "$CHILD_TOKEN_FILE" "$CHILD_MCP_CONFIG" || exit 1
+    child_mail_begin "$PARENT_NAME" claude-code "$CHILD_TOKEN_FILE" || exit 1
     if ! CHILD_PROMPT="$(claude_argv_prompt "$CHILD_NAME" "$CHILD_PROMPT")" \
+        || ! CHILD_PROMPT="$(child_mail_prompt "$CHILD_PROMPT")" \
         || ! CLAUDE_CHILD_PROMPT_FILE="$(write_claude_first_prompt "$CHILD_NAME" "$CHILD_PROMPT")"; then
         echo "[spawn_child] Aborting: could not write the first prompt in $CHILD_STATE_DIR." >&2
         exit 1
@@ -4651,6 +4680,7 @@ else
     # Claude REPL起動待機
     echo "[spawn_child] Waiting for Claude REPL..." >&2
     if ! wait_for_claude_ready "$CHILD_NAME" "spawn_child"; then
+        child_mail_check_early_failure "$PARENT_NAME" "$CHILD_TOKEN_FILE" "${SPAWN_LAST_REASON:-}"
         exit 1
     fi
     # The prompt was the launch argument; the start check says whether the
@@ -4660,6 +4690,7 @@ else
     CLAUDE_START_CHECK=true
 fi
 
+child_mail_wait "$PARENT_NAME" "$CHILD_TOKEN_FILE" || exit 1
 open_child_terminal "$CHILD_NAME"
 SPAWN_COMPLETED=true
 if [[ "${CLAUDE_START_CHECK:-false}" == true ]]; then
@@ -4668,7 +4699,7 @@ fi
 
 # --- Complete: stdout contains only child agent name ---
 if [[ "$USE_CODEX" == true && "$INJECTION_VERIFIED" != true ]]; then
-    spawn_note "start_unconfirmed: $CHILD_NAME; registration retained, first-task start and readiness are not confirmed. Await its normal Mail report or verified launch receipt; do not spawn a replacement."
+    spawn_note "start_unconfirmed: $CHILD_NAME; registration retained, first-task start is not confirmed. Await its normal Mail report or verified launch receipt; do not spawn a replacement."
 fi
 echo "$CHILD_NAME"
 echo "[spawn_child] Started '$CHILD_NAME' in tmux session '$CHILD_NAME'" >&2

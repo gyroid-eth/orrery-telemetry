@@ -42,7 +42,10 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
         "    else printf 'Do you trust the files in this folder?\\n  Yes\\n  No\\n'; fi ;;\n"
         "  has-session) [[ -f \"$FAKE_TMUX_ALIVE\" ]] ;;\n"
         "  send-keys)\n"
-        "    [[ \" $* \" == *' C-m '* || \"$*\" == *' C-m' ]] && : > \"$FAKE_TRUST_ACCEPTED\"\n"
+        "    if [[ \" $* \" == *' C-m '* || \"$*\" == *' C-m' ]]; then\n"
+        "      : > \"$FAKE_TRUST_ACCEPTED\"\n"
+        "      for attempt in \"$AGENTSTACK_RUNTIME_DIR\"/.mail-start-*; do echo ready > \"$attempt/verdict\"; done\n"
+        "    fi\n"
         "    true ;;\n"
         "  kill-session) rm -f \"$FAKE_TMUX_ALIVE\" ;;\n"
         "  display-message) printf 'ParentAgent\\n' ;;\n"
@@ -55,6 +58,7 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
         "printf '%s\\n' '  --ask-for-approval <POLICY>'\n",
     )
     _executable(bindir / "claude", "#!/bin/bash\nexit 0\n")
+    _executable(bindir / "mail-proxy", "#!/bin/bash\nexit 0\n")
 
     handoff = tmp_path / "child-token"
     handoff.write_text("child-owner-token", encoding="utf-8")
@@ -77,7 +81,7 @@ def test_fresh_workdir_trust_prompt_is_accepted_without_waiting_out_timeout(tmp_
         "AGENTSTACK_HOME": str(tmp_path / "agentstack"),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_REGISTER_LIB": str(ROOT / "bin" / "lib" / "agentstack-register.sh"),
-        "AGENTSTACK_MCP_PROXY": str(tmp_path / "missing-proxy"),
+        "AGENTSTACK_MCP_PROXY": str(bindir / "mail-proxy"),
         "AGENTSTACK_TERMINAL": "none",
         "FAKE_TMUX_LOG": str(tmux_log),
         "FAKE_TMUX_ALIVE": str(tmux_alive),

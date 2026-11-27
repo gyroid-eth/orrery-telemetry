@@ -27,6 +27,7 @@ MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
 HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+. "$(dirname "${BASH_SOURCE[0]}")/child-mail-readiness.sh"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
 GEMINI_BIN="${AGENTSTACK_GEMINI_BIN:-agy}"
@@ -376,6 +377,7 @@ mail_helper() {
 
 cleanup_failure() {
   status=$?
+  child_mail_end
   if [[ $status -ne 0 ]]; then
     if [[ "$TMUX_STARTED" == true && -n "$CHILD_NAME" ]]; then
       tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
@@ -473,6 +475,12 @@ PY
 fi
 fi
 
+child_mail_begin "$PARENT_AGENT" antigravity "$RESERVATION_TOKEN"
+HEADLESS_MAIL_SETTINGS='{}'
+if [[ "$INTERACTIVE" == 0 ]]; then
+  HEADLESS_MAIL_SETTINGS="$("$PYTHON_BIN" "$(dirname "${BASH_SOURCE[0]}")/gemini_interactive.py" headless-mail-settings "$WORKSPACE_DIR" "$MCP_WRAPPER")"
+fi
+CHILD_MAIL_PROMPT="$(child_mail_prompt "")" \
 "$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKSPACE_DIR" "$INTERACTIVE" <<'PY'
 import json, os, sys
 from pathlib import Path
@@ -505,8 +513,9 @@ prefix = (
     "Use the existing bound ORRERY Mail identity. Take a reservation before editing any file. "
     "Resolve relative paths against your working directory.\n\n"
 )
+check = os.environ["CHILD_MAIL_PROMPT"]
 with open(event_path, "w", encoding="utf-8") as fh:
-    json.dump({"event": "user", "message": {"content": prefix + task}}, fh, ensure_ascii=False, separators=(",", ":"))
+    json.dump({"event": "user", "message": {"content": (check + "\n\n" if check else "") + prefix + task}}, fh, ensure_ascii=False, separators=(",", ":"))
     fh.write("\n")
 os.chmod(event_path, 0o600)
 PY
@@ -565,6 +574,7 @@ set +e
 cat $(printf '%q' "$TASK_EVENT_FILE") | \
   $(printf '%q' "$GEMINI_BIN") --input-format stream-json --output-format stream-json \
     --model $(printf '%q' "$MODEL") $EFFORT_OPTION \
+    --settings $(printf '%q' "$HEADLESS_MAIL_SETTINGS") \
     --print-timeout $(printf '%q' "$PRINT_TIMEOUT") \
     2> >(tee $(printf '%q' "$STDERR_LOG") >&2) | \
   $(printf '%q' "$PYTHON_BIN") $(printf '%q' "$STREAM_HELPER") $(printf '%q' "$RESULT_LOG")
@@ -577,6 +587,11 @@ else
   child_status="\$stream_status"
 fi
 set -e
+attempt=$(printf '%q' "$CHILD_MAIL_ATTEMPT")
+if [[ -n "\$attempt" && -d "\$attempt" ]]; then
+  verdict="\$(cat "\$attempt/verdict" 2>/dev/null)" || verdict=""
+  [[ "\$verdict" == ready || ! -d "\$attempt" ]] || exit "\$child_status"
+fi
 AGENTSTACK_HOME=$(printf '%q' "$AGENTSTACK_HOME_DIR") \
 AGENTSTACK_MCP_URL=$(printf '%q' "$MCP_URL") \
 AGENTSTACK_MAIL_ENV=$(printf '%q' "$MAIL_ENV") \
@@ -619,11 +634,14 @@ if [[ "$INTERACTIVE" == 1 ]]; then
   until AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" "$PYTHON_BIN" "$INTERACTIVE_HELPER" ready "$CHILD_NAME" "$identity"; do
     if (( SECONDS >= deadline )) || ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
       echo "$PROG: Antigravity did not reach its interactive prompt. Check the CLI sign-in, worktree trust and Reader setup." >&2
+      child_mail_check_early_failure "$PARENT_AGENT" "$DURABLE_TOKEN"
       exit 1
     fi
     sleep 0.25
   done
 fi
+
+child_mail_wait "$PARENT_AGENT" "$DURABLE_TOKEN"
 
 mkdir -p "$(dirname "$MANAGED_FILE")"
 grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null || printf '%s\n' "$CHILD_NAME" >> "$MANAGED_FILE"

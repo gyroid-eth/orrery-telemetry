@@ -693,3 +693,28 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     assert observed == [SID]
     assert (mcp_path.read_bytes() if mcp_path.exists() else None) == original
     assert not child_resume._tools_journal(state_path).exists()
+
+
+@pytest.mark.parametrize("overridden", [False, True])
+def test_headless_mail_setting_preserves_permissions_and_grants_only_its_managed_sender(tmp_path, overridden):
+    home = tmp_path / "home"
+    settings = home / ".gemini/antigravity-cli/settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"permissions": {
+        "allow": ["read_file(.)"], "deny": ["mcp(orrery-mail/fetch_inbox)"],
+    }}))
+    wrapper = tmp_path / "bin/agentstack-gemini-mcp"
+    cwd = tmp_path / "work"
+    config = cwd / ".agents/mcp_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"mcpServers": {"orrery-mail": {"command": str(wrapper), "args": []}}}))
+    if overridden:
+        inherited = home / ".gemini/config/mcp_config.json"
+        inherited.parent.mkdir()
+        inherited.write_text(json.dumps({"mcpServers": {"orrery-mail": {"command": "/custom/mail", "args": []}}}))
+        assert agy.headless_mail_settings(home, cwd, wrapper) == {}
+    else:
+        assert agy.headless_mail_settings(home, cwd, wrapper) == {"permissions": {
+            "allow": ["read_file(.)", "mcp(orrery-mail/send_message)"],
+            "deny": ["mcp(orrery-mail/fetch_inbox)"],
+        }}

@@ -246,8 +246,10 @@ def test_mac_claude_first_prompt_config_only_has_managed_screen(tmp_path, source
                                    claude_json=config, platform="darwin", managed_screen=relay)
     projected = child_tools.claude_config({"command": "/fixture/mail"}, claude_json=config,
                                           servers=plan["servers"])
-    assert projected["mcpServers"] == {"orrery-mail": {"command": "/fixture/mail"},
-                                        "orrery-screen": relay}
+    assert projected["mcpServers"] == {
+        "orrery-mail": {"command": "/fixture/mail", "env": {"AGENTSTACK_PROXY_SERVER_NAME": "orrery-mail"}},
+        "orrery-screen": relay,
+    }
     assert "mcp__computer-use" in plan["flags"]
     assert "mcp__orrery-screen__get_window_state" in " ".join(plan["flags"])
     assert "computer-use" not in child_tools.prompt_text(spec, "claude", False)
@@ -594,7 +596,8 @@ def test_config_keeps_every_mail_alias_on_the_proxy(tmp_path):
     config = child_tools.claude_config({"command": "/proxy"}, claude_json=cj,
                                        servers={"notes": {"command": "/bin/n"}})
     assert config == {"mcpServers": {
-        "mcp-agent-mail": {"command": "/proxy"}, "orrery-mail": {"command": "/proxy"},
+        "mcp-agent-mail": {"command": "/proxy", "env": {"AGENTSTACK_PROXY_SERVER_NAME": "mcp-agent-mail"}},
+        "orrery-mail": {"command": "/proxy", "env": {"AGENTSTACK_PROXY_SERVER_NAME": "orrery-mail"}},
         "notes": {"command": "/bin/n"}}}
 
 
@@ -693,6 +696,8 @@ def _env(tmp_path, *, codex=False, proxy=True, claude_json=None):
         runner = tmp_path / "run-mcp.sh"
         _executable(runner, "#!/bin/bash\nexit 0\n")
         env["AGENTSTACK_MCP_PROXY"] = str(runner)
+    else:
+        env["AGENTSTACK_MCP_PROXY"] = str(tmp_path / "missing-proxy")
     env["AGENTSTACK_CLAUDE_JSON"] = claude_json or str(tmp_path / "no-claude.json")
     return env, workdir
 
@@ -909,11 +914,12 @@ def test_launcher_fails_closed_without_the_mail_proxy(tmp_path):
     assert _records(env, "NoProxy") == []
 
 
-def test_launcher_without_selection_still_falls_back_without_the_proxy(tmp_path):
+def test_delegated_launcher_requires_the_mail_proxy_even_without_tool_selection(tmp_path):
     env, workdir = _env(tmp_path, proxy=False)
-    result = _launch(tmp_path, env, workdir, "Fallback")
-    assert result.returncode == 0, result.stderr
-    assert "No MCP proxy available" in result.stderr
+    result = _launch(tmp_path, env, workdir, "NoProxy")
+    assert result.returncode != 0
+    assert "no bound ORRERY Mail proxy" in result.stderr
+    assert _no_launch(env)
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="the built-in computer use is macOS only")

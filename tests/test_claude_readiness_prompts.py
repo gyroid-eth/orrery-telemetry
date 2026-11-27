@@ -134,7 +134,10 @@ def _launch(tmp_path, screens, *, die_after=0):
         "printf '%s\\n' \"$*\" >> \"$FAKE_TMUX_LOG\"\n"
         "count_file=\"$FAKE_DIR/polls\"\n"
         "case \"$1\" in\n"
-        "  new-session) : > \"$FAKE_DIR/alive\" ;;\n"
+        "  new-session) : > \"$FAKE_DIR/alive\"\n"
+        "    for field in \"$@\"; do case \"$field\" in CLAUDE_CHILD_PROMPT_FILE=*)\n"
+        "      head -1 \"${field#*=}\" > \"$FAKE_DIR/first-prompt\" ;; esac; done\n"
+        "    for attempt in \"$AGENTSTACK_RUNTIME_DIR\"/.mail-start-*; do echo ready > \"$attempt/verdict\"; done ;;\n"
         "  capture-pane)\n"
         "    n=$(cat \"$count_file\" 2>/dev/null || echo 0)\n"
         "    if [[ \" $* \" != *' -S '* ]]; then n=$((n + 1)); echo $n > \"$count_file\"; fi\n"
@@ -142,7 +145,8 @@ def _launch(tmp_path, screens, *, die_after=0):
         "    [[ -f \"$FAKE_DIR/alive\" ]] || exit 1  # a dead session has nothing to capture\n"
         "    last=$(ls \"$FAKE_DIR/screens\" | sort -n | tail -1)\n"
         "    i=$(( n < 1 ? 1 : (n > last ? last : n) ))\n"
-        "    cat \"$FAKE_DIR/screens/$i\" ;;\n"
+        "    prompt_head=$(cut -c1-70 \"$FAKE_DIR/first-prompt\")\n"
+        "    sed \"s/^❯ Child agent startup.*/❯ $prompt_head/\" \"$FAKE_DIR/screens/$i\" ;;\n"
         "  has-session) [[ -f \"$FAKE_DIR/alive\" ]] ;;\n"
         "  send-keys)\n"
         "    n=$(cat \"$count_file\" 2>/dev/null || echo 0)\n"
@@ -153,6 +157,7 @@ def _launch(tmp_path, screens, *, die_after=0):
     )
     _executable(bindir / "sleep", "#!/bin/bash\nexit 0\n")
     _executable(bindir / "claude", "#!/bin/bash\nexit 0\n")
+    _executable(bindir / "mail-proxy", "#!/bin/bash\nexit 0\n")
     handoff = tmp_path / "child-token"
     handoff.write_text("child-owner-token", encoding="utf-8")
     handoff.chmod(0o600)
@@ -173,7 +178,7 @@ def _launch(tmp_path, screens, *, die_after=0):
         "AGENTSTACK_HOME": str(tmp_path / "agentstack"),
         "AGENTSTACK_LABEL_PREFIX": TEST_LABEL_PREFIX,
         "AGENTSTACK_REGISTER_LIB": str(ROOT / "bin" / "lib" / "agentstack-register.sh"),
-        "AGENTSTACK_MCP_PROXY": str(tmp_path / "missing-proxy"),
+        "AGENTSTACK_MCP_PROXY": str(bindir / "mail-proxy"),
         "AGENTSTACK_TERMINAL": "none",
         "FAKE_TMUX_LOG": str(log),
         "FAKE_DIR": str(tmp_path),

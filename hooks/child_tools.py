@@ -1031,7 +1031,10 @@ def claude_config(proxy: dict, *, claude_json: str, servers: dict | None = None)
         settings = _load_claude_settings(claude_json)
     except ToolsError:
         settings = {}
-    config = {name: proxy for name in mail_alias_names(settings)}
+    config = {
+        name: {**proxy, "env": {**proxy.get("env", {}), "AGENTSTACK_PROXY_SERVER_NAME": name}}
+        for name in mail_alias_names(settings)
+    }
     for name, definition in (servers or {}).items():
         if name in config:
             raise ToolsError(f"MCP server {name!r} collides with ORRERY Mail")

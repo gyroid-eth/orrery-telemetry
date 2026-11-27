@@ -9761,7 +9761,7 @@ def _spawn_launch_record(name: str, result: dict) -> None:
 _SPAWN_REASON_PREFIX = "[spawn_child] reason: "
 
 
-def _spawn_log_tail_and_reason(log_path, start_offset: int = 0) -> tuple[str, str]:
+def _spawn_log_tail_and_reason(log_path, start_offset: int = 0, *, child_name: str = "") -> tuple[str, str]:
     """The current launch interval's tail and first applicable cause line.
 
     spawn_child.sh writes "[spawn_child] reason: ..." when it stops on
@@ -9779,10 +9779,13 @@ def _spawn_log_tail_and_reason(log_path, start_offset: int = 0) -> tuple[str, st
     # Explicit readiness failures outrank rejected candidates that the launcher
     # may have successfully replaced. Within each class keep the first cause.
     lines = text.splitlines()
-    for line in lines:
-        if line.startswith(_SPAWN_REASON_PREFIX):
-            reason = line[len(_SPAWN_REASON_PREFIX):].strip()
-            break
+    mail_reason_prefix = f"[spawn_child] mail startup failure: {child_name}: "
+    if child_name:
+        reason = next((line[len(mail_reason_prefix):].strip()
+                       for line in lines if line.startswith(mail_reason_prefix)), "")
+    if not reason:
+        reason = next((line[len(_SPAWN_REASON_PREFIX):].strip()
+                       for line in lines if line.startswith(_SPAWN_REASON_PREFIX)), "")
     if not reason:
         error = next((line.strip() for line in lines if line.startswith("Error:")), "")
         reason = error
@@ -10752,7 +10755,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         if log_path is None:
             # Logging failed before the launcher started: no session ownership.
             return False
-        tail, _ = _spawn_log_tail_and_reason(log_path, log_start_offset)
+        tail, _ = _spawn_log_tail_and_reason(log_path, log_start_offset, child_name=child_name)
         if any(marker in tail for marker in (
                 "Harness start/stop unconfirmed; recovery state retained",
                 "[spawn_child] creation unconfirmed; recovery state and worktree retained")):
@@ -10945,7 +10948,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                         cleanup_incomplete=True, **fields)
                 if returncode != 0:
                     kill_spawn_session()
-                    tail, reason = _spawn_log_tail_and_reason(log_path, log_start_offset)
+                    tail, reason = _spawn_log_tail_and_reason(log_path, log_start_offset, child_name=child_name)
                     error = f"spawn launcher exited with status {returncode}"
                     return failed_spawn_result(
                         f"{reason} ({error})" if reason else error,
@@ -10954,7 +10957,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             probe = _tmux_run(['has-session', '-t', f'={child_name}'], capture_output=True, text=True)
             if probe.returncode:
                 kill_spawn_session()
-                tail, reason = _spawn_log_tail_and_reason(log_path, log_start_offset)
+                tail, reason = _spawn_log_tail_and_reason(log_path, log_start_offset, child_name=child_name)
                 error = "spawn launcher exited before a live tmux session was created"
                 return failed_spawn_result(
                     f"{reason} ({error})" if reason else error,

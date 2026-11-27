@@ -248,7 +248,10 @@ def _spawn_watched(tmp_path, mail_url, *, transcript_rows=None, wait="6", extra=
     assert result.returncode == 0, result.stderr
     # The child writes its transcript once it is running, after the launch.
     if transcript_rows is not None:
-        _transcript(claude_home / "projects" / "workdir" / "child.jsonl", *transcript_rows)
+        log = pathlib.Path(env["FAKE_TMUX_LOG"]).read_text(encoding="utf-8")
+        first_prompt = log.split("ARGV_TASK\034600\034", 1)[1].splitlines()[0]
+        _transcript(claude_home / "projects" / "workdir" / "child.jsonl", *transcript_rows,
+                    first_user=first_prompt)
     return env
 
 
@@ -384,10 +387,7 @@ def test_the_launch_says_who_started_the_session_in_the_system_prompt(tmp_path):
     system = next(arg for arg in args if arg.startswith("CLAUDE_CHILD_SYSTEM_PROMPT="))
     assert "the ORRERY child agent Told" in system and "parent agent ParentAgent" in system
     assert "mcp__orrery-mail__send_message" in system
-    # Re-check of #163, P2-R3: this fixture has no per-child proxy, so the
-    # prompt must not claim a bound connection or a runtime_status that is not there.
-    assert "already bound" not in system and "runtime_status" not in system
-    assert "reaches ORRERY Mail directly" in system
+    assert "already bound" in system and "runtime_status" in system
     # Facts only (review of #163, P2-1): the launcher does not know that a
     # person asked for this task, so it must not say so.
     assert "at the request" not in system and "person who runs both" not in system
@@ -418,7 +418,8 @@ def test_a_prompt_too_long_for_one_argument_goes_through_a_private_file(tmp_path
     passed = log.split("ARGV_TASK\034600\034", 1)[1].split("CALL", 1)[0]
     # The argument starts as the prompt does (so it is recognised) and points
     # at the file that holds the whole prompt.
-    assert passed.startswith("あなたは Long: this launch prompt is too long")
+    assert passed.startswith("ORRERY child startup check for Long ")
+    assert "あなたは Long: this launch prompt is too long" in passed
     task_file = pathlib.Path(passed.split("in the file ", 1)[1].split(". Read", 1)[0])
     assert task_file.stat().st_mode & 0o777 == 0o600
     assert "Long task. Long task." in task_file.read_text(encoding="utf-8")

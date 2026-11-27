@@ -48,7 +48,12 @@ def _fake_launch_env(
         # A Claude child reads its first prompt from the file named in its env
         # (the launch argument); record what it would have received and its mode.
         "      CLAUDE_CHILD_PROMPT_FILE=*) printf 'ARGV_TASK\\034%s\\034' \"$(stat -c %a \"${arg#*=}\" 2>/dev/null || stat -f %Lp \"${arg#*=}\")\" >> \"$FAKE_TMUX_LOG\"\n"
-        "      cat \"${arg#*=}\" >> \"$FAKE_TMUX_LOG\" ;; esac; done ;;\n"
+        "      cat \"${arg#*=}\" >> \"$FAKE_TMUX_LOG\" ;; esac; done\n"
+        "    for attempt in \"$AGENTSTACK_RUNTIME_DIR\"/.mail-start-*; do\n"
+        "      if [[ -d \"$attempt\" ]]; then\n"
+        "        echo ready > \"$attempt/verdict\"\n"
+        "      fi\n"
+        "    done ;;\n"
         "  capture-pane)\n"
         "    if [[ \"${FAKE_CODEX:-0}\" == 1 ]]; then\n"
         "      [[ -f \"$FAKE_TMUX_LOG.screen\" ]] && cat \"$FAKE_TMUX_LOG.screen\"\n"
@@ -108,6 +113,13 @@ def _fake_launch_env(
         "FAKE_TMUX_ALIVE": str(tmux_alive),
         "FAKE_CODEX": "1" if codex else "0",
     })
+    runner = tmp_path / "fixture-mail-proxy"
+    _executable(runner, "#!/bin/bash\nexit 0\n")
+    env["AGENTSTACK_MCP_PROXY"] = str(runner)
+    if codex:
+        codex_home = tmp_path / "default-codex-home"
+        codex_home.mkdir()
+        env["CODEX_HOME"] = str(codex_home)
     from _fake_tmux_transport import add_transport_evidence
     add_transport_evidence(bindir,env)
     return env, workdir
@@ -202,6 +214,7 @@ def test_orrery_only_stops_before_cli_when_profile_home_cannot_be_built(
     tmp_path: pathlib.Path,
 ) -> None:
     env, workdir = _fake_launch_env(tmp_path, codex=True)
+    env["AGENTSTACK_MCP_PROXY"] = str(tmp_path / "missing-proxy")
     child_name = "ProfileFailure"
     handoff = _codex_handoff(tmp_path, child_name)
     result = subprocess.run(
@@ -632,6 +645,7 @@ def test_late_launcher_exit_skips_the_new_attempt_session_registry_and_worktree(
               'PRE_REGISTERED_SESSION_STARTED=true\nPRE_REGISTERED_MANAGED_ADDED=true\n' +
               'MANAGED_FILE=' + str(managed) + '\n' +
               'warn_if_uninjected() { :; }\n' +
+              'child_mail_end() { :; }\n' +
               'discard_claude_launch_record() { touch ' + str(marker) + '; }\n' +
               'cleanup_worktree() { touch ' + str(marker) + '; }\n' +
               wrappers + cleanup + '\ncleanup_preregister_failure\n')

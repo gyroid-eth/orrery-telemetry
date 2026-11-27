@@ -797,6 +797,7 @@ def test_unknown_target_blocks_even_a_later_failure_cleanup(tmp_path,preregister
         + 'spawn_note() { printf "%s\\n" "$*"; }\n'
         + 'tmux() { touch "$MARKER"; }\n'
         + 'finish_child_registration() { touch "$MARKER"; }\n'
+        + 'child_mail_end() { :; }\n'
         + body+'\n'+setup+'\n'
     )
     result=subprocess.run(['/bin/bash','-c',script],env={**os.environ,'MARKER':str(marker)},capture_output=True,text=True,timeout=10)

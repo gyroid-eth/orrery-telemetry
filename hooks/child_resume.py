@@ -2214,6 +2214,7 @@ def _build_home_unlocked(
                     "AGENTSTACK_PROXY_AGENT_NAME = " + _toml_string(child),
                     "AGENTSTACK_PROXY_TOKEN_FILE = " + _toml_string(os.fspath(token_file)),
                     "AGENTSTACK_PROXY_PROGRAM = " + _toml_string("codex"),
+                    "AGENTSTACK_PROXY_SERVER_NAME = " + _toml_string(name),
                     "AGENTSTACK_PROJECT_KEY = " + _toml_string(project_key),
                     "AGENTSTACK_MCP_URL = " + _toml_string(mcp_url),
                     "AGENTSTACK_MAIL_ENV = " + _toml_string(mail_env),

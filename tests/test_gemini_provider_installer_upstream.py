@@ -74,6 +74,8 @@ def _default_server_path():
     required_files = (
         "bin/lib/agentstack-register.sh",
         "hooks/project-context.sh",
+        "hooks/child-mail-readiness.sh",
+        "integrations/codex_app/src/agentstack_codex_app/child_mail_readiness.py",
     )
     required_executables = (
         "bin/agentstack-preregister-child",

@@ -42,6 +42,7 @@ MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
 MAIL_ENV="${AGENTSTACK_MAIL_ENV:-$HOME/.agentstack/mail/.env}"
 HTTP_BEARER_MODE="${AGENTSTACK_MAIL_HTTP_BEARER_MODE:-auto}"
 RUNTIME_DIR="${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}"
+. "$(dirname "${BASH_SOURCE[0]}")/child-mail-readiness.sh"
 MANAGED_FILE="${AGENTSTACK_MANAGED_AGENTS_FILE:-$RUNTIME_DIR/managed_agents.txt}"
 PYTHON_BIN="${AGENTSTACK_PYTHON:-python3}"
 GEMINI_BIN="${AGENTSTACK_GEMINI_BIN:-agy}"
@@ -200,6 +201,7 @@ PY
 
 cleanup_failure() {
   status=$?
+  child_mail_end
   if [[ $status -ne 0 ]]; then
     if [[ "$TMUX_STARTED" == true && -n "$CHILD_NAME" ]]; then
       tmux kill-session -t "=$CHILD_NAME" >/dev/null 2>&1 || true
@@ -333,6 +335,9 @@ PY
 fi
 
 ( umask 077 && printf '%s' "$TASK" > "$TASK_RAW_FILE" )
+child_mail_begin "$PARENT_NAME" antigravity "$TOKEN_FILE"
+HEADLESS_MAIL_SETTINGS="$("$PYTHON_BIN" "$(dirname "${BASH_SOURCE[0]}")/gemini_interactive.py" headless-mail-settings "$WORKTREE_DIR" "$MCP_WRAPPER")"
+CHILD_MAIL_PROMPT="$(child_mail_prompt "")" \
 "$PYTHON_BIN" - "$TASK_RAW_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_NAME" "$RESOURCES" "$WORKTREE_DIR" "$SOURCE_REPO" <<'PY'
 import json
 import os
@@ -375,7 +380,8 @@ prefix = (
     "the launcher will report your final textual result to the parent automatically.\n"
     f"Declared resources (worktree-anchored):\n{resource_text}\n\nCanonical task:\n"
 )
-message = {"event": "user", "message": {"content": prefix + task}}
+check = os.environ["CHILD_MAIL_PROMPT"]
+message = {"event": "user", "message": {"content": check + "\n\n" + prefix + task}}
 with open(event_path, "w", encoding="utf-8") as handle:
     json.dump(message, handle, ensure_ascii=False, separators=(",", ":"))
     handle.write("\n")
@@ -424,6 +430,7 @@ set +e
 cat $(printf '%q' "$TASK_EVENT_FILE") | \
   $(printf '%q' "$GEMINI_BIN") --input-format stream-json --output-format stream-json \
     --model $(printf '%q' "$MODEL") --effort $(printf '%q' "$EFFORT") \
+    --settings $(printf '%q' "$HEADLESS_MAIL_SETTINGS") \
     --print-timeout $(printf '%q' "$PRINT_TIMEOUT") \
     2> >(tee $(printf '%q' "$STDERR_LOG") >&2) | \
   $(printf '%q' "$PYTHON_BIN") $(printf '%q' "$STREAM_HELPER") $(printf '%q' "$RESULT_LOG")
@@ -436,6 +443,11 @@ else
   child_status="\$stream_status"
 fi
 set -e
+attempt=$(printf '%q' "$CHILD_MAIL_ATTEMPT")
+if [[ -n "\$attempt" && -d "\$attempt" ]]; then
+  verdict="\$(cat "\$attempt/verdict" 2>/dev/null)" || verdict=""
+  [[ "\$verdict" == ready || ! -d "\$attempt" ]] || exit "\$child_status"
+fi
 
 AGENTSTACK_HOME=$(printf '%q' "$AGENTSTACK_HOME_DIR") \
 AGENTSTACK_MCP_URL=$(printf '%q' "$MCP_URL") \
@@ -476,6 +488,8 @@ tmux new-session -d -s "$CHILD_NAME" -c "$WORKTREE_DIR" \
   -e "AGENTSTACK_RESERVED_IDENTITY=1" \
   "/bin/bash $(printf '%q' "$RUNNER_FILE")"
 TMUX_STARTED=true
+
+child_mail_wait "$PARENT_NAME" "$TOKEN_FILE"
 
 mkdir -p "$(dirname "$MANAGED_FILE")"
 if ! grep -qxF "$CHILD_NAME" "$MANAGED_FILE" 2>/dev/null; then

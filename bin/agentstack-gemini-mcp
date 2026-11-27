@@ -51,6 +51,8 @@ TOKEN_FILE="$(ags_registration_token_file "$AGENT_NAME_VALUE")" || exit 1
 export AGENTSTACK_PROXY_AGENT_NAME="$AGENT_NAME_VALUE"
 export AGENTSTACK_PROXY_TOKEN_FILE="$TOKEN_FILE"
 export AGENTSTACK_PROXY_PROGRAM="antigravity"
+# The managed Antigravity configuration uses this wrapper for orrery-mail.
+export AGENTSTACK_PROXY_SERVER_NAME="orrery-mail"
 export AGENTSTACK_PROJECT_KEY="$PROJECT_KEY"
 export AGENTSTACK_MCP_URL="$MCP_URL"
 export AGENTSTACK_MAIL_ENV="$MAIL_ENV"
