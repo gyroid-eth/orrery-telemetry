@@ -291,6 +291,10 @@ try:
         entry["last_success_ts"] = entry["last_attempt_ts"]
     if result == "session_not_found":
         entry["terminal"] = True
+    if result == "success" or entry.get("terminal") or not reason:
+        entry.pop("editor_blocked_since_epoch", None)
+    elif reason in {"editor_not_empty", "editor_waiting", "draft_not_confirmed", "enter_not_confirmed", "enter_failed"}:
+        entry.setdefault("editor_blocked_since_epoch", now)
     waiting = None
     if reason:
         count = entry.get("wait_count", 0) + 1

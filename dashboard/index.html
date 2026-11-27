@@ -2706,7 +2706,7 @@
     </span>
   </div>
   <div id="mail-health" class="mail-health" title="mail health: checking...">
-    <span class="mh-dot"></span><span class="mh-label">mail</span>
+    <span class="mh-dot"></span><span class="mh-label" aria-live="polite">mail</span>
   </div>
   <!-- WSL only (GET /api/wsl-anchor): shown while ORRERY keeps the distro
        running for live agents, hidden once it lets WSL stop by itself. -->
@@ -37764,6 +37764,11 @@ async function mailHealthTick(){
     else parts.push('watcher: DOWN');
     if(age!=null) parts.push('last ok: '+age+'s ago');
     if(d.signal_count>0) parts.push('signals: '+d.signal_count);
+    const blocked=Array.isArray(d.blocked_recipients)?d.blocked_recipients:[];
+    const label=el.querySelector('.mh-label');
+    const nextLabel=blocked.length?'mail delayed':'mail';
+    if(label&&label.textContent!==nextLabel) label.textContent=nextLabel;
+    if(blocked.length) parts.push('Check the terminal input for '+blocked.join(', '));
     const rc=d.recent_results||{};
     if(Object.keys(rc).length) parts.push('10m: '+Object.entries(rc).map(([k,v])=>k+'='+v).join(' '));
     el.title='mail health: '+parts.join(' · ');

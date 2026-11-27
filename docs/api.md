@@ -667,6 +667,7 @@ response は少なくとも次の診断を返します。
   "actionable_signal_count":0,
   "orphan_signal_count":0,
   "signal_sessions_known":true,
+  "blocked_recipients":[],
   "last_success_age_s":4,
   "recent_results":{"success":3}
 }
@@ -675,6 +676,8 @@ response は少なくとも次の診断を返します。
 watcher process、signal backlog、直近成功時刻、直近10分の配送結果を header indicator が使います。
 
 API 11 から、`signal_count` は残っている全 signal（legacy を含む）の数、`actionable_signal_count` は health 判定に使う数、`orphan_signal_count` は24時間以上古く、tmux session の不在を確認できた数です。headless runtime manifest がある宛先と新しい signal は常に判定に残します。tmux の測定失敗時は `signal_sessions_known: false` とし、除外しません。watcher 不在か actionable が50件を超えると `red`、actionable が残り直近成功が120秒以上前（または成功なし）なら `yellow`、それ以外は `green` です。
+
+`blocked_recipients` は、入力欄への通知が3分以上未解決で、対応する signal が残っている宛先の一覧です。この診断があると、ほかの宛先への通知が届いていても `yellow` になります（`red` の条件は優先します）。dashboard の Mail 表示から宛先を確認できます。
 
 ## GET `/portrait`
 
