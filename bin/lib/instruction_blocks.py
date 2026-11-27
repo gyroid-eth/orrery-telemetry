@@ -32,6 +32,8 @@ MESSAGES = {
     'identity-binding-unresolved': 'This session has an ORRERY registration but its identity binding is unresolved; ask the operator to run agentstack-doctor and recover the existing identity before retrying.',
 }
 TERMINAL = {'complete', 'retained', 'uninstalled'}
+MOUNTINFO = Path('/proc/self/mountinfo')
+MOUNT_ESCAPE = re.compile(r'\\([0-7]{3})')
 
 
 class Refused(Exception):
@@ -153,6 +155,48 @@ def has_marker(data):
     return any(marker in (data or b'') for marker in (*BEGIN.values(), END))
 
 
+def _running_in_wsl():
+    return sys.platform == 'linux' and 'microsoft' in os.uname().release.lower()
+
+
+def _drvfs_metadata(path, st):
+    """Return the mount's Linux metadata setting, or None for unproven DrvFs."""
+    if not _running_in_wsl():
+        return None
+    device = f'{os.major(st.st_dev)}:{os.minor(st.st_dev)}'
+    matches = []
+    try:
+        for line in MOUNTINFO.read_text(encoding='utf-8', errors='surrogateescape').split('\n'):
+            left, separator, right = line.partition(' - ')
+            fields, filesystem = left.split(), right.split()
+            if not separator or len(fields) < 6 or len(filesystem) != 3:
+                continue
+            mount = Path(MOUNT_ESCAPE.sub(lambda m: chr(int(m[1], 8)), fields[4]))
+            if mount.is_absolute() and path.is_relative_to(mount):
+                filesystem_options = filesystem[2].split(',')
+                drvfs = filesystem[0] == 'drvfs' or (filesystem[0] == '9p'
+                    and any(opt.split(';', 1)[0] == 'aname=drvfs' for opt in filesystem_options))
+                options = re.split('[;,]', fields[5] + ',' + filesystem[2])
+                metadata = any(opt.split('=', 1)[0] == 'metadata' for opt in options) if drvfs else None
+                matches.append((len(mount.parts), fields[2], metadata))
+    except OSError:
+        return None
+    if not matches:
+        return None
+    depth = max(match[0] for match in matches)
+    active = {metadata for length, mounted_device, metadata in matches
+              if length == depth and mounted_device == device}
+    return active.pop() if len(active) == 1 else None
+
+
+def _drvfs_synthetic_mode(path, st):
+    # DrvFs without Linux metadata repeats the Windows user's effective
+    # permissions in all three groups of Linux mode bits.
+    mode = stat.S_IMODE(st.st_mode)
+    permissions = mode & 7
+    return mode == permissions * 0o111 and _drvfs_metadata(path, st) is False
+
+
 def snapshot(path, *, source_candidate=False):
     """Pin every symlink component; never sever a user's symlink on replacement."""
     requested = Path(os.path.abspath(path))
@@ -191,7 +235,8 @@ def snapshot(path, *, source_candidate=False):
     except FileNotFoundError:
         st = None
     if st:
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                or st.st_mode & 0o022 and not _drvfs_synthetic_mode(resolved, st)):
             raise Refused('INSTRUCTION_PATH_UNSAFE', resolved)
         data = resolved.read_bytes()
         # Automatic discovery reads unrelated notes but never selects them for
@@ -242,11 +287,63 @@ def sync_dir(path):
         os.close(fd)
 
 
-def atomic(path, data, *, entry=None):
+def _same_instruction_file(st, planned):
+    return (stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid()
+            and (st.st_dev, st.st_ino, stat.S_IMODE(st.st_mode), st.st_nlink)
+            == (planned['dev'], planned['ino'], planned['mode'], planned['nlink']))
+
+
+def _write_and_check(stream, data):
+    stream.seek(0)
+    remaining = memoryview(data)
+    while remaining:
+        written = stream.write(remaining)
+        if not written:
+            raise OSError('short write')
+        remaining = remaining[written:]
+    stream.truncate()
+    os.fsync(stream.fileno())
+    stream.seek(0)
+    if stream.read() != data:
+        raise OSError('written content did not match')
+
+
+def _write_drvfs(path, data, entry, old, backup):
+    # Replacing a DrvFs inode can replace an explicit Windows ACL with one
+    # inherited from its parent. Write to the verified inode instead.
+    if not backup:
+        raise Refused('INSTRUCTION_DRVFS_BACKUP_REQUIRED', path)
+    with os.fdopen(os.open(backup, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as saved:
+        st = os.fstat(saved.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_nlink != 1 or st.st_mode & 0o077:
+            raise Refused('INSTRUCTION_PATH_UNSAFE', backup)
+        original = saved.read()
+    if original != old:
+        raise Refused('INSTRUCTION_PLAN_CHANGED', backup)
+    with os.fdopen(os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK), 'r+b', buffering=0) as stream:
+        planned = entry['metadata']
+        if not _same_instruction_file(os.fstat(stream.fileno()), planned) or stream.read() != original:
+            raise Refused('INSTRUCTION_PLAN_CHANGED', path)
+        try:
+            _write_and_check(stream, data)
+            if not _same_instruction_file(path.lstat(), planned):
+                raise Refused('INSTRUCTION_PLAN_CHANGED', path)
+        except BaseException:
+            try:
+                _write_and_check(stream, original)
+            except OSError as exc:
+                raise Refused('INSTRUCTION_DRVFS_RESTORE_FAILED', f'{path}; backup: {backup}') from exc
+            raise
+
+
+def atomic(path, data, *, entry=None, backup=None):
     path = Path(path)
     if entry:
         path.parent.mkdir(parents=True, exist_ok=True)
         old = verify(entry, entry['before_sha256'])
+        if old is not None and _drvfs_metadata(path, path.lstat()) is not None:
+            _write_drvfs(path, data, entry, old, backup)
+            return
         old_acl = acl(path) if old is not None else b''
         old_attrs = attrs(path) if old is not None else {}
         mode = entry['metadata']['mode'] if old is not None else 0o600
@@ -589,7 +686,8 @@ class Engine:
                     r['sources_progress'].append({'path_sha256':key,'backup':backup,'stage':'backed_up'});self.save(r)
             self.save(r,'writing')
             if target['before_sha256'] != target['after_sha256']:
-                atomic(target['resolved_path'],replace_block(current or b'',self.block),entry=target)
+                atomic(target['resolved_path'],replace_block(current or b'',self.block),entry=target,
+                       backup=r['target_backup'])
         elif digest != target['after_sha256']:
             raise Refused('INSTRUCTION_PLAN_CHANGED', target['requested_path'])
         verify(target,target['after_sha256'],completed=True)
@@ -605,7 +703,7 @@ class Engine:
             data=snapshot(entry['requested_path'])[1]
             digest=sha(data) if data is not None else None
             if digest==entry['before_sha256']:
-                atomic(entry['resolved_path'],replace_block(data,b''),entry=entry)
+                atomic(entry['resolved_path'],replace_block(data,b''),entry=entry,backup=progress['backup'])
             elif digest!=entry['after_sha256']:
                 raise Refused('INSTRUCTION_PLAN_CHANGED',entry['requested_path'])
             verify(entry,entry['after_sha256'],completed=True)
@@ -626,8 +724,8 @@ class Engine:
                 raise Refused('INSTRUCTION_PLAN_CHANGED','edited managed block retained')
             if block and not dry_run:
                 entry['before_sha256']=sha(data)
-                self.backup(entry,sha(canonical({'uninstall':r['plan_id'],'before':sha(data)})))
-                atomic(entry['resolved_path'],replace_block(data,b''),entry=entry)
+                backup=self.backup(entry,sha(canonical({'uninstall':r['plan_id'],'before':sha(data)})))
+                atomic(entry['resolved_path'],replace_block(data,b''),entry=entry,backup=backup)
             if not dry_run:
                 self.save(r,'uninstalled')
         return r
