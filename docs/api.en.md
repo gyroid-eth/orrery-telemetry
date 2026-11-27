@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":57}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":58}
 ```
 
 See [Installation](https://github.com/gyroid-eth/orrery/blob/master/docs/en/telemetry-install.md#version) for version resolution order.
@@ -216,6 +216,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 ## GET `/api/spawn-names`
 
 API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
+
+API 58 reports per-harness `personal_browser_status` for managed My Browser on macOS and WSL. The optional `browser` identifies the detected browser. `reason` contains any setup guidance. When the host confirms there is no usable browser, it returns `unavailable: true`. If the check fails, for example because Windows interop is down, the user can still select the mode manually.
 
 On macOS, the API 53 catalog lists `off`, `view`, and `control` in `computer_modes`. View uses `tools.screen.access: "read"` and Control uses `tools.screen.access: "operate"`. For Off, omit the screen selection from the explicit `tools` object. Mobile `/view/spawn` sends one of the modes as `computer` and still accepts the boolean from older clients. See `browser_modes.antigravity` for the available Antigravity browser modes.
 
@@ -722,7 +724,7 @@ The request below selects Claude in Chrome with a device ID and starts `orrery-s
 
 In API 54, legacy roster rows with permission information include `permission_controls`. Each of `computer_use` and `browser_use` has a current `value` (null when unknown), its `source` and `observation_reason`, the action availability `can_change` and `change_reason`, and an `action` of `restart`, `resume`, or null. Display evidence and the reason a change is unavailable are distinct. The server rechecks the target and saved launch when a change is requested.
 
-`browser_use.mode` is `off`, `temporary` (Temporary Chrome), `personal` (My Chrome), or null when the mode is unknown. `browser_use.options` lists the modes the launcher can offer and is empty when the action is unavailable.
+`browser_use.mode` is `off`, `temporary` (Temporary Chrome), `personal` (My Browser), or null when the mode is unknown. `browser_use.options` lists the modes the launcher can offer and is empty when the action is unavailable.
 
 API 45 accepts `permission` on a legacy `/api/jump` for a stopped, retained Claude or Codex CLI child with a saved tool selection. API 46 also supports agents spawned without a parent when they meet the same conditions. Persistent agents, Codex App, conversation-only resumes, and fresh and global modes are ineligible. Legacy roster rows report `permission_resume_supported` and a short English `permission_resume_reason`.
 

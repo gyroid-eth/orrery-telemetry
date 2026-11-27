@@ -797,19 +797,56 @@ def _personal_chrome(definition):
                         for arg in args if isinstance(arg, str)))
 
 
-def _browser_mcp(mode, codex_config=None):
+@lru_cache(maxsize=1)
+def _personal_browser_module():
+    return runpy.run_path(str(Path(__file__).with_name("personal_browser.py")))
+
+
+def personal_browser(wsl):
+    return _personal_browser_module()["discover"](wsl=wsl)
+
+
+def _windows_browser_npx():
+    """Run Chromium DevTools on the Windows side of WSL's network boundary."""
+    commands = [shutil.which("node.exe"), "/mnt/c/Program Files/nodejs/node.exe", "/c/Program Files/nodejs/node.exe"]
+    for command in filter(None, commands):
+        node = Path(command)
+        script = node.with_name("node_modules") / "npm/bin/npx-cli.js"
+        if not node.is_absolute() or not node.is_file() or not os.access(node, os.X_OK) or not script.is_file():
+            continue
+        try:
+            windows_path = subprocess.check_output(["wslpath", "-w", str(script)], text=True, timeout=2).strip()
+        except (OSError, subprocess.SubprocessError):
+            break
+        if re.fullmatch(r"[A-Za-z]:\\[^\x00-\x1f]+", windows_path):
+            return {"command": str(node), "args": [windows_path]}
+    raise ToolsError("My Browser requires Windows Node.js with npm when running in WSL")
+
+
+def _browser_mcp(mode, codex_config=None, *, catalog=False):
     if mode == "personal" and codex_config is not None:
         configured = _native_codex_browser(codex_config, explicit=True)
         if configured:
             if not _personal_chrome(configured[1]):
-                raise ToolsError("My Chrome requires Chrome DevTools with autoConnect")
+                raise ToolsError("My Browser requires Chrome DevTools with autoConnect")
             return configured
-    npx = shutil.which("npx")
-    if not npx:
-        raise ToolsError("Install Node.js to use Chrome DevTools")
-    switch = "--isolated" if mode == "temporary" else "--autoConnect"
-    return "chrome-devtools", {"command": npx, "args": ["-y", "chrome-devtools-mcp@latest",
-                                                       switch, "--no-usage-statistics"]}
+    wsl = sys.platform == "linux" and running_in_wsl()
+    if mode == "personal" and wsl:
+        runtime = _windows_browser_npx()
+    else:
+        npx = shutil.which("npx")
+        if not npx:
+            raise ToolsError("Install Node.js to use Chrome DevTools")
+        runtime = {"command": npx}
+    options = ["--isolated"] if mode == "temporary" else ["--autoConnect"]
+    if mode == "personal" and not catalog and (wsl or sys.platform == "darwin"):
+        target = personal_browser(wsl)
+        if target.state != "ready":
+            raise ToolsError(f"My Browser: {target.reason(wsl)}")
+        options = list(target.args)
+    args = [*runtime.get("args", ()), "-y", "chrome-devtools-mcp@latest",
+            *options, "--no-usage-statistics"]
+    return "chrome-devtools", {**runtime, "args": args}
 
 
 def launch_browser_modes(codex_config, *, home=None):
@@ -821,9 +858,9 @@ def launch_browser_modes(codex_config, *, home=None):
     for key in ("codex", "dsh"):
         try:
             if key == "codex":
-                codex_apply(copy.deepcopy(codex_config), normalize(tools={"browser_mode": "personal"}))
+                codex_apply(copy.deepcopy(codex_config), normalize(tools={"browser_mode": "personal"}), catalog=True)
             else:
-                _browser_mcp("personal", codex_config)
+                _browser_mcp("personal", codex_config, catalog=True)
         except ToolsError:
             continue
         choices[key].append("personal")
@@ -838,6 +875,27 @@ def launch_browser_modes(codex_config, *, home=None):
         if not _agy_managed_browser_conflict(inherited):
             choices["antigravity"] = ["off", "temporary", "personal"] if shutil.which("npx") else ["off"]
     return choices
+
+
+def personal_browser_catalog(modes, config, *, wsl):
+    if sys.platform != "darwin" and not wsl:
+        return {}
+    applicable = [key for key in ("codex", "dsh", "hermes", "antigravity")
+                  if "personal" in modes.get(key, ())]
+    try:
+        configured = _native_codex_browser(config, explicit=True) if any(key != "antigravity" for key in applicable) else None
+    except ToolsError:
+        configured = None
+    if configured:
+        # Explicitly configured MCP transports resolve their own session.
+        applicable = [key for key in applicable if key == "antigravity"]
+    if not applicable:
+        return {}
+    selected = personal_browser(wsl)
+    status = {"reason": selected.reason(wsl), "unavailable": selected.state in {"stopped", "debugging"}}
+    if selected.label:
+        status["browser"] = selected.label
+    return {key: status for key in applicable}
 
 
 def native_plan(spec: dict, *, cwd: str, claude_json: str,
@@ -1156,7 +1214,8 @@ def codex_browser_server(servers: dict) -> str:
         + (": several match" if found else ""))
 
 
-def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None) -> None:
+def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None,
+                catalog: bool = False) -> None:
     """Apply a selection to a child's parsed config.toml, in place.
 
     The base (mail-only = the orrery-only profile) is applied by the caller
@@ -1233,11 +1292,12 @@ def codex_apply(config: dict, spec: dict, *, managed_screen: dict | None = None)
             except ToolsError:
                 if any(isinstance(value, dict) and _codex_chrome_server(name, value) for name, value in servers.items()):
                     raise
-                browser_server, definition = _browser_mcp(mode)
+                browser_server, definition = _browser_mcp(mode, catalog=catalog)
                 servers[browser_server] = definition
                 config["mcp_servers"] = servers
-            if not _personal_chrome(servers[browser_server]):
-                raise ToolsError("My Chrome requires Chrome DevTools with autoConnect")
+            else:
+                if not _personal_chrome(servers[browser_server]):
+                    raise ToolsError("My Browser requires Chrome DevTools with autoConnect")
         else:
             browser_server = codex_browser_server(servers)
         entry = table_entry(servers[browser_server])
@@ -1387,7 +1447,7 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
     if spec["tools"].get("browser_off") or mode == "off":
         head += " The browser integration is off for this launch."
     elif mode:
-        head += " The Browser setting is " + ("Temporary Chrome." if mode == "temporary" else "My Chrome.")
+        head += " The Browser setting is " + ("Temporary Chrome." if mode == "temporary" else "My Browser.")
     screen = spec["tools"].get("screen")
     if screen_mode(spec) is not None:
         head += " The operator can change the orrery-screen permission while this child is running."

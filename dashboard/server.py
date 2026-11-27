@@ -49,7 +49,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 57
+API_GENERATION = 58
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -9476,6 +9476,16 @@ def _spawn_browser_modes():
     return tools.launch_browser_modes(config)
 
 
+def _spawn_browser_catalog():
+    tools = _child_tools_module()
+    config = tools.native_codex_config(resume=_child_resume_module())
+    modes = tools.launch_browser_modes(config)
+    # Dashboard-only updates can be paired with an earlier installed launcher.
+    browser_status = getattr(tools, "personal_browser_catalog", None)
+    statuses = browser_status(modes, config, wsl=_is_wsl()) if browser_status else {}
+    return {"browser_modes": modes, **({"personal_browser_status": statuses} if statuses else {})}
+
+
 def spawn_names_payload() -> dict:
     """Picker data; scientist vocabulary is emitted by the launcher source."""
     if sys.platform == "win32":
@@ -9521,7 +9531,7 @@ def spawn_names_payload() -> dict:
         "dirs": dirs,
         "native_browser_dirs": _native_browser_directories(dirs) if local_catalog and not FRESH_MODE else [],
         "supports_browser_off": not FRESH_MODE,
-        **({"browser_modes": _spawn_browser_modes()} if not FRESH_MODE else {}),
+        **(_spawn_browser_catalog() if not FRESH_MODE else {}),
         "models": list(claude_models),
         "default_model": claude_default,
         "providers": [
