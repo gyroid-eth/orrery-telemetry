@@ -39,6 +39,8 @@ def refresh(version):
                 or not re.fullmatch(r"sha256:[a-f0-9]{64}", signature)):
             raise InstallError(f"digest or signing bundle missing or inconsistent for {name}")
         pins[key] = {"url": url, "sha256": digest}
+        if key.startswith("linux-"):
+            pins[key]["sigstore_sha256"] = signature.removeprefix("sha256:")
     return {"version": version, "assets": pins}
 
 

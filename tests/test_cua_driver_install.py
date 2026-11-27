@@ -212,12 +212,14 @@ def test_linux_verifies_the_archive_with_the_fixed_workflow_identity(monkeypatch
         package.addfile(binary, io.BytesIO())
     data = content.getvalue()
     url = cua.asset_url("0.55.0", target.key)
-    asset = {"url": url, "sha256": hashlib.sha256(data).hexdigest()}
+    bundle = b"sigstore bundle"
+    asset = {"url": url, "sha256": hashlib.sha256(data).hexdigest(),
+             "sigstore_sha256": hashlib.sha256(bundle).hexdigest()}
     downloads = []
 
     def download(url, path):
         downloads.append(url)
-        path.write_bytes(b"sigstore bundle" if url.endswith(".json") else data)
+        path.write_bytes(bundle if url.endswith(".json") else data)
 
     monkeypatch.setattr(cua, "download", download)
     monkeypatch.setattr(cua.shutil, "which", lambda _: None)
@@ -228,6 +230,11 @@ def test_linux_verifies_the_archive_with_the_fixed_workflow_identity(monkeypatch
     monkeypatch.setattr(cua.shutil, "which", lambda _: "/usr/local/bin/cosign")
     commands = []
     monkeypatch.setattr(cua, "checked", commands.append)
+    with cua.install_lock(link.parent), pytest.raises(cua.InstallError, match="SHA256 mismatch"):
+        cua.install_release(link, target, "0.55.0", {**asset, "sigstore_sha256": "0" * 64})
+    assert commands == [] and not link.is_symlink()
+    downloads.clear()
+
     with cua.install_lock(link.parent):
         installed = cua.install_release(link, target, "0.55.0", asset)
     assert downloads == [url, url + ".sigstore.json"]

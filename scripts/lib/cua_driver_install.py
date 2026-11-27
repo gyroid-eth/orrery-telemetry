@@ -83,6 +83,8 @@ def read_pins(path):
     for key, asset in assets.items():
         if asset["url"] != asset_url(version, key) or not re.fullmatch(r"[0-9a-f]{64}", asset["sha256"]):
             raise InstallError(f"invalid Cua Driver release pin for {key}")
+        if key.startswith("linux-") and not re.fullmatch(r"[0-9a-f]{64}", asset["sigstore_sha256"]):
+            raise InstallError(f"invalid Cua Driver signing bundle pin for {key}")
     return version, assets
 
 
@@ -176,9 +178,12 @@ def download(url, path):
         shutil.copyfileobj(response, output)
 
 
-def verify_linux(archive, url, version):
+def verify_linux(archive, asset, version):
     bundle = archive.with_name(archive.name + ".sigstore.json")
-    download(url + ".sigstore.json", bundle)
+    download(asset["url"] + ".sigstore.json", bundle)
+    with bundle.open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != asset["sigstore_sha256"]:
+            raise InstallError(f"Cua Driver SHA256 mismatch for {bundle.name}")
     checked(["cosign", "verify-blob", "--bundle", str(bundle),
              "--certificate-identity", f"{REPOSITORY}/.github/workflows/cd-rust-cua-driver.yml@refs/tags/{release_tag(version)}",
              "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", str(archive)])
@@ -294,7 +299,7 @@ def install_release(link, target, version, asset):
         if digest != asset["sha256"]:
             raise InstallError(f"Cua Driver SHA256 mismatch for {archive.name}")
         if target.os == "linux":
-            verify_linux(archive, url, version)
+            verify_linux(archive, asset, version)
         unpacked = stage / "payload"
         extract(archive, unpacked)
         payload, relative_binary = verified_payload(unpacked, target, version)
