@@ -56,6 +56,8 @@ agent through terminal keystrokes or a built-in collaboration substitute. A
 complete notification body needs no fetch; fetch truncated notifications before
 acting. Do not poll inboxes in a loop or read mailbox directories as a substitute.
 
+After sending your completion report or a question that blocks your work, end your turn and keep the session open. Replies arrive as ORRERY Mail notifications. Do not wait in a sleep loop.
+
 For an automatic Claude/Codex child, follow the fresh child procedure in
 `__AGENTSTACK_HOME__/docs/fresh-global-update.md`. Use the existing preregister
 and spawn scripts with a stable child-client slot and task file. They prepare

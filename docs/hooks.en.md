@@ -220,7 +220,7 @@ The [absolute reservation candidate](absolute-reservations.en.md) supplies expli
 
 For explicit isolated launch, delivery and operator recovery, see [global delivery client](global-delivery-client.en.md). Legacy remains the default.
 
-SessionStart reports only legacy-block counts. Bare sessions do not register with Mail; editing guards keep their policy. [Details](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#legacy-blocks).
+For participating Claude Code sessions, SessionStart lists each instruction file that needs review, the warning type, and what the operator can do. Bare sessions do not register with Mail. Editing guards keep their policy. [Instruction migration](https://github.com/gyroid-eth/orrery/blob/master/docs/en/instruction-migration.md#legacy-blocks)
 
 For new isolated-global launches, SessionEnd does not prove provider exit. The wait runner saves the actual outcome and completes the single report intent before cleanup. Existing standalone hooks retain their behavior. See [dedicated launch and termination recovery](global-delivery-client.en.md#dedicated-launch-and-termination-recovery).
 
