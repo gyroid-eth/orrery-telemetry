@@ -165,6 +165,8 @@ source 専用 helper で、`RESOLVED_AGENT` と解決 source を caller へ返�
 
 `AGENTSTACK_CHILD_DEFAULT_TOOLS` は、CLI で `--base` / `--tools` / `--codex-mcp` を、標準の `/api/spawn` で `base` / `tools` を省略した Claude・Codex・dsh・Hermes の新規起動に適用します。最終の作業フォルダと provider で確認して使えない既定項目だけを外し、spawn 出力と最初の指示に残します。明示選択と resume は既存の fail-closed 経路です。[既定の道具](https://github.com/gyroid-eth/orrery/blob/master/docs/delegation.md#installer-の既定の道具)。
 
+Claude in Chrome の起動時の質問は、子の端末を開いたまま cockpit の「need you」に表示します。端末で利用者が答えると、Claude は起動時に受け取った依頼を続けます。
+
 ### `cleanup-child-agent.sh`
 
 child の Claude / Codex command の後段へ連結され、REPL が戻った時だけ実行されます。全 reservation を release し、child owner token で identity を retire します。remote release / retire と managed-list 更新は従来どおり best-effort で試し、その後に local child state を片付けます。

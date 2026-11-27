@@ -1828,15 +1828,22 @@ claude_accept_trust_dialog() {
 # "Claude in Chrome extension detected" (first start after the extension was
 # installed) decides the user's default browser setting, so answering it --
 # even with its default "No" or Esc -- may change every later Claude session,
-# the parent's included. The launcher never answers it: it stops at once, saves
-# the screen and tells the operator to answer it themselves. Two cues are
-# required so a wording change is not mistaken for another screen.
+# the parent's included. Never answer it automatically. This broad guard also
+# protects unusual variants from trust-key handling. The shared screen parser
+# recognizes the current choice when it can be left open for the operator.
 claude_user_prompt_present() {
     local text
     text="$(printf '%s' "$1" | pane_normalize_nbsp)"
     printf '%s' "$text" | grep -qiF "Claude in Chrome extension detected" && return 0
     printf '%s' "$text" | grep -qiF "keep browser tools off" \
         && printf '%s' "$text" | grep -qiF "use my browser"
+}
+
+claude_chrome_question_current() {
+    local reader
+    reader="$(dirname "$_ags_global_loader")/terminal_state.py"
+    if [[ ! -f "$reader" ]]; then reader="$(dirname "$_ags_global_loader")/../../dashboard/terminal_state.py"; fi
+    printf '%s' "$1" | python3 "$reader" claude-chrome-question
 }
 
 # Claude Code's first-run setup appears in every new session until it has been
@@ -2016,6 +2023,11 @@ wait_for_claude_ready() {
             return 0
         fi
         if claude_user_prompt_present "$pane_text"; then
+            if claude_chrome_question_current "$pane_text"; then
+                CLAUDE_WAITING_FOR_CHROME=true
+                echo "[$log_prefix] Waiting for your Claude in Chrome choice. Answer it in the child's terminal. No key was sent." >&2
+                return 0
+            fi
             claude_record_failure "$session_name" "Claude asked the user about Claude in Chrome; not answered by the launcher" "$last_seen"
             echo "[$log_prefix] Aborting: Claude Code is asking the user a one-time question about Claude in Chrome (\"Claude in Chrome extension detected\"). No key was sent: the answer may become the default for all later Claude sessions, so ORRERY leaves it to you. Open 'claude' once in a normal terminal and answer it yourself (or choose with /chrome), then launch the child again." >&2
             spawn_reason "Claude Code is asking a one-time question about Claude in Chrome. Run 'claude' once in a terminal and answer it, then launch the child again."
@@ -2885,6 +2897,7 @@ CLAUDE_START_POLL_SECONDS="${AGENTSTACK_CHILD_START_POLL_SECONDS:-5}"
 CLAUDE_CHILD_ARGV_PROMPT=false
 CLAUDE_CHILD_PROMPT_FILE=""
 CLAUDE_START_CHECK=false
+CLAUDE_WAITING_FOR_CHROME=false
 # Taken just before the child is started (or its warm session gets the task):
 # the transcript of this launch begins after it.
 CLAUDE_LAUNCH_EPOCH=""
@@ -2974,6 +2987,7 @@ claude_watch_initial_task() {
     CHILD_START_PROJECT_KEY="$PROJECT_KEY" \
     CHILD_START_WAIT_SECONDS="$CLAUDE_START_WAIT_SECONDS" \
     CHILD_START_POLL_SECONDS="$CLAUDE_START_POLL_SECONDS" \
+    CHILD_START_WAITING_FOR_CHROME="${CLAUDE_WAITING_FOR_CHROME:-false}" \
     AGENTSTACK_SPAWN_INCIDENT_LOG="$SPAWN_INCIDENT_LOG" \
         nohup "${AGENTSTACK_PYTHON:-python3}" "$HOOKS_DIR/claude-initial-task-status.py" \
         watch "$child_name" "$parent_name" "$(claude_prompt_head "$prompt_text")" "${CLAUDE_LAUNCH_EPOCH:-}" \
@@ -3830,7 +3844,7 @@ ${TASK}"
             sleep 2
             flush_queued_prompt "$CHILD_NAME" || true
             verify_injection "$CHILD_NAME" "$CHILD_PROMPT" || true
-        else
+        elif [[ "$CLAUDE_WAITING_FOR_CHROME" != true ]]; then
             # The prompt was the launch argument; the start check below says
             # whether the child acted on it.
             INJECTION_VERIFIED=true
@@ -4655,8 +4669,10 @@ else
     fi
     # The prompt was the launch argument; the start check says whether the
     # child acted on it.
-    INJECTION_VERIFIED=true
-    echo "[spawn_child] Claude started after ${CLAUDE_READY_WAITED}s with its first prompt" >&2
+    if [[ "$CLAUDE_WAITING_FOR_CHROME" != true ]]; then
+        INJECTION_VERIFIED=true
+        echo "[spawn_child] Claude started after ${CLAUDE_READY_WAITED}s with its first prompt" >&2
+    fi
     CLAUDE_START_CHECK=true
 fi
 

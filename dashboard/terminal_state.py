@@ -53,6 +53,11 @@ _ASK_CODEX_RE = re.compile(
     r"Press\s+enter\s+to\s+confirm\s+or\s+esc\s+to\s+cancel", re.IGNORECASE)
 _QUESTION_RE = re.compile(r"Enter to select.{0,80}Esc to cancel")
 _CLAUDE_APPROVAL_SCROLL_RE = re.compile(r"[↑↓] [1-9]\d* more lines?")
+_CLAUDE_CHROME_CHOICE_RE = re.compile(
+    r"(?:^| )(?P<no>❯ )?(?:1\. )?No, keep browser tools off "
+    r"(?P<yes>❯ )?(?:2\. )?Yes, use my browser "
+    r"Enter to confirm · Esc to keep browser tools off$"
+)
 _AGY_COMMAND_APPROVAL_CONTROLS = "↑/↓ Navigate · tab Amend · ctrl+g edit/expand command"
 AGY_MCP_APPROVAL_CONTROLS = "↑/↓ Navigate · tab Amend"
 _AGY_APPROVAL_FOOTER_RE = re.compile(r"esc to cancel(?:\s{2,}[a-z-]+ · [^·]+ · [a-z]+)?")
@@ -184,11 +189,20 @@ def context_used(text):
             return (100-value if left else value) if 0<=value<=100 else None
     return None
 
+def claude_chrome_question(current):
+    """Recognize the current one-time Chrome choice, including wrapped rows."""
+    tail = " ".join(" ".join(current[-16:]).split())
+    match = _CLAUDE_CHROME_CHOICE_RE.search(tail)
+    return bool(match and bool(match["no"]) != bool(match["yes"]))
+
+
 def current_modal_activity(current):
     """Classify a modal that ends the current screen, excluding any composer."""
     screen = '\n'.join(current[-96:])
     if parse_codex_question(screen) or parse_agy_question(screen):
         return 'question'
+    if claude_chrome_question(current):
+        return 'ask'
     # Claude wraps the permission modal before tmux captures it. Its heading
     # can be above the 16-line window, while the menu must end the capture.
     permission = " ".join(" ".join(current[-32:]).split()).replace("❯ ", "")
@@ -393,4 +407,6 @@ if __name__=='__main__':
     import sys
     if sys.argv[1:]==['spawn-ready']:
         raise SystemExit(0 if spawn_prompt_ready(sys.stdin.read()) else 1)
+    if sys.argv[1:]==['claude-chrome-question']:
+        raise SystemExit(0 if claude_chrome_question(normalize(sys.stdin.read()).splitlines()) else 1)
     raise SystemExit(2)

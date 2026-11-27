@@ -13,11 +13,13 @@ import http.server
 import json
 import os
 import pathlib
+import runpy
 import subprocess
 import sys
 import threading
 import time
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -472,3 +474,24 @@ def test_the_launcher_takes_the_launch_time_before_starting_the_child():
     for i in taken:
         if lines[i + 1].strip().startswith("tmux new-session"):
             assert "CLAUDE_CHILD_MODEL" in "\n".join(lines[i + 1:i + 6])
+
+
+def test_a_chrome_choice_delays_the_first_task_warning_until_after_the_answer(monkeypatch):
+    watch = runpy.run_path(str(HELPER))["watch"]
+    code = watch.__globals__
+    clock = [100]
+    screens = iter([True, None, True, False])
+    sent = []
+    monkeypatch.setenv("CHILD_START_WAITING_FOR_CHROME", "true")
+    monkeypatch.setenv("CHILD_START_WAIT_SECONDS", "10")
+    monkeypatch.setenv("CHILD_START_POLL_SECONDS", "5")
+    monkeypatch.setitem(code, "time", SimpleNamespace(
+        time=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds)))
+    monkeypatch.setitem(code, "find_transcript", lambda *args: None)
+    monkeypatch.setitem(code, "_chrome_question_open", lambda child: next(screens))
+    monkeypatch.setitem(code, "_session_alive", lambda child: clock[0] < 130)
+    monkeypatch.setitem(code, "send_notice", lambda kind, *args: sent.append((clock[0], kind)))
+    monkeypatch.setitem(code, "_note", lambda message: None)
+
+    assert watch("Watched", "ParentAgent", HEAD, launched=25) == 0
+    assert sent == [(125, "unverified")]
