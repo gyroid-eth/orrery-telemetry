@@ -30,11 +30,21 @@ def _no_real_claude_catalog(monkeypatch, tmp_path):
     child's claude through a login shell -- into the subprocess.run stub of
     whichever test runs, which has no stdout. Where nothing is installed (CI)
     the script is absent and the answer is "unknown". Every test starts there;
-    the ones about the binding give their own hooks dir."""
+    the ones about the binding give their own hooks dir. Chrome readiness has
+    its own tests and must also stay independent of this machine's processes."""
     from dashboard import claude_models
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-config"))
     monkeypatch.setattr(claude_models, "_bound_child_path", None)
     monkeypatch.setattr(server, "HOOKS_DIR", str(tmp_path / "no-installed-hooks"))
+    monkeypatch.setattr(server.chrome_readiness, "personal_browser_reason", lambda *, wsl: ("", False))
+
+
+@pytest.fixture
+def isolated_codex_catalog(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "no-codex-config"))
+    monkeypatch.setenv("AGENTSTACK_HOME", str(tmp_path / "no-installed-stack"))
+    resume_helper = pathlib.Path(server.__file__).resolve().parents[1] / "hooks" / "child_resume.py"
+    monkeypatch.setenv("AGENTSTACK_CHILD_RESUME_HELPER", str(resume_helper))
 
 
 def _set_annotation_paths(monkeypatch, tmp_path):
@@ -242,7 +252,7 @@ def test_spawn_names_keeps_an_explicit_spawn_dirs_unchanged(monkeypatch):
     assert server.spawn_names_payload()["dirs"] == ["/a", "/b"]
 
 
-def test_spawn_names_advertises_codex_provider(monkeypatch):
+def test_spawn_names_advertises_codex_provider(monkeypatch, isolated_codex_catalog):
     monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-test-a, gpt-test-b")
     monkeypatch.setattr(server.codex_models, "resolve_launcher",
                         lambda: server.codex_models.LauncherPolicy(version=(0, 160, 1)))
@@ -1629,7 +1639,7 @@ globalThis.setTimeout=()=>0;
     assert pending["watch"][-1].endswith("keep an Ubuntu window open")
 
 
-def test_invalid_override_remains_a_visible_provider_in_the_api(monkeypatch):
+def test_invalid_override_remains_a_visible_provider_in_the_api(monkeypatch, isolated_codex_catalog):
     monkeypatch.setenv("AGENTSTACK_CLAUDE_MODELS", "invalid")
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Sunny\n\036Curie\n"})())
     monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})

@@ -256,6 +256,22 @@ def test_aliases_follow_the_catalog_main_rows_not_overflow_or_order(profile):
     assert {target.note for target in resolved.values()} == {""}
 
 
+def test_newest_catalog_without_short_name_still_resolves_haiku(profile):
+    rows = [
+        ("claude-haiku-5-5", "main", "Haiku", "2.2.0"),
+        ("claude-haiku-4-5-20251001", "overflow", "Haiku", None),
+    ]
+    write(profile, _aliased(rows), "with-display-names.json")
+    newer = _aliased(rows, fetched=200)
+    for row in newer["catalog"]["config"]["models"]:
+        del row["short_name"]
+    write(profile, newer, "without-display-names.json")
+
+    target = catalog.resolve_alias("haiku", cli_version=_new_cli)
+    assert (target.model, target.source) == ("claude-haiku-5-5", "local_catalog")
+    assert catalog.resolve_alias("haiku", cli_version=lambda: (2, 1, 290)).source == "bundled"
+
+
 def test_stale_catalog_still_names_the_current_model_and_says_so(monkeypatch, profile):
     monkeypatch.setattr(catalog, "_probe_cli_version", _new_cli)
     write(profile, _aliased(CURRENT, fetched=100, stale=500))
@@ -342,7 +358,7 @@ def test_dashboard_checks_the_claude_a_child_runs_not_the_first_on_path(monkeypa
 
 
 def test_a_family_with_two_current_models_is_ambiguous(profile):
-    write(profile, _aliased([("claude-opus-6", "main", "Opus", None), ("claude-opus-7", "main", "Opus", None),
+    write(profile, _aliased([("claude-opus-6", "main", "Opus", None), ("claude-opus-7", "main", None, None),
                              ("claude-sonnet-6", "main", "Sonnet", None)]))
     opus = catalog.resolve_alias("opus", cli_version=_new_cli)
     assert (opus.model, opus.source) == (catalog.BUNDLED_ALIASES["opus"], "bundled")
@@ -352,6 +368,7 @@ def test_a_family_with_two_current_models_is_ambiguous(profile):
 def test_a_row_whose_id_is_not_its_family_is_not_trusted(profile):
     write(profile, _aliased([("claude-haiku-9", "main", "Opus", None)]))
     assert catalog.resolve_alias("opus", cli_version=_new_cli).source == "bundled"
+    assert catalog.resolve_alias("haiku", cli_version=_new_cli).source == "bundled"
 
 
 @pytest.mark.parametrize("minimum", ["9" * 5000, "1234567.0", "1.2.3.4.5"])

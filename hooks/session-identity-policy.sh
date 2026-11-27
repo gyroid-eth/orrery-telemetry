@@ -34,6 +34,10 @@ fi
 # changed without hunting through the guards.
 AGENTSTACK_UNMANAGED_DEFAULT_POLICY="block"
 
+agentstack_pane_name() {
+    "${AGENTSTACK_PYTHON:-python3}" "${AGENTSTACK_PROJECT_CONTEXT_LIB%/*}/pane-name.py" "$@"
+}
+
 # One definition of "not an identity", shared by everything that asks. The
 # resolver, the guards and this scan each had their own idea, so the same name
 # was a claim in one place and nothing in another.
@@ -410,7 +414,7 @@ agentstack_session_binding_conflict() {
     # win. The precedence resolver returns on AGENT_NAME, so a session whose
     # launcher name disagrees with the tmux session it is actually in was never
     # compared -- and an outage then let it write under either name.
-    local tmux_name="" pane_meta=""
+    local tmux_name="" pane_meta="" pane_scope=""
     if [ -n "${TMUX_PANE:-}" ]; then
         tmux_name="$(tmux display-message -t "$TMUX_PANE" -p '#S' 2>/dev/null)"
         agentstack_is_placeholder_name "$tmux_name" && tmux_name=""
@@ -420,17 +424,20 @@ agentstack_session_binding_conflict() {
         # is not in doubt -- and the refusal names bindings and environments,
         # neither of which the operator would find anything wrong with.
         if [ -n "$tmux_name" ]; then
-            local pane_key="${TMUX_PANE//%/_}"
-            local meta_file="$AGENTSTACK_POLICY_RUNTIME_DIR/agent_name_${pane_key}"
-            if [ -f "$meta_file" ]; then
-                pane_meta="$(tr -d '[:space:]' < "$meta_file" 2>/dev/null)"
-                agentstack_is_placeholder_name "$pane_meta" && pane_meta=""
+            local pane_record
+            if ! pane_record="$(agentstack_pane_name read "$AGENTSTACK_POLICY_RUNTIME_DIR" "$TMUX_PANE")"; then
+                printf 'conflict\n'
+                return 0
             fi
+            pane_scope="${pane_record%%|*}"
+            pane_meta="${pane_record#*|}"
+            agentstack_is_placeholder_name "$pane_meta" && pane_meta=""
         fi
     fi
 
     AGENTSTACK_CONFLICT_TMUX_NAME="$tmux_name" \
     AGENTSTACK_CONFLICT_PANE_META="$pane_meta" \
+    AGENTSTACK_CONFLICT_PANE_SCOPE="$pane_scope" \
     AGENTSTACK_CONFLICT_SESSION="$session_id" \
     AGENTSTACK_CONFLICT_PROJECT="$project" \
     AGENTSTACK_CONFLICT_ENV_NAME="$env_name" \
@@ -473,7 +480,8 @@ pane_meta = os.environ.get("AGENTSTACK_CONFLICT_PANE_META", "")
 # override three agreeing current sources: launcher, targeted live session,
 # and this session's project-scoped self registration. Without all three,
 # retain the refusal; never rewrite/delete metadata while observing it.
-if project and env_name and env_name == tmux_name and names == {env_name}:
+if (os.environ.get("AGENTSTACK_CONFLICT_PANE_SCOPE") == "legacy"
+        and project and env_name and env_name == tmux_name and names == {env_name}):
     pane_meta = ""
 # Two distinct authoritative names still means one would write as the other.
 for claim in (
@@ -493,7 +501,7 @@ agentstack_conflict_message() {
     echo "Acting under either of them would misattribute the work. Remove the binding for the" >&2
     echo "identity this session is not, under ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/session_index," >&2
     echo "unset AGENT_NAME if it disagrees with the identity this session registered as, or clear the" >&2
-    echo "pane metadata under ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/agent_name_* if it names a different agent than this tmux session." >&2
+    echo "pane metadata (agent_name_*) under ${AGENTSTACK_RUNTIME_DIR:-$HOME/.agentstack/runtime}/pane-names or its legacy runtime location after confirming which session owns it." >&2
 }
 
 # Catalog owns the text; missing engine remains a refusal, never an allow.

@@ -167,10 +167,16 @@ def _read_catalog(path: Path, now_ms: float) -> _Snapshot | None:
     overflow = tuple(row["id"] for row in rows if row.get("section") == "overflow")
     current: dict[str, tuple[str, str] | None] = {}
     for row in rows:
-        family = row.get("short_name")
-        if row.get("section") != "main" or not isinstance(family, str):
+        if row.get("section") != "main":
             continue
-        family = family.strip().lower()
+        family = row.get("short_name")
+        if family is None:
+            # Some CLI catalog variants omit display names for the same models.
+            family = row["id"].removeprefix("claude-").partition("-")[0]
+        elif isinstance(family, str):
+            family = family.strip().lower()
+        else:
+            continue
         if family not in BUNDLED_ALIASES:
             continue
         if family in current:

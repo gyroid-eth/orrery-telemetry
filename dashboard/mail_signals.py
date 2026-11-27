@@ -13,6 +13,7 @@ import time
 
 # A recently stopped recipient can resume and still receive its notification.
 ORPHAN_AGE_SECONDS = 24 * 60 * 60
+EDITOR_BLOCK_AGE_SECONDS = 3 * 60
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class Signal:
     path: Path
     agent: str
     info: os.stat_result
+    message_key: str | None = None
 
 
 def session_names() -> set[str] | None:
@@ -54,7 +56,9 @@ def inventory(agent_dirs: list[str]) -> list[Signal]:
                                 for file in files:
                                     try:
                                         if file.name.endswith('.signal') and file.is_file(follow_symlinks=False):
-                                            signals.append(Signal(Path(file.path), agent.name, file.stat(follow_symlinks=False)))
+                                            signals.append(Signal(Path(file.path), agent.name,
+                                                                  file.stat(follow_symlinks=False),
+                                                                  file.name.removesuffix('.signal')))
                                     except OSError:
                                         continue
                     except OSError:
@@ -73,13 +77,42 @@ def is_orphan(signal: Signal, sessions: set[str] | None, runtime_dir: Path, now:
             and not os.path.lexists(runtime_dir / 'persistent' / f'{signal.agent}.json'))
 
 
-def counts(agent_dirs: list[str], runtime_dir: str, now: float) -> dict:
+def _blocked_recipients(signals: list[Signal], state: dict, now: float) -> list[str]:
+    delayed = {}
+    for entry in state.values():
+        if not isinstance(entry, dict) or entry.get('last_result') == 'success' or entry.get('terminal'):
+            continue
+        since = entry.get('editor_blocked_since_epoch')
+        attempted = entry.get('last_attempt_epoch')
+        agent, key = entry.get('agent'), entry.get('msg_key')
+        if (isinstance(since, int) and 0 < since <= now - EDITOR_BLOCK_AGE_SECONDS
+                and isinstance(attempted, int) and since <= attempted <= now
+                and isinstance(agent, str) and isinstance(key, str)):
+            delayed.setdefault(agent, {})[key] = attempted
+
+    blocked = set()
+    for signal in signals:
+        attempts = delayed.get(signal.agent, {})
+        if signal.message_key is None:
+            # The old one-file layout can be replaced by a newer signal.
+            # The watcher records seconds, so compare at the same resolution.
+            matching = any(attempted >= int(signal.info.st_mtime) for attempted in attempts.values())
+        else:
+            matching = signal.message_key in attempts
+        if matching:
+            blocked.add(signal.agent)
+    return sorted(blocked)
+
+
+def counts(agent_dirs: list[str], runtime_dir: str, now: float, *, notification_state: dict | None = None) -> dict:
     signals = inventory(agent_dirs)
     sessions = session_names() if signals else set()
     orphans = sum(is_orphan(signal, sessions, Path(runtime_dir), now) for signal in signals)
+    present = [signal for signal in signals if sessions is None or signal.agent in sessions]
     return {'signal_count': len(signals), 'orphan_signal_count': orphans,
             'actionable_signal_count': len(signals) - orphans,
-            'signal_sessions_known': sessions is not None}
+            'signal_sessions_known': sessions is not None,
+            'blocked_recipients': _blocked_recipients(present, notification_state or {}, now)}
 
 
 @contextmanager

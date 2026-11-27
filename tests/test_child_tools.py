@@ -1153,11 +1153,116 @@ def test_api_passes_chrome_extension_selection_to_codex_launcher():
     assert server._spawn_tools_args(payload, "codex", False, "") == (("--tools", "chrome-extension"), None)
 
 
+@pytest.mark.parametrize("managed,expected_version", [(False, "v20.0.0"), (True, "v9.0.0")])
+def test_user_service_finds_node_for_codex_and_linux_antigravity(tmp_path, monkeypatch, managed, expected_version):
+    monkeypatch.setattr(child_tools.sys, "platform", "linux")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NVM_DIR", raising=False)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "FixtureLinux")
+    service_path = tmp_path / "service-bin"
+    service_path.mkdir()
+    monkeypatch.setenv("PATH", str(service_path))
+    # WSL can expose Windows npm's shell script without a Linux Node.
+    _executable(service_path / "npx", "#!/bin/sh\nexit 1\n")
+    linux_chrome = service_path / "google-chrome"
+    _executable(linux_chrome, "#!/bin/sh\nexit 0\n")
+    nvm = tmp_path / ".nvm/versions/node"
+    for version in ("v9.0.0", "v20.0.0", "v24.0.0"):
+        directory = nvm / version / "bin"
+        directory.mkdir(parents=True)
+        for name in (("node",) if version == "v24.0.0" else ("node", "npx")):
+            _executable(directory / name, "#!/bin/sh\nexit 0\n")
+    if managed:
+        monkeypatch.setenv("AGENTSTACK_DSH_NODE", str(nvm / "v9.0.0/bin/node"))
+
+    choices = child_tools.launch_browser_modes({})
+    assert choices["antigravity"] == ["off", "temporary"]
+    assert "temporary" in choices["codex"]
+    selection = child_tools.normalize(tools={"browser_mode": "temporary"})
+    agy = child_tools.agy_config("/fixture/mail", selection, runtime=str(tmp_path),
+                                 project="fixture", child="FixtureAgent", mail_env="")
+    codex = {}
+    child_tools.codex_apply(codex, selection)
+    selected = nvm / expected_version / "bin"
+    for server in (agy["mcpServers"]["chrome-devtools"], codex["mcp_servers"]["chrome-devtools"]):
+        assert server["command"] == str(selected / "npx")
+        assert server["env"]["PATH"].split(os.pathsep) == [str(selected), str(service_path)]
+        assert "--isolated" in server["args"]
+        assert server["args"][server["args"].index("--executablePath") + 1] == str(linux_chrome)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+@pytest.mark.parametrize("content", ["", " \n\t", "{broken"])
+def test_antigravity_browser_catalog_handles_empty_login_config(tmp_path, monkeypatch, platform, content):
+    monkeypatch.setattr(child_tools.sys, "platform", platform)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    monkeypatch.setattr(child_tools, "running_in_wsl", lambda: False)
+    monkeypatch.setattr(child_tools.shutil, "which", lambda name: "/fixture/npx" if name == "npx" else None)
+    config = tmp_path / ".gemini/config/mcp_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(content)
+    spec = child_tools.normalize(tools={"browser_mode": "temporary"})
+    modes = child_tools.launch_browser_modes({})["antigravity"]
+    if content.strip():
+        assert modes == []
+        with pytest.raises(child_tools.ToolsError, match="Cannot check Antigravity"):
+            child_tools.agy_validate_selection(spec)
+    else:
+        assert modes == ["off", "temporary", "personal"]
+        child_tools.agy_validate_selection(spec)
+    assert config.read_text() == content
+
+
 def test_api_preserves_explicit_screen_off_in_launcher_arguments():
     tools = {"screen_off": True, "mcp": ["reader"]}
     args, error = server._spawn_tools_args({"tools": tools}, "claude", False, "")
     assert error is None
     assert child_tools.normalize(tools=child_tools.parse_cli(list(args[1::2])))["tools"] == tools
+
+
+def test_wsl_node_without_linux_chrome_does_not_offer_temporary_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr(child_tools.sys, "platform", "linux")
+    monkeypatch.setattr(child_tools, "running_in_wsl", lambda: True)
+    monkeypatch.setattr(child_tools, "_browser_npx", lambda home=None: {"command": "/fixture/npx"})
+    monkeypatch.setattr(child_tools, "_windows_browser_npx", lambda: {
+        "command": "/fixture/node.exe",
+        "args": [r"C:\fixture\node_modules\npm\bin\npx-cli.js"],
+    })
+    monkeypatch.setattr(child_tools.shutil, "which", lambda name: "/fixture/chrome.exe" if name == "google-chrome" else None)
+    choices = child_tools.launch_browser_modes({}, home=tmp_path)
+    assert choices == {key: ["off", "personal"] for key in
+                       ("claude-code", "codex", "dsh", "hermes", "antigravity")}
+    with pytest.raises(child_tools.ToolsError, match="inside WSL"):
+        child_tools._browser_mcp("temporary")
+
+
+def test_wsl_personal_chrome_uses_windows_node_and_autoconnect(tmp_path, monkeypatch):
+    monkeypatch.setattr(child_tools.sys, "platform", "linux")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("WSL_DISTRO_NAME", "FixtureWSL")
+    windows_node = tmp_path / "nodejs/node.exe"
+    windows_node.parent.mkdir()
+    _executable(windows_node, "#!/bin/sh\nexit 0\n")
+    script = windows_node.with_name("node_modules") / "npm/bin/npx-cli.js"
+    script.parent.mkdir(parents=True)
+    script.touch()
+    monkeypatch.setattr(child_tools.shutil, "which", lambda name: str(windows_node) if name == "node.exe" else None)
+
+    def convert(args, **_):
+        assert args == ["wslpath", "-w", str(script)]
+        return r"C:\Program Files\nodejs\node_modules\npm\bin\npx-cli.js" + "\n"
+
+    monkeypatch.setattr(child_tools.subprocess, "check_output", convert)
+    modes = child_tools.launch_browser_modes({})
+    assert modes["antigravity"] == modes["codex"] == ["off", "personal"]
+    name, definition = child_tools._browser_mcp("personal")
+    assert name == "chrome-devtools"
+    assert definition["command"] == str(windows_node)
+    assert definition["args"][1:] == ["-y", "chrome-devtools-mcp@latest", "--autoConnect", "--no-usage-statistics"]
+    assert child_tools.table_entry(definition)[0] == "chrome-devtools-mcp"
+    script.unlink()
+    assert child_tools.launch_browser_modes({})["antigravity"] == ["off"]
 
 
 @pytest.mark.parametrize("selection", [{"screen": "read"}, {"mcp": ["orrery-screen"]}])

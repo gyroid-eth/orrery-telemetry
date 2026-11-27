@@ -34,9 +34,8 @@ esac
 
 reservation_release_request "$AGENT" "$RESERVATION_PROJECT_KEY" >/dev/null 2>&1 || true
 
-if [ -n "${TMUX_PANE:-}" ]; then
-    PANE_KEY="${TMUX_PANE//%/_}"
-    rm -f "$RUNTIME_DIR/agent_name_${PANE_KEY}"
+if [ -n "${TMUX_PANE:-}" ] && command -v agentstack_pane_name >/dev/null 2>&1; then
+    agentstack_pane_name remove "$RUNTIME_DIR" "$TMUX_PANE" "$AGENT" || true
 fi
 
 exit 0

@@ -70,6 +70,29 @@ def test_browser_icon_opens_three_modes_and_posts_the_choice(phone):
     assert posted[0]['browser_mode'] == 'temporary' and 'browser' not in posted[0]
 
 
+@pytest.mark.parametrize(('modes', 'fallback'), [
+    (['off','temporary','personal'], 'temporary'),
+    (['off','personal'], 'off'),
+])
+@pytest.mark.parametrize('unavailable', [False, True], ids=['probe-timeout', 'chrome-stopped'])
+def test_my_chrome_diagnosis_controls_default_and_manual_choice(phone, modes, fallback, unavailable):
+    _, js, wait, _ = phone
+    reason = ('Chrome is not running on Windows. Start Google Chrome.' if unavailable else
+              'ORRERY cannot check Windows Chrome from WSL. Check Windows interop.')
+    open_local_editor(phone, lambda: {**local_catalog(), 'browser_modes':{'hermes':modes},
+        'personal_browser_status':{'hermes':{'reason':reason, 'unavailable':unavailable}}})
+    assert js("document.querySelector('#spawn-browser').dataset.browserMode") == fallback
+    assert js("document.querySelector('#spawn-notice').textContent") == 'My Chrome: ' + reason
+    js("document.querySelector('#spawn-browser').click()")
+    wait("document.querySelector('#spawn-browser-menu').matches(':popover-open')")
+    assert js("document.querySelector('#spawn-browser-menu button:last-child').disabled") is unavailable
+    if not unavailable:
+        js("document.querySelector('#spawn-browser-menu button:last-child').click()")
+        assert js("document.querySelector('#spawn-browser').dataset.browserMode") == 'personal'
+    js("document.querySelector('#spawn-editor').requestSubmit()")
+    assert js("document.querySelector('#spawn-notice').textContent") == 'My Chrome: ' + reason
+
+
 def test_switching_to_antigravity_hides_tools_and_clears_the_launch_selection(phone):
     _, js, wait, state = phone
     catalog = local_catalog()
