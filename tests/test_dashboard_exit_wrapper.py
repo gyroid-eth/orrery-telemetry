@@ -83,12 +83,22 @@ def _run_exit(monkeypatch, server, pane_cmd, tree, category, **terminal_options)
     return server.do_exit("SandyTuring"), terminal.mutations
 
 
-def test_exit_sends_slash_exit_to_codex_behind_a_bash_wrapper(monkeypatch):
+@pytest.mark.parametrize("legacy_metadata", [False, True])
+def test_exit_sends_slash_exit_to_codex_behind_a_bash_wrapper(monkeypatch, legacy_metadata):
     server = _load_server()
-    result, sent = _run_exit(monkeypatch, server, "bash", _WSL_TREE, "agent")
+    result, sent = _run_exit(monkeypatch, server, "bash", _WSL_TREE, "agent", legacy_metadata=legacy_metadata)
     assert result["ok"], result
     assert "exit-sent" in result["actions"] and "shell-exit-sent" not in result["actions"], result
     assert sent == [("paste", "/exit"), ("send-keys", "-t", "%41", "C-m")]
+
+
+def test_unavailable_exit_capture_is_reported_without_sending_keys(monkeypatch, tmp_path, caplog):
+    server = _load_server()
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path))
+    result, sent = _run_exit(monkeypatch, server, "bash", _WSL_TREE, "agent", fail_capture=True)
+    assert not result["ok"] and not sent
+    assert "Exit refused session=SandyTuring reason=input_not_found frame unavailable" in caplog.text
+    assert not list(tmp_path.rglob("*.ansi"))
 
 
 def test_exit_keeps_slash_exit_for_a_live_agent_the_classifier_called_finished(monkeypatch):

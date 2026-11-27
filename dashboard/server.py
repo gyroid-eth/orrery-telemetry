@@ -11366,6 +11366,9 @@ _EXIT_REFUSAL_FRAME_BYTES = 512 * 1024
 
 def _write_exit_refusal_frame(session, reason, frame):
     """Retain only local, private diagnostic frames beside the child state."""
+    if frame is None:
+        logging.warning("Exit refused session=%s reason=%s frame unavailable", session, reason)
+        return
     children = Path(RUNTIME_DIR) / "child-agents"
     directory = children / f"{session}.exit-refusals"
     try:

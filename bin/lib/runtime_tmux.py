@@ -605,14 +605,19 @@ def submit_terminal_exit(command, admit, pane, *, interrupt_key=None, activity=N
     def guarded_command(*args, **kwargs):
         nonlocal entered, running, last_capture
         if on_refusal and args[0] == 'display-message':
-            args = (*args[:4], args[4] + '\t#{pane_width}\t#{pane_height}', *args[5:])
+            last_capture = None
+            diagnostic_format = args[4] + '\t#{pane_width}\t#{pane_height}'
+            diagnostic_columns = len(diagnostic_format.split('\t'))
+            args = (*args[:4], diagnostic_format, *args[5:])
         result = command(*args, **kwargs)
         if args[0] == 'send-keys' and args[-1] == 'C-m' and not result.returncode:
             entered = True
         if args[0] == 'display-message' and not result.returncode:
-            metadata, _, screen = result.stdout.partition('\n')
+            metadata, separator, screen = result.stdout.partition('\n')
             fields = metadata.split('\t')
-            if on_refusal and len(fields) == 11:
+            # The shared parser accepts capture metadata from before and after
+            # the final MCP preparation column was added.
+            if on_refusal and separator and len(fields) in (diagnostic_columns - 1, diagnostic_columns):
                 width, height = fields[-2:]
                 fields = fields[:-2]
                 metadata = '\t'.join(fields)
@@ -662,7 +667,7 @@ def submit_terminal_exit(command, admit, pane, *, interrupt_key=None, activity=N
                                   discard_unsubmitted=True)
     if entered:
         return None, interrupted
-    if on_refusal and refused_capture is not None:
+    if on_refusal:
         on_refusal(reason, refused_capture)
     if status == 'unknown':
         return EXIT_COMMAND_UNCONFIRMED, interrupted
