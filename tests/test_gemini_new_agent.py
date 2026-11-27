@@ -363,14 +363,17 @@ def test_windows_chrome_retries_after_the_selected_socket_fails(monkeypatch):
     assert invalidated == ["/fixture/broken_interop"]
 
 
-@pytest.mark.parametrize(('running', 'marker', 'connects', 'expected'), [
-    (False, None, False, 'stopped'),
-    (True, None, False, 'debugging'),
-    (True, '12345\n', False, 'debugging'),
-    (True, '12345\n', True, 'ready'),
+@pytest.mark.parametrize(('running', 'marker', 'status', 'expected'), [
+    (False, None, None, 'stopped'),
+    (True, None, None, 'debugging'),
+    (True, '12345\n', ConnectionRefusedError, 'debugging'),
+    (True, '12345\n', TimeoutError, 'reply_timeout'),
+    (True, '12345\n/devtools/browser/fixture\n', 404, 'approval'),
+    (True, '12345\n/unexpected\n', 404, 'unknown'),
+    (True, '12345\n', 200, 'ready'),
 ])
-def test_mac_my_chrome_requires_running_process_and_working_debugging_port(
-        monkeypatch, tmp_path, running, marker, connects, expected):
+def test_mac_my_chrome_requires_a_devtools_reply(
+        monkeypatch, tmp_path, running, marker, status, expected):
     probe = server.chrome_readiness
     monkeypatch.setattr(probe.Path, 'home', lambda: tmp_path)
     monkeypatch.setattr(probe.subprocess, 'run', lambda *a, **k: types.SimpleNamespace(returncode=0 if running else 1))
@@ -379,15 +382,35 @@ def test_mac_my_chrome_requires_running_process_and_working_debugging_port(
         path.parent.mkdir(parents=True)
         path.write_text(marker)
 
-    def connect(address, *, timeout):
-        assert address == ('127.0.0.1', 12345)
-        if not connects:
-            raise ConnectionRefusedError
-        from contextlib import nullcontext
-        return nullcontext()
+    class Connection:
+        def __init__(self, address, port, *, timeout):
+            assert (address, port) == ('127.0.0.1', 12345)
 
-    monkeypatch.setattr(probe.socket, 'create_connection', connect)
+        def request(self, method, path):
+            assert (method, path) == ('GET', '/json/version')
+            if isinstance(status, type):
+                raise status
+
+        def getresponse(self):
+            return types.SimpleNamespace(status=status, read=lambda _: b'{"Browser":"Chrome/144","Protocol-Version":"1.3"}')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(probe.http.client, 'HTTPConnection', Connection)
     assert probe._mac_state() == expected
+
+
+@pytest.mark.parametrize('status', ['ready', 'approval', 'reply_timeout'])
+def test_wsl_my_chrome_probe_reports_the_devtools_reply(monkeypatch, status):
+    probe = server.chrome_readiness
+
+    def run(argv, **kwargs):
+        assert '/json/version' in argv[-1] and 'TcpClient' not in argv[-1]
+        return types.SimpleNamespace(stdout=status)
+
+    monkeypatch.setattr(probe.subprocess, 'run', run)
+    assert probe._windows_chrome_state('/fixture/powershell.exe', {}) == status
 
 
 def test_spawn_catalog_marks_gemini_unavailable_before_launch(monkeypatch, tmp_path):

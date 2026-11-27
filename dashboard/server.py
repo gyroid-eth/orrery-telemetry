@@ -8681,6 +8681,7 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
             return {"ok": False, "error": "Exit the agent and confirm it has stopped before changing tools"}
     selection = _child_tools_module()
     runtime = pathlib.Path(RUNTIME_DIR)
+    browser_warning = ""
     if permission is not None:
         sid = permission["history_session_id"]
         current = sessions.get(session)
@@ -8782,7 +8783,9 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
                 and provider in {"codex", "dsh", "hermes", "antigravity"}):
             status = _personal_browser_status({provider}, selection, config if provider == "codex" else {})
             if provider in status:
-                raise ValueError(status[provider]["reason"])
+                browser_warning = status[provider]["reason"]
+                if browser_warning != chrome_readiness.APPROVAL_REASON:
+                    raise ValueError(browser_warning)
         if provider == "claude":
             selection.check_provider(spec, provider)
             if "browser_mode" in permission:
@@ -8841,7 +8844,8 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
             owner_parameters = _mcp_tool_parameters("register_agent")
             if owner_parameters is None or "existing_agent_id" not in owner_parameters:
                 return {"ok": False, "error": "ORRERY Mail could not confirm existing-owner resume support"}
-        return {"ok": True, "action": "validated"}
+        return {"ok": True, "action": "validated",
+                **({"warning": browser_warning} if browser_warning else {})}
     generation = module.begin_tools_change(runtime, session, state, record, candidate, profile,
                                            **({"adopt": True} if adopt else {}))
     try:
@@ -8863,6 +8867,8 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
         # Only this generation may restore the previous selection/config.
         module.finish_tools_change(runtime, session, generation, commit=False)
         raise
+    if result.get("ok") and browser_warning:
+        result["warning"] = " · ".join(filter(None, (result.get("warning"), browser_warning)))
     if result.get("ok"):
         try:
             module.finish_tools_change(runtime, session, generation, commit=True)

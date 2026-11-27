@@ -1474,6 +1474,9 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
         head += " The browser integration is off for this launch."
     elif mode:
         head += " The Browser setting is " + ("Temporary Chrome." if mode == "temporary" else "My Chrome.")
+        if mode == "personal" and provider != "claude":
+            head += (' If Chrome shows “Allow remote debugging?”, wait for the operator to allow '
+                     'the connection. If the browser tool times out connecting, report that to ' + report_to + '.')
     screen = spec["tools"].get("screen")
     if screen_mode(spec) is not None:
         head += " The operator can change the orrery-screen permission while this child is running."
