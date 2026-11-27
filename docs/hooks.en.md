@@ -159,6 +159,8 @@ By default, a target declaration through `--resources` is required, and conflict
 
 `AGENTSTACK_CHILD_DEFAULT_TOOLS` applies to new Claude, Codex, dsh and Hermes launches that omit `--base` / `--tools` / `--codex-mcp` on the CLI or `base` / `tools` in the standard `/api/spawn`. The final directory and provider determine which default items are usable. Omissions appear in spawn output and first instructions. Explicit selections and resume retain their fail-closed path. See [defaults](https://github.com/gyroid-eth/orrery/blob/master/docs/en/delegation.md#installer-defaults).
 
+When a Claude child opens the one-time Chrome extension question, the terminal stays open and the cockpit shows it under **need you**. Answer in that terminal and Claude continues with the task supplied at launch.
+
 ### `cleanup-child-agent.sh`
 
 This helper is chained after the child's Claude / Codex command and runs only when the REPL returns. It releases all reservations and retires the identity with the child's owner token. Remote release / retirement and managed-list updates remain best-effort and run before local child state is handled.
