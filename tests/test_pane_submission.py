@@ -82,6 +82,13 @@ def test_hermes_compact_hint_requires_an_adjacent_status_bar():
      'node /home/demo/node_modules/@google/gemini-cli/dist/index.js'),
     ('dsh', [BORDER, '⌸ ❯ ', BORDER], 'mainthread', 'node /home/demo/node_modules/@deepseek-ai/dsh/lib/bin.js'),
     ('hermes', [BORDER, '❯ ', BORDER, ' ☤ fixture status'], 'python3', 'python3 -m hermes_cli.main'),
+    ('dsh', [BORDER, '⌸ ❯ ', BORDER], 'node', "node /home/demo/node_modules/@deepseek-ai/dsh/lib/bin.js don't stop"),
+    ('hermes', [BORDER, '❯ ', BORDER, ' ☤ fixture status'], 'python3',
+     "python3 /home/demo/venv/bin/hermes don't stop"),
+    ('claude', [BORDER, '❯ ', BORDER], 'node', "node /home/demo/bin/claude don't stop"),
+    ('codex', ['', '› '], 'node', "node /home/demo/bin/codex don't stop"),
+    ('agy', [BORDER, '> ', BORDER, 'Gemini 4 Neon (Low) · low'], 'node',
+     "node /home/demo/bin/gemini don't stop"),
 ])
 def test_unknown_paste_mode_requires_the_matching_editor_in_the_foreground_group(
     monkeypatch, editor, rows, command, argv,

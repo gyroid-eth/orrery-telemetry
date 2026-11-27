@@ -14,23 +14,26 @@ CONNECTIONS = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'hooks/na
 
 def matches_command(program, command):
     try:
-        argv = shlex.split(command)
+        # ps flattens the original arguments without shell quoting. A quote
+        # in the initial prompt must not affect the launcher identity.
+        lexer = shlex.shlex(command, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ''
+        executable = os.path.basename(next(lexer, '')).lower()
+        if program == 'dsh':
+            return (executable == 'node' and next(lexer, '').endswith(
+                '/node_modules/@deepseek-ai/dsh/lib/bin.js'))
+        if program == 'hermes':
+            if executable == 'hermes':
+                return True
+            if not re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', executable):
+                return False
+            entry = next(lexer, '')
+            if entry == '-m':
+                return next(lexer, '') == 'hermes_cli.main'
+            return entry.endswith(('/bin/hermes', '/hermes_cli/main.py'))
     except ValueError:
         return False
-    if not argv:
-        return False
-    executable = os.path.basename(argv[0]).lower()
-    if program == 'dsh':
-        return (executable == 'node' and len(argv) > 1
-                and argv[1].endswith('/node_modules/@deepseek-ai/dsh/lib/bin.js'))
-    if program == 'hermes':
-        if executable == 'hermes':
-            return True
-        if not re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', executable):
-            return False
-        return (len(argv) > 2 and argv[1:3] == ['-m', 'hermes_cli.main']
-                or len(argv) > 1 and (argv[1].endswith('/bin/hermes')
-                                     or argv[1].endswith('/hermes_cli/main.py')))
     return False
 
 
