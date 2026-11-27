@@ -18,7 +18,7 @@ METADATA = "/unused/tmux.sock\t100\t%1\t200\t1\t0\t2\t1\tpython"
     [
         ([BORDER, "> ", BORDER, "Gemini 4 Neon (Low) · low"], ""),
         ([BORDER, "> Keep this draft", BORDER, "Gemini 4 Neon (Low) · low"], "Keep this draft"),
-        ([BORDER, "> ", BORDER, "Another model · low"], None),
+        ([BORDER, "> ", BORDER, "Another model · low"], ""),
         ([BORDER, "> ", BORDER, "Gemini 4 Neon (Low) · launching"], None),
         (["", "> ", BORDER, "Gemini 4 Neon (Low) · low"], None),
     ],
