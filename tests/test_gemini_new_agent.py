@@ -1207,18 +1207,18 @@ def test_concurrent_gemini_and_native_spawns_do_not_cross_contaminate(gemini_env
 def test_readiness_timeout_signals_gemini_process_group_and_cleans_handoff(
         gemini_env, monkeypatch, cleanup_confirmed):
     signals = []
+    now = 0.0
 
     class SlowProc:
         pid = 31337
 
-        def __init__(self):
-            self.calls = 0
-
         def wait(self, timeout=None):
-            self.calls += 1
-            if self.calls == 1:
-                raise subprocess.TimeoutExpired("launcher", timeout)
-            return -15
+            nonlocal now
+            if signals:
+                return -15
+            assert timeout is not None
+            now += timeout
+            raise subprocess.TimeoutExpired("launcher", timeout)
 
         def terminate(self):
             signals.append(("terminate", None))
@@ -1231,9 +1231,12 @@ def test_readiness_timeout_signals_gemini_process_group_and_cleans_handoff(
     def popen(args, **kwargs):
         if os.path.basename(str(args[0])) == "git":
             return _REAL_POPEN(args, **kwargs)
+        if marker := kwargs["env"].get("AGENTSTACK_SPAWN_PHASE_FILE"):
+            pathlib.Path(marker).write_text("startup\n", encoding="ascii")
         launched.append((list(args), kwargs))
         return SlowProc()
 
+    monkeypatch.setattr(server.time, "monotonic", lambda: now)
     monkeypatch.setattr(server.subprocess, "Popen", popen)
     monkeypatch.setattr(server.os, "killpg", lambda pid, signum: signals.append((pid, signum)))
 
@@ -1242,6 +1245,7 @@ def test_readiness_timeout_signals_gemini_process_group_and_cleans_handoff(
     result = server.do_spawn(_gemini_payload(gemini_env))
     assert result["ok"] is False
     assert "did not finish readiness checks within 120s" in result["error"]
+    assert now == server._SPAWN_READINESS_TIMEOUT_SECONDS
     assert signals == [(31337, signal.SIGTERM)]
     assert pathlib.Path(launched[0][1]["env"]["AGENTSTACK_GEMINI_TASK_FILE"]).exists() is (not cleanup_confirmed)
     if not cleanup_confirmed:
@@ -1249,7 +1253,7 @@ def test_readiness_timeout_signals_gemini_process_group_and_cleans_handoff(
 
     signals.clear()
     server.do_spawn({"parent": "Parent", "name": "Zesty-Bohr", "task": "work",
-                     "dir": str(gemini_env.repo)})
+                     "dir": str(gemini_env.repo), "worktree": False})
     assert signals == [("terminate", None)]
 
 

@@ -1608,7 +1608,7 @@ def test_rendered_watcher_waits_for_the_server_verdict_deadline():
         pytest.skip("node is required to run the dashboard watcher")
     source = (pathlib.Path(server.__file__).parent / "index.html").read_bytes()
     rendered = server._render_dashboard_index(source).decode("utf-8")
-    assert "watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j),wslWarning);" in rendered
+    assert "watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j),wslWarning,worktreeNotice);" in rendered
     parts = []
     for constant in ("SPAWN_WATCH_DEFAULT_MS", "SPAWN_WATCH_MAX_MS"):
         match = re.search(rf"\nconst {constant}=[^;]+;", rendered)
@@ -1681,7 +1681,7 @@ globalThis.setTimeout=()=>0;
   const out=[];
   for(const pending of [true,false]){
     notice=watch=null;
-    reply={ok:true,pending,child_name:'FixtureAgent',wsl_hold:{
+    reply={ok:true,pending,child_name:'FixtureAgent',worktree_notice:'Managed settings require a worktree',wsl_hold:{
       ok:false,state:'timeout',error:'PowerShell timed out',hint:'keep an Ubuntu window open'
     }};
     await submitSpawn();
@@ -1697,8 +1697,10 @@ globalThis.setTimeout=()=>0;
         title, message, warning, duration = outcome["notice"]
         assert "WSL NOT KEPT" in title
         assert "PowerShell timed out" in message and "keep an Ubuntu window open" in message
+        assert "Managed settings require a worktree" in message
         assert warning and duration >= 10000
-    assert pending["watch"][-1].endswith("keep an Ubuntu window open")
+    assert pending["watch"][3].endswith("keep an Ubuntu window open")
+    assert pending["watch"][4] == " · Managed settings require a worktree"
 
 
 def test_invalid_override_remains_a_visible_provider_in_the_api(monkeypatch, isolated_codex_catalog):
