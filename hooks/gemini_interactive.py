@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import suppress
 import hashlib
 import json
 import os
@@ -281,7 +282,30 @@ def validate_permission_selection(runtime, state, spec):
     child_tools.check_screen_relay(spec)
 
 
-def _matches_managed_mcp(home, cwd, config_dir, name, definition):
+def _eager_tools(definition, names):
+    return {**definition, "tools": {tool: {"eager": True} for tool in names}}
+
+
+def _browser_tool_names(selection, name, definition):
+    tools, _ = child_tools._approval(selection, name, definition, browser_server=name)
+    return tools
+
+
+def _eager_managed_servers(config, selection, screen_mode):
+    """Register tools we own up front, keeping provider permission rules separate."""
+    servers = config["mcpServers"]
+    servers["orrery-mail"] = _eager_tools(servers["orrery-mail"], MAIL_TOOLS)
+    if chrome := servers.get("chrome-devtools"):
+        names = _browser_tool_names(selection, "chrome-devtools", chrome)
+        if names:
+            servers["chrome-devtools"] = _eager_tools(chrome, names)
+    if screen_mode in ("view", "control"):
+        policy = child_tools._screen_state()
+        names = policy["VIEW_TOOLS"] if screen_mode == "view" else policy["TOOLS"]
+        servers[child_tools.SCREEN_SERVER] = _eager_tools(servers[child_tools.SCREEN_SERVER], names)
+
+
+def _matches_managed_mcp(home, cwd, config_dir, name, definition, eager_names):
     """Check that no inherited server can shadow an approved managed server."""
     configs = [("global", home / ".gemini" / "config" / "mcp_config.json"),
                ("workspace", Path(cwd) / ".agents" / "mcp_config.json")]
@@ -299,7 +323,7 @@ def _matches_managed_mcp(home, cwd, config_dir, name, definition):
         if isinstance(entry, dict) and entry.get("disabled") is True:
             continue
         # A same-named inherited server can take precedence in Antigravity.
-        if entry != definition:
+        if entry not in (definition, _eager_tools(definition, eager_names)):
             return False
         found = True
     return found
@@ -310,9 +334,9 @@ def _managed_browser_approval_rules(home, cwd, config_dir, selection):
     if mode not in ("temporary", "personal"):
         return []
     name, definition = child_tools._browser_mcp(mode)
-    if not _matches_managed_mcp(home, cwd, config_dir, name, definition):
+    tools = _browser_tool_names(selection, name, definition)
+    if not _matches_managed_mcp(home, cwd, config_dir, name, definition, tools):
         return []
-    tools, _ = child_tools._approval(selection, name, definition, browser_server=name)
     return [f"mcp({name}/{tool})" for tool in tools]
 
 
@@ -322,16 +346,15 @@ def _prompt_with_mcp_tools(prompt, *, managed_mail, parent, browser_mode):
         recipient = parent or "<recipient agent name>"
         arguments = json.dumps({"to": [recipient], "subject": "<subject>", "body_md": "<message>"})
         instructions.append(
-            "For ORRERY Mail, use Antigravity's `call_mcp_tool` with `ServerName: orrery-mail`, "
-            f"`ToolName: send_message`, and `Arguments: {arguments}`. "
+            "For ORRERY Mail, use the registered `orrery-mail` MCP tool `send_message` "
+            f"with arguments {arguments}. "
             "The bound Mail server supplies your identity. Antigravity's built-in `send_message` "
             "is for its own subagents."
         )
     if browser_mode in ("temporary", "personal"):
         instructions.append(
-            "For browser work requested in the task, use Antigravity's `call_mcp_tool` with "
-            '`ServerName: chrome-devtools` and the specific browser action as `ToolName`. '
-            'To open a page, use `ToolName: new_page` and `Arguments: {"url": "<requested URL>"}`.'
+            "For browser work requested in the task, use the registered `chrome-devtools` MCP tools. "
+            'To open a page, use `new_page` with arguments {"url": "<requested URL>"}.'
         )
     return "\n\n".join([*instructions, prompt])
 
@@ -377,7 +400,7 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
         screen_tools = screen_policy["VIEW_TOOLS"] if screen_mode == "view" else screen_policy["TOOLS"]
         screen_permissions = [f"mcp({child_tools.SCREEN_SERVER}/{tool})" for tool in screen_tools]
     mail_rules = ([f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS]
-                  if _matches_managed_mcp(home, cwd, config_dir, "orrery-mail", _mail_server()) else [])
+                  if _matches_managed_mcp(home, cwd, config_dir, "orrery-mail", _mail_server(), MAIL_TOOLS) else [])
     explicit = set(permissions.get("deny", ())) | set(permissions.get("ask", ()))
     browser_rules = [rule for rule in _managed_browser_approval_rules(home, cwd, config_dir, selection)
                      if rule not in explicit]
@@ -560,9 +583,15 @@ def run(runtime, name, task_file=None, conversation=None):
         changed = permission_selection(runtime, state, conversation) if conversation else None
         spec = changed["selection"] if changed else _tool_selection(plan)
         screen_mode = "off"
-        if standalone or conversation is None or changed:
-            if changed and not standalone:
+        if conversation and not standalone:
+            if changed:
                 workspace_mcp = _workspace_mcp_snapshot(runtime, state, cwd)
+            else:
+                # Older delegated sessions may use project-owned MCP files.
+                # Only rebuild a configuration whose managed origin is verified.
+                with suppress(OSError, ValueError):
+                    workspace_mcp = _workspace_mcp_snapshot(runtime, state, cwd)
+        if standalone or conversation is None or changed or workspace_mcp:
             mcp_path = (workspace_mcp[0] if workspace_mcp else
                         None if standalone else _delegated_mcp_path(cwd))
             change_screen = changed and changed.get("computer_use_changed") and child_resume.tools_change_generation()
@@ -573,6 +602,7 @@ def run(runtime, name, task_file=None, conversation=None):
                 generation=generation, cwd=cwd if standalone else None,
                 resume_from=(plan.get("screen_generation") or "") if conversation and not change_screen else None,
             )
+            _eager_managed_servers(mcp, spec, screen_mode)
             if standalone:
                 directory = path.with_suffix(".agy-config")
                 _configure_standalone(directory, plan, mcp)
