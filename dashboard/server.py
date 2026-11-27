@@ -2423,7 +2423,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
     if (kind in {"claude", "codex", "antigravity"} and registration and transcript and not parent
             and not os.path.lexists(Path(RUNTIME_DIR) / "child-agents" / f"{name}.json")
             and (kind != "codex" or provenance.get("launch_origin") == "standalone")
-            and (kind != "antigravity" or sys.platform == "darwin")
+            and (kind != "antigravity" or sys.platform in {"darwin", "linux"})
             and (kind != "claude" or spec is None or spec.get("standalone") is True)):
         parent_state = "top"
         permission_reason = _standalone_permission_block(registration, name)
@@ -10387,7 +10387,7 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
         if error:
             return error
         if (spec.provider not in ("claude", "codex") and spec.program not in harness_runtime.HARNESSES
-                and (spec.program != "antigravity" or sys.platform != "darwin")
+                and (spec.program != "antigravity" or not spec.standalone_supported)
                 and (payload.get("tools") or payload.get("base") not in (None, "default"))):
             return {"ok": False,
                     "error": f"base and tools are not supported for provider: {spec.provider}"}
@@ -10572,7 +10572,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         result.update(extra)
         return result
 
-    requires_child_binding = provider in {"claude", "codex"} or (provider == "gemini" and sys.platform == "darwin")
+    requires_child_binding = provider in {"claude", "codex"} or (provider == "gemini" and spec.standalone_supported)
     if requires_child_binding and (
         type(registered_agent_id) is not int or registered_agent_id <= 0
     ):

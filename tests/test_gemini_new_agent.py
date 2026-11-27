@@ -238,6 +238,7 @@ def test_gemini_mac_spawn_passes_managed_screen_to_the_adapter(monkeypatch, gemi
 @pytest.mark.parametrize("platform", ["darwin", "linux"])
 def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
     monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform=platform))
+    monkeypatch.setattr(gemini_runtime, "_runtime_requirements", lambda base: ({}, ""))
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
     monkeypatch.setattr(
         server,
@@ -264,11 +265,20 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
             "resume": False,
             "runtime": True,
             "transcript": False,
-            "standalone": platform == "darwin",
+            "standalone": True,
             "worktree_required": True,
             "resources_required": True,
         },
     }
+
+
+def test_spawn_catalog_marks_gemini_unavailable_before_launch(monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "_runtime_requirements", lambda base: ({}, "CLI missing"))
+    gemini = next(provider for provider in server.spawn_names_payload()["providers"]
+                  if provider["id"] == "gemini")
+    assert gemini["harnesses"] == [
+        {"id": "antigravity", "available": False, "reason": "runtime_not_prepared"},
+    ]
 
 
 def test_argon_from_cli_uses_selected_effort_in_launch(gemini_env, monkeypatch):
@@ -331,13 +341,14 @@ def test_direct_cli_launchers_keep_historical_high_effort_fallback():
         assert 'EFFORT="${AGENTSTACK_GEMINI_EFFORT:-high}"' in path.read_text(encoding="utf-8")
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS interactive Antigravity launcher")
-def test_direct_gemini_delegation_passes_tools_to_the_mac_adapter(tmp_path):
+@pytest.mark.parametrize("kernel", ["Darwin", "Linux"])
+def test_direct_gemini_delegation_passes_tools_to_the_interactive_adapter(tmp_path, kernel):
     repo = _make_repo(tmp_path)
     home = tmp_path / "install"
     fake_bin = tmp_path / "bin"
     _executable(fake_bin / "agy", "#!/bin/sh\n")
     _executable(fake_bin / "tmux", "#!/bin/sh\n")
+    _executable(fake_bin / "uname", f"#!/bin/sh\nprintf '%s\\n' {kernel}\n")
     hooks = home / "hooks"
     hooks.mkdir(parents=True)
     shutil.copy2(ROOT / "hooks" / "child_tools.py", hooks / "child_tools.py")
@@ -361,11 +372,11 @@ def test_direct_gemini_delegation_passes_tools_to_the_mac_adapter(tmp_path):
         "FIXTURE_ADAPTER_ARGS": str(out),
     }
     result = _REAL_RUN(["/bin/bash", str(ROOT / "hooks/spawn_gemini_child.sh"),
-                        "--resources", "src/**", "--tools", "screen:read", "Fixture task", str(repo)],
+                        "--resources", "src/**", "--tools", "browser-mode:temporary", "Fixture task", str(repo)],
                        env=env, text=True, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
     argv = out.read_text().splitlines()
-    assert argv[argv.index("--tools") + 1] == "screen:read"
+    assert argv[argv.index("--tools") + 1] == "browser-mode:temporary"
     assert argv[-2:] == ["", str(repo.resolve())]
 
 
@@ -393,8 +404,8 @@ def test_gemini_spawn_requires_explicit_effort(tmp_path):
     assert result == {"ok": False, "error": "effort required for provider gemini"}
 
 
-def test_gemini_spawn_rejects_standalone_on_linux_and_invalid_engine_options(tmp_path, monkeypatch):
-    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="linux"))
+def test_gemini_spawn_rejects_standalone_on_unsupported_os_and_invalid_engine_options(tmp_path, monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="freebsd"))
     common = {
         "parent": "Parent-Curie",
         "task": "inspect the dashboard",
@@ -875,8 +886,9 @@ def test_gemini_spawn_dispatches_existing_preregistered_adapter(gemini_env):
     assert not list(gemini_env.runtime.glob("provider-gemini-*"))
 
 
-def test_gemini_standalone_dispatches_without_git_parent_or_reservations(gemini_env, monkeypatch):
-    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="darwin"))
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_gemini_standalone_dispatches_without_git_parent_or_reservations(gemini_env, monkeypatch, platform):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform=platform))
     monkeypatch.setenv("PARENT_AGENT", "Unrelated")
     picked = gemini_env.tmp / "picked folder"
     picked.mkdir()
@@ -1426,6 +1438,7 @@ def _adapter_run(tmp_path: pathlib.Path, resources: str, block_reserve: bool = F
     fake_bin = tmp_path / "fake-bin"
     _executable(fake_bin / "agy", "#!/bin/sh\n")
     _executable(fake_bin / "tmux", "#!/bin/sh\n")
+    _executable(fake_bin / "uname", "#!/bin/sh\nprintf 'FreeBSD\\n'\n")
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     token = runtime / "one-shot.token"
@@ -1475,7 +1488,8 @@ def _mail_calls(run) -> list[str]:
 
 
 @pytest.mark.parametrize("isolation", [False, True])
-def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, isolation):
+@pytest.mark.parametrize("kernel", ["Darwin", "Linux"])
+def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, isolation, kernel):
     selected = _make_repo(tmp_path) if isolation else tmp_path / "vault"
     selected.mkdir(exist_ok=True)
     home = tmp_path / "install"
@@ -1491,7 +1505,7 @@ def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, i
     for helper in ("agentstack-gemini-child-mail", "agentstack-gemini-stream", "agentstack-gemini-mcp"):
         _executable(home / "bin" / helper, "#!/bin/sh\nexit 99\n")
     fake_bin = tmp_path / "commands"
-    _executable(fake_bin / "uname", "#!/bin/sh\nprintf 'Darwin\\n'\n")
+    _executable(fake_bin / "uname", f"#!/bin/sh\nprintf '%s\\n' {kernel}\n")
     capture = tmp_path / "launch.json"
     _executable(fake_bin / "agy", f"#!{sys.executable}\n" + """
 import json, os, sys

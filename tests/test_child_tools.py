@@ -1153,6 +1153,41 @@ def test_api_passes_chrome_extension_selection_to_codex_launcher():
     assert server._spawn_tools_args(payload, "codex", False, "") == (("--tools", "chrome-extension"), None)
 
 
+@pytest.mark.parametrize("managed,expected_version", [(False, "v20.0.0"), (True, "v9.0.0")])
+def test_user_service_finds_node_for_codex_and_linux_antigravity(tmp_path, monkeypatch, managed, expected_version):
+    monkeypatch.setattr(child_tools.sys, "platform", "linux")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NVM_DIR", raising=False)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "FixtureLinux")
+    service_path = tmp_path / "service-bin"
+    service_path.mkdir()
+    monkeypatch.setenv("PATH", str(service_path))
+    # WSL can expose Windows npm's shell script without a Linux Node.
+    _executable(service_path / "npx", "#!/bin/sh\nexit 1\n")
+    nvm = tmp_path / ".nvm/versions/node"
+    for version in ("v9.0.0", "v20.0.0", "v24.0.0"):
+        directory = nvm / version / "bin"
+        directory.mkdir(parents=True)
+        for name in (("node",) if version == "v24.0.0" else ("node", "npx")):
+            _executable(directory / name, "#!/bin/sh\nexit 0\n")
+    if managed:
+        monkeypatch.setenv("AGENTSTACK_DSH_NODE", str(nvm / "v9.0.0/bin/node"))
+
+    choices = child_tools.launch_browser_modes({})
+    assert choices["antigravity"] == ["off", "temporary"]
+    assert "temporary" in choices["codex"]
+    selection = child_tools.normalize(tools={"browser_mode": "temporary"})
+    agy = child_tools.agy_config("/fixture/mail", selection, runtime=str(tmp_path),
+                                 project="fixture", child="FixtureAgent", mail_env="")
+    codex = {}
+    child_tools.codex_apply(codex, selection)
+    selected = nvm / expected_version / "bin"
+    for server in (agy["mcpServers"]["chrome-devtools"], codex["mcp_servers"]["chrome-devtools"]):
+        assert server["command"] == str(selected / "npx")
+        assert server["env"]["PATH"].split(os.pathsep) == [str(selected), str(service_path)]
+        assert "--isolated" in server["args"]
+
+
 def test_api_preserves_explicit_screen_off_in_launcher_arguments():
     tools = {"screen_off": True, "mcp": ["reader"]}
     args, error = server._spawn_tools_args({"tools": tools}, "claude", False, "")

@@ -467,13 +467,15 @@ def check_provider(spec: dict, provider: str) -> None:
                 "screen server (screen:<read|operate>:<server>)")
     elif provider in ("dsh", "hermes"):
         return
-    elif provider in ("gemini", "antigravity", "agy") and sys.platform == "darwin":
+    elif provider in ("gemini", "antigravity", "agy") and sys.platform in {"darwin", "linux"}:
         names = tools.get("mcp", [])
         screen = tools.get("screen")
         if (spec["base"] != "default" or set(tools) - {"screen", "screen_off", "mcp", "browser_mode"}
                 or (screen and screen["server"] != SCREEN_SERVER)
                 or any(name != SCREEN_SERVER for name in names)):
             raise ToolsError("Antigravity supports only the managed Computer use selection")
+        if sys.platform == "linux" and (screen_mode(spec) is not None or tools.get("browser_mode") == "personal"):
+            raise ToolsError("My Chrome and Computer use are unavailable for Antigravity on Linux")
     elif provider != "claude":
         if restrictive(spec):
             raise ToolsError(f"base and tools are not supported for provider: {provider}")
@@ -797,6 +799,29 @@ def _personal_chrome(definition):
                         for arg in args if isinstance(arg, str)))
 
 
+def _browser_npx(home=None):
+    command = shutil.which("npx")
+    if command and (sys.platform != "linux" or not running_in_wsl() or shutil.which("node")):
+        return {"command": command}
+    # A user service can have a much shorter PATH than the login shell.
+    home = home or Path.home()
+    nvm = Path(os.environ.get("NVM_DIR") or home / ".nvm").expanduser()
+    versions = nvm / "versions" / "node"
+    installed = [folder for folder in versions.glob("v*") if re.fullmatch(r"v\d+\.\d+\.\d+", folder.name)]
+    installed.sort(key=lambda folder: tuple(map(int, folder.name[1:].split("."))), reverse=True)
+    managed_node = Path(os.environ.get("AGENTSTACK_DSH_NODE", ""))
+    directories = [home / ".local/bin", home / ".nodebrew/current/bin", *(folder / "bin" for folder in installed)]
+    if managed_node.is_absolute() and managed_node.is_file() and os.access(managed_node, os.X_OK):
+        directories.insert(0, managed_node.parent)
+    for directory in directories:
+        if not all(path.is_file() and os.access(path, os.X_OK) for path in (directory / "npx", directory / "node")):
+            continue
+        # npx's env-based shebang must find Node beside the selected executable.
+        path = os.pathsep.join(filter(None, (str(directory), os.environ.get("PATH", os.defpath))))
+        return {"command": str(directory / "npx"), "env": {"PATH": path}}
+    raise ToolsError("Install Node.js to use Chrome DevTools")
+
+
 def _browser_mcp(mode, codex_config=None):
     if mode == "personal" and codex_config is not None:
         configured = _native_codex_browser(codex_config, explicit=True)
@@ -804,17 +829,19 @@ def _browser_mcp(mode, codex_config=None):
             if not _personal_chrome(configured[1]):
                 raise ToolsError("My Chrome requires Chrome DevTools with autoConnect")
             return configured
-    npx = shutil.which("npx")
-    if not npx:
-        raise ToolsError("Install Node.js to use Chrome DevTools")
     switch = "--isolated" if mode == "temporary" else "--autoConnect"
-    return "chrome-devtools", {"command": npx, "args": ["-y", "chrome-devtools-mcp@latest",
+    return "chrome-devtools", {**_browser_npx(), "args": ["-y", "chrome-devtools-mcp@latest",
                                                        switch, "--no-usage-statistics"]}
 
 
 def launch_browser_modes(codex_config, *, home=None):
     choices = {key: ["off"] for key in ("claude-code", "codex", "dsh", "hermes")}
-    if shutil.which("npx"):
+    try:
+        _browser_npx(home)
+    except ToolsError:
+        have_npx = False
+    else:
+        have_npx = True
         for modes in choices.values():
             modes.append("temporary")
     choices["claude-code"].append("personal")
@@ -829,14 +856,18 @@ def launch_browser_modes(codex_config, *, home=None):
         choices[key].append("personal")
     choices["hermes"] = list(choices["dsh"])
     choices["antigravity"] = []
-    if sys.platform == "darwin":
+    if sys.platform in {"darwin", "linux"}:
         try:
             inherited = _agy_inherited_servers(
                 (home or Path.home()) / ".gemini" / "config" / "mcp_config.json", "global")
         except ToolsError:
             return choices
         if not _agy_managed_browser_conflict(inherited):
-            choices["antigravity"] = ["off", "temporary", "personal"] if shutil.which("npx") else ["off"]
+            choices["antigravity"] = ["off"]
+            if have_npx:
+                choices["antigravity"].append("temporary")
+                if sys.platform == "darwin":
+                    choices["antigravity"].append("personal")
     return choices
 
 
@@ -953,7 +984,7 @@ def mail_alias_names(settings: dict) -> list[str]:
 def agy_validate_selection(spec, *, home=None, cwd=None):
     """Check Antigravity's inherited servers without creating launch state."""
     check_provider(spec, "gemini")
-    if sys.platform != "darwin":
+    if sys.platform not in {"darwin", "linux"}:
         return
     if home is None:
         home = Path.home()
@@ -984,12 +1015,12 @@ def agy_launch_config(mail_command, spec, *, runtime, project, child, mail_env, 
                       home=None, cwd=None, resume_from=None):
     agy_validate_selection(spec, home=home, cwd=cwd)
     servers = {"orrery-mail": {"command": mail_command, "args": []}}
-    if sys.platform != "darwin":
-        return {"mcpServers": servers}, None
     mode = spec["tools"].get("browser_mode")
     if mode in ("temporary", "personal"):
         name, definition = _browser_mcp(mode)
         servers[name] = definition
+    if sys.platform != "darwin":
+        return {"mcpServers": servers}, None
     state = _screen_state()
     mode_for_screen = screen_mode(spec)
     try:

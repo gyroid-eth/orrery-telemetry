@@ -50,9 +50,7 @@ MCP_WRAPPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-mcp"
 GEMINI_TOOLS=()
 CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"
 INTERACTIVE=0
-if [[ "$(uname -s)" == Darwin ]]; then
-  INTERACTIVE=1
-fi
+case "$(uname -s)" in Darwin|Linux) INTERACTIVE=1 ;; esac
 INTERACTIVE_HELPER="$HOOKS_DIR/gemini_interactive.py"
 
 usage() {
@@ -83,7 +81,7 @@ WORK_DIR="${2:-$PWD}"
 [[ -n "$CHILD_TOKEN_FILE" && -s "$CHILD_TOKEN_FILE" ]] || { echo "$PROG: child token file is required" >&2; exit 2; }
 [[ -n "$PROJECT_KEY" ]] || { echo "$PROG: AGENTSTACK_PROJECT_KEY is required" >&2; exit 2; }
 if [[ "$STANDALONE" == true ]]; then
-  [[ "$INTERACTIVE" == 1 ]] || { echo "$PROG: standalone Antigravity requires macOS" >&2; exit 2; }
+  [[ "$INTERACTIVE" == 1 ]] || { echo "$PROG: standalone Antigravity requires macOS or Linux" >&2; exit 2; }
   [[ -z "$RESOURCES" ]] || { echo "$PROG: declared resources require a parent" >&2; exit 2; }
   export PARENT_AGENT=""
 else
