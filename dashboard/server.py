@@ -73,6 +73,7 @@ if __name__ == '__main__':
 try:
     from dashboard import chrome_readiness, codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
     from dashboard.local_model_makers import LOCAL_MAKER_ASSETS
+    from dashboard import wsl_catalog_probe
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import chrome_readiness
     import codex_models
@@ -85,6 +86,7 @@ except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import harness_activity
     import dsh_history
     import hermes_history
+    import wsl_catalog_probe
     from local_model_makers import LOCAL_MAKER_ASSETS
 
 try:
@@ -9228,9 +9230,12 @@ def _spawn_windows_profile() -> str | None:
     return _cached_windows_profile(int(time.monotonic() // 30)) if _is_wsl() else None
 
 
-def _spawn_roots() -> list[str]:
+def _spawn_roots(windows_catalog=None) -> list[str]:
     raw_roots = os.environ.get("AGENTSTACK_SPAWN_ROOTS", "").split(":")
-    roots = raw_roots if any(raw_roots) else ["~", _spawn_windows_profile() or ""]
+    roots = raw_roots
+    if not any(raw_roots):
+        profile = _spawn_windows_profile() if windows_catalog is None else windows_catalog.profile
+        roots = ["~", profile or ""]
     return [os.path.realpath(os.path.expanduser(root)) for root in roots if os.path.isdir(os.path.expanduser(root))]
 
 
@@ -9244,9 +9249,9 @@ def _is_within_root(path: str, root: str) -> bool:
 _SPAWN_DIR_SUGGESTION_CAP = 500
 
 
-def _resolve_spawn_directory(raw_path: str) -> tuple[str, str] | None:
+def _resolve_spawn_directory(raw_path: str, *, windows_catalog=None) -> tuple[str, str] | None:
     """Return the canonical path and its most specific configured root."""
-    roots = _spawn_roots()
+    roots = _spawn_roots(windows_catalog)
     raw_path = (raw_path or "").strip()
     if not roots or "\0" in raw_path or ".." in raw_path.split(os.sep):
         return None
@@ -9289,11 +9294,11 @@ def _spawn_directory_presets() -> list[str]:
     return [value for value in raw_dirs if value]
 
 
-def _spawn_default_directories() -> list[str]:
+def _spawn_default_directories(windows_catalog=None) -> list[str]:
     # Keep ~ symbolic for the catalog. The legacy fallback starts in the project.
     dirs = ["~"] if FRESH_MODE else [d for d in (PROJECT_KEY, "~") if d]
-    profile = _spawn_windows_profile()
-    if profile and profile not in dirs and _resolve_spawn_directory(profile):
+    profile = _spawn_windows_profile() if windows_catalog is None else windows_catalog.profile
+    if profile and profile not in dirs and _resolve_spawn_directory(profile, windows_catalog=windows_catalog):
         dirs.append(profile)
     return dirs
 
@@ -9483,7 +9488,7 @@ def _spawn_harness_setup_hint(harness, reason):
 
 
 
-def _native_browser_directories(dirs):
+def _native_browser_directories(dirs, windows_catalog=None):
     """Which preset folders can copy Chrome DevTools into a native child."""
     selection = _child_tools_module()
     spec = {'base': 'mail-only', 'tools': {'mcp': ['chrome-devtools']}}
@@ -9491,7 +9496,7 @@ def _native_browser_directories(dirs):
     codex_config = selection.native_codex_config(resume=_child_resume_module())
     available = []
     for directory in dirs:
-        if _resolve_spawn_directory(directory) is None:
+        if _resolve_spawn_directory(directory, windows_catalog=windows_catalog) is None:
             continue
         try:
             selection.native_plan(spec, cwd=os.path.expanduser(directory), claude_json=settings,
@@ -9508,7 +9513,7 @@ def _spawn_browser_modes():
     return tools.launch_browser_modes(config)
 
 
-def _spawn_browser_catalog():
+def _spawn_browser_catalog(windows_catalog=None):
     tools = _child_tools_module()
     config = tools.native_codex_config(resume=_child_resume_module())
     modes = tools.launch_browser_modes(config)
@@ -9523,7 +9528,10 @@ def _spawn_browser_catalog():
             if custom and any(arg.split("=", 1)[0] == "--channel" for arg in custom[1].get("args", ())):
                 harnesses.discard("codex")
         if harnesses:
-            reason, unavailable = chrome_readiness.personal_browser_reason(wsl=wsl)
+            reason, unavailable = (
+                chrome_readiness.personal_browser_reason(wsl=True, state=windows_catalog.chrome_state)
+                if windows_catalog is not None else chrome_readiness.personal_browser_reason(wsl=wsl)
+            )
             if reason:
                 catalog["personal_browser_status"] = {
                     key: {"reason": reason, "unavailable": unavailable} for key in sorted(harnesses)
@@ -9531,10 +9539,32 @@ def _spawn_browser_catalog():
     return catalog
 
 
-def _spawn_computer_catalog():
+_WSL_SPAWN_CATALOG = wsl_catalog_probe.CatalogProbe()
+
+
+def _probe_wsl_spawn_catalog():
+    profile, chrome_state, interop = chrome_readiness.windows_catalog_state(profile=True, chrome=not FRESH_MODE)
+    computer = None
+    retry = not profile or chrome_state in {"interop", "unknown"}
+    if not (FRESH_MODE or GLOBAL_MODE):
+        screen = _screen_http()
+        computer = screen.wsl_computer_use_reason(
+            _env_path("AGENTSTACK_HOME", "~/.agentstack"), HOOKS_DIR, interop=interop)
+        retry = retry or computer == screen.WINDOWS_DRIVER_PENDING
+    return wsl_catalog_probe.WindowsCatalog(profile, chrome_state, computer, retry)
+
+
+def _spawn_computer_catalog(windows_catalog=None):
     if _is_wsl():
-        reason = ("Computer use is unavailable in this launch mode." if FRESH_MODE or GLOBAL_MODE else
-                  _screen_http().wsl_computer_use_reason(_env_path("AGENTSTACK_HOME", "~/.agentstack"), HOOKS_DIR))
+        if FRESH_MODE or GLOBAL_MODE:
+            reason = "Computer use is unavailable in this launch mode."
+        elif windows_catalog is None:
+            # Launch and resume use the authoritative capability check.
+            reason = _screen_http().wsl_computer_use_reason(_env_path("AGENTSTACK_HOME", "~/.agentstack"), HOOKS_DIR)
+        elif windows_catalog.computer_reason is None:
+            reason = _screen_http().WINDOWS_DRIVER_PENDING
+        else:
+            reason = windows_catalog.computer_reason
         return {"computer_use": not reason, "computer_use_transport": "orrery-screen",
                 "computer_modes": ["off"] if reason else ["off", "view", "control"],
                 **({"computer_use_reason": reason} if reason else {})}
@@ -9566,7 +9596,8 @@ def spawn_names_payload() -> dict:
     adjectives = [line.strip() for line in adjective_text.splitlines() if line.strip()]
     scientists = [line.strip() for line in scientist_text.splitlines() if line.strip()]
     statuses = _spawn_scientist_statuses(adjectives, scientists)
-    dirs = _spawn_directory_presets() or _spawn_default_directories()
+    windows_catalog = _WSL_SPAWN_CATALOG.read(_probe_wsl_spawn_catalog) if _is_wsl() else None
+    dirs = _spawn_directory_presets() or _spawn_default_directories(windows_catalog)
     claude_catalog = _claude_catalog()
     # Check the last child-shell path or the native installer's usual location.
     claude_available = bool(shutil.which(claude_models_mod.child_cli_path()) or
@@ -9576,15 +9607,15 @@ def spawn_names_payload() -> dict:
     local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
         os.environ.get("AGENTSTACK_MANAGED_SPAWN_CONFIG"), mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
     return {
-        **_spawn_computer_catalog(),
+        **_spawn_computer_catalog(windows_catalog),
         "names": [{"name": name, "portrait": bool(_portrait_file(name, False)),
                    "status": statuses.get(name, "unknown")} for name in scientists],
         "adjectives": adjectives,
         "naming": "adjective-scientist",
         "dirs": dirs,
-        "native_browser_dirs": _native_browser_directories(dirs) if local_catalog and not FRESH_MODE else [],
+        "native_browser_dirs": _native_browser_directories(dirs, windows_catalog) if local_catalog and not FRESH_MODE else [],
         "supports_browser_off": not FRESH_MODE,
-        **(_spawn_browser_catalog() if not FRESH_MODE else {}),
+        **(_spawn_browser_catalog(windows_catalog) if not FRESH_MODE else {}),
         "models": list(claude_models),
         "default_model": claude_default,
         "providers": [
@@ -12761,6 +12792,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
 
 
 def main():
+    if _is_wsl():
+        wsl_catalog_probe.enable_timing_log()
     if GLOBAL_MODE or FRESH_MODE:
         # Isolation-only global backend starts no legacy maintenance, providers
         # or child processes. Request failures never fall back.

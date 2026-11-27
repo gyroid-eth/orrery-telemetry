@@ -252,6 +252,9 @@ def test_wsl_windows_profile_is_a_default_and_browsable(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENTSTACK_SPAWN_DIRS", raising=False)
     monkeypatch.delenv("AGENTSTACK_SPAWN_ROOTS", raising=False)
     monkeypatch.setattr(server, "PROJECT_KEY", "")
+    monkeypatch.setattr(server, "_is_wsl", lambda: True)
+    monkeypatch.setattr(server._WSL_SPAWN_CATALOG, "read", lambda _:
+                        server.wsl_catalog_probe.WindowsCatalog(str(profile.resolve()), "ready", ""))
     monkeypatch.setattr(server, "_spawn_windows_profile", lambda: str(profile.resolve()))
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Curie\n"})())
     monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
@@ -264,6 +267,132 @@ def test_wsl_windows_profile_is_a_default_and_browsable(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(home))
     assert server.spawn_names_payload()["dirs"] == ["~"]
     assert server.spawn_directory_suggestions(str(profile))["path"] is None
+
+
+def test_wsl_spawn_names_shares_windows_checks_and_recovers(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from dashboard import wsl_anchor, wsl_catalog_probe
+
+    profile = tmp_path / "windows-profile"
+    profile.mkdir()
+    clock = SimpleNamespace(now=1)
+    monkeypatch.setattr(wsl_catalog_probe, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    monkeypatch.setattr(server, "_WSL_SPAWN_CATALOG", wsl_catalog_probe.CatalogProbe())
+    monkeypatch.setattr(server, "FRESH_MODE", False)
+    monkeypatch.setattr(server, "GLOBAL_MODE", False)
+    monkeypatch.setattr(server, "_is_wsl", lambda: True)
+    monkeypatch.setattr(server, "PROJECT_KEY", "")
+    monkeypatch.setattr(server, "_spawn_scientist_statuses", lambda *a: {})
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="Sunny\n\036Curie\n"))
+    monkeypatch.setattr(server.chrome_readiness, "personal_browser_reason",
+                        lambda *, wsl, state=None: ("Checking Windows", False) if state == "interop" else ("", False))
+    monkeypatch.setattr(wsl_anchor, "_powershell", lambda: "/fixture/powershell.exe")
+    monkeypatch.setattr(wsl_anchor, "wsl_profile_path", lambda _: str(profile))
+
+    interop_calls = []
+    monkeypatch.setattr(wsl_anchor, "interop_env",
+                        lambda: interop_calls.append(1) or {"WSL_INTEROP": "/fixture/interop"})
+    screen = server._screen_http()
+    driver_calls = []
+    monkeypatch.setattr(screen, "wsl_computer_use_reason", lambda home, hooks, *, interop:
+                        driver_calls.append(interop) or (screen.WINDOWS_DRIVER_PENDING if clock.now == 1 else ""))
+    started = threading.Event()
+    finish = threading.Event()
+    workers = []
+
+    def run_probe(name, command, *, env, timeout):
+        assert name == "powershell" and timeout == 3
+        assert "USERPROFILE" in command[-1] and "Get-Process -Name chrome" in command[-1]
+        assert env["WSL_INTEROP"] == "/fixture/interop"
+        workers.append(threading.current_thread())
+        started.set()
+        if not finish.wait(5):
+            raise TimeoutError
+        if clock.now == 1:
+            return "powershell_timeout", None, {}
+        return "ok", 0, {
+            "profile": wsl_catalog_probe.WindowsPhase(20, 80, r"C:\Users\fixture"),
+            "chrome": wsl_catalog_probe.WindowsPhase(30, 90, "ready"),
+        }
+
+    monkeypatch.setattr(wsl_catalog_probe, "run_phased_probe", run_probe)
+    try:
+        assert server.spawn_names_payload()["computer_use"] is False
+        assert started.wait(5)
+        for _ in range(3):
+            pending = server.spawn_names_payload()
+            assert pending["computer_use_reason"] == screen.WINDOWS_DRIVER_PENDING
+            assert pending["dirs"] == ["~"]
+        assert len(workers) == 1
+    finally:
+        finish.set()
+        for worker in workers:
+            worker.join(5)
+
+    assert server.spawn_names_payload()["computer_use"] is False
+    assert len(workers) == 1
+    clock.now += wsl_catalog_probe.RETRY_TTL
+    started.clear()
+    assert server.spawn_names_payload()["computer_use"] is False
+    assert started.wait(5)
+    workers[1].join(5)
+
+    ready = server.spawn_names_payload()
+    assert ready["dirs"] == ["~", str(profile)]
+    assert ready["computer_modes"] == ["off", "view", "control"]
+    assert "personal_browser_status" not in ready
+    assert interop_calls == [1, 1]
+    assert driver_calls == ["/fixture/interop", "/fixture/interop"]
+
+
+def test_wsl_new_agent_refresh_keeps_typed_folder_and_computer_choice():
+    if shutil.which("node") is None:
+        pytest.skip("node is required to run the NEW AGENT handler")
+    source = (pathlib.Path(server.__file__).parent / "index.html").read_text()
+    functions = "\n".join(re.search(rf"\n(?:async )?function {name}\(.*?\n\}}", source, re.DOTALL).group(0)
+                          for name in ("renderSpawnDirChips", "applySpawnComputerCatalog",
+                                       "spawnWindowsCheckPending", "refreshWindowsSpawnCatalog"))
+    script = r"""
+const assert=require('node:assert/strict');
+let spmLoadSeq=2, requests=0, timer=null, buttonsUpdated=0;
+const nodes={
+  'spm-dir':{value:'/typed/folder'},
+  'spm-dir-chips':{innerHTML:'',querySelectorAll:()=>[]},
+  'spm-computer-use':{disabled:true,value:'view'},
+  'spm-computer-use-row':{style:{}}
+};
+const SPM=id=>nodes[id], esc=value=>value;
+const updateSpawnButton=()=>buttonsUpdated++;
+globalThis.setTimeout=(callback,delay)=>{assert.equal(delay,5000);timer=callback;};
+globalThis.fetch=async()=>({ok:true,json:async()=>{
+  const pending=(++requests===1);
+  return {
+    dirs:pending?['~']:['~','/mnt/c/Users/fixture'],
+    computer_use_transport:'orrery-screen',
+    computer_use:!pending,
+    computer_use_reason:pending?'Windows Cua Driver did not answer. Check that its daemon is running.':''
+  };
+}});
+(async()=>{
+  await refreshWindowsSpawnCatalog(2);
+  assert.equal(nodes['spm-computer-use'].disabled,true);
+  const refresh=timer;
+  timer=null;
+  await refresh();
+  assert.equal(nodes['spm-computer-use'].disabled,false);
+  assert.equal(nodes['spm-computer-use'].value,'view');
+  assert.equal(nodes['spm-dir'].value,'/typed/folder');
+  assert.match(nodes['spm-dir-chips'].innerHTML,/\/mnt\/c\/Users\/fixture/);
+  assert.equal(timer,null);
+  spmLoadSeq++;
+  await refreshWindowsSpawnCatalog(2);
+  assert.equal(requests,2);
+  assert.equal(buttonsUpdated,2);
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+    result = _REAL_RUN(["node", "-e", functions + "\n" + script], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
 
 
 def test_spawn_names_advertises_codex_provider(monkeypatch):

@@ -38769,17 +38769,26 @@ async function watchSpawnLaunch(name,dir,limitMs=SPAWN_WATCH_DEFAULT_MS,wslWarni
   toast('✕ SPAWN','> '+name+' :: no verdict after '+Math.round(limitMs/1000)+'s',true);
 }
 
-function renderSpawnDirs(dirs){
+function renderSpawnDirChips(dirs){
   const root=SPM('spm-dir-chips');
   const clean=[...new Set((Array.isArray(dirs)?dirs:[])
     .map(value=>String(value||'').trim()).filter(Boolean))];
+  const existing=[...root.querySelectorAll('.spm-dir-chip')];
+  if(existing.length===clean.length&&existing.every((btn,i)=>btn.dataset.dir===clean[i]))return clean;
+  const selected=SPM('spm-dir').value.trim();
   root.innerHTML=clean.map(dir=>
-    `<button type="button" class="spm-chip spm-dir-chip" `+
-    `data-dir="${esc(dir)}" aria-pressed="false">${esc(dir)}</button>`
+    `<button type="button" class="spm-chip spm-dir-chip${dir===selected?' on':''}" `+
+    `data-dir="${esc(dir)}" aria-pressed="${dir===selected}">${esc(dir)}</button>`
   ).join('');
   root.querySelectorAll('.spm-dir-chip').forEach(btn=>{
     btn.onclick=()=>setSpawnDir(btn.dataset.dir,true);
   });
+  return clean;
+}
+
+function renderSpawnDirs(dirs){
+  const clean=renderSpawnDirChips(dirs);
+  const root=SPM('spm-dir-chips');
   let remembered='';
   try{remembered=localStorage.getItem(SPM_DIR_KEY)||'';}catch(e){}
   setSpawnDir(remembered||clean[0]||'~',false);
@@ -39221,6 +39230,37 @@ function renderSpawnEngineNote(){
   note.hidden=!note.textContent;
 }
 
+function applySpawnComputerCatalog(catalog){
+  const computerUse=SPM('spm-computer-use');
+  computerUse.disabled=catalog.computer_use!==true||catalog.capabilities?.tools===false;
+  SPM('spm-computer-use-row').style.display=computerUse.disabled?'none':'grid';
+}
+
+function spawnWindowsCheckPending(catalog){
+  return (catalog.computer_use_transport==='orrery-screen'&&
+    catalog.computer_use_reason==='Windows Cua Driver did not answer. Check that its daemon is running.')||
+    Object.values(catalog.personal_browser_status||{}).some(status=>
+      status?.unavailable===false&&typeof status.reason==='string'&&
+      (status.reason.startsWith('ORRERY cannot check Windows Chrome from WSL.')||
+       status.reason.startsWith('ORRERY could not check Chrome on Windows.')));
+}
+
+async function refreshWindowsSpawnCatalog(seq){
+  if(seq!==spmLoadSeq)return;
+  try{
+    const response=await fetch('/api/spawn-names',{cache:'no-store'});
+    const catalog=await response.json();
+    if(seq!==spmLoadSeq)return;
+    if(response.ok&&Array.isArray(catalog?.dirs)){
+      applySpawnComputerCatalog(catalog);
+      renderSpawnDirChips(catalog.dirs);
+      updateSpawnButton();
+      if(!spawnWindowsCheckPending(catalog))return;
+    }
+  }catch(e){}
+  if(seq===spmLoadSeq)setTimeout(()=>refreshWindowsSpawnCatalog(seq),5000);
+}
+
 async function loadSpawnCatalog(seq){
   try{
     const response=await fetch('/api/spawn-names',{cache:'no-store'});
@@ -39248,9 +39288,8 @@ async function loadSpawnCatalog(seq){
     selectSpawnName('');
     renderSpawnProviders(providers);
     renderSpawnDirs(catalog.dirs);
-    const computerUse=SPM('spm-computer-use');
-    computerUse.disabled=catalog.computer_use!==true||catalog.capabilities?.tools===false;
-    SPM('spm-computer-use-row').style.display=computerUse.disabled?'none':'grid';
+    applySpawnComputerCatalog(catalog);
+    if(spawnWindowsCheckPending(catalog))setTimeout(()=>refreshWindowsSpawnCatalog(seq),5000);
     setSpawnDraftStatus(spmDraftRestored);
     spmReady=true;
     updateSpawnButton();

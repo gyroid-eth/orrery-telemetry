@@ -5,22 +5,27 @@ import logging
 import os
 import socket
 import subprocess
+import time
 
 LOG = logging.getLogger(__name__)
 
 
-_WINDOWS_CHECK = r"""
+_WINDOWS_CHROME_CHECK = r"""
 $ErrorActionPreference = 'Stop'
-if (-not (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {
+$running = Get-Process -Name chrome -ErrorAction SilentlyContinue
+Write-ProbePhase 'chromeprocess'
+if (-not $running) {
     'stopped'
     return
 }
 $marker = Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data\DevToolsActivePort'
 if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+    Write-ProbePhase 'chromeport'
     'debugging'
     return
 }
 $line = Get-Content -LiteralPath $marker -TotalCount 1
+Write-ProbePhase 'chromeport'
 [int]$port = 0
 if (-not [int]::TryParse($line, [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
     'debugging'
@@ -33,45 +38,92 @@ try {
         if ($connection.Wait(250) -and $client.Connected) { 'ready' } else { 'debugging' }
     } catch { 'debugging' }
 } finally { $client.Dispose() }
+Write-ProbePhase 'chrometcp'
 """
 
 
-def _windows_failure(reason, env=None):
-    socket_state = "unknown"
-    if env is not None:
-        path = env.get("WSL_INTEROP")
-        socket_state = ("present" if os.path.exists(path) else "missing") if path else "unset"
-    LOG.warning("Windows Chrome check failed: %s (interop_socket=%s)", reason, socket_state)
-    return "interop"
+_WINDOWS_PROBE_HEADER = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$entry = [DateTime]::UtcNow
+$clock = [Diagnostics.Stopwatch]::StartNew()
+function Write-ProbePhase($name, $value = '') {
+    [Console]::WriteLine("ORRERY_PROBE|$name|$($clock.ElapsedMilliseconds)|$value")
+    [Console]::Out.Flush()
+}
+$startupMs = ''
+try {
+    $process = [Diagnostics.Process]::GetCurrentProcess()
+    $startupMs = [int][Math]::Max(0, ($entry - $process.StartTime.ToUniversalTime()).TotalMilliseconds)
+} catch {}
+Write-ProbePhase 'started' $startupMs
+"""
+
+_CHROME_STATES = {"stopped", "debugging", "ready"}
 
 
-def _windows_state():
-    # Only the WSL probe needs the POSIX anchor and its file locks.
+def windows_catalog_state(*, profile: bool, chrome: bool):
+    """Return both catalog hints and the chosen interop for the Cua Driver check."""
+    # Native Windows imports this module for portable startup.
     if __package__:
-        from . import wsl_anchor
+        from . import wsl_anchor, wsl_catalog_probe
     else:
         import wsl_anchor
+        import wsl_catalog_probe
 
-    powershell = wsl_anchor._powershell()
-    if not powershell:
-        return _windows_failure("powershell_not_found")
+    started = time.monotonic()
     try:
         env = wsl_anchor.interop_env()
     except OSError:
-        return _windows_failure("interop_socket_lookup_failed")
-    try:
-        result = subprocess.run(
-            [powershell, "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_CHECK],
-            env=env, capture_output=True, text=True, timeout=3, check=True,
-        )
-    except subprocess.TimeoutExpired:
-        return _windows_failure("powershell_timeout", env)
-    except subprocess.CalledProcessError as error:
-        return _windows_failure(f"powershell_nonzero_exit={error.returncode}", env)
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return _windows_failure("powershell_start_failed", env)
-    answer = result.stdout.strip()
-    return answer if answer in {"stopped", "debugging", "ready"} else "unknown"
+        wsl_catalog_probe.LOG.warning("WSL catalog probe interop_socket_lookup_failed elapsed_ms=%d",
+                                      round((time.monotonic() - started) * 1000))
+        return None, "interop", os.environ.get("WSL_INTEROP", "")
+    path = env.get("WSL_INTEROP", "")
+    socket_state = ("present" if os.path.exists(path) else "missing") if path else "unset"
+    wsl_catalog_probe.LOG.info("WSL catalog probe interop_select_ms=%d interop_socket=%s",
+                               round((time.monotonic() - started) * 1000), socket_state)
+    if not (profile or chrome):
+        return None, "ready", path
+
+    lookup_started = time.monotonic()
+    powershell = wsl_anchor._powershell()
+    wsl_catalog_probe.LOG.info("WSL catalog probe powershell_lookup_ms=%d",
+                               round((time.monotonic() - lookup_started) * 1000))
+    if not powershell:
+        wsl_catalog_probe.LOG.warning("WSL catalog probe powershell_not_found")
+        return None, "interop", path
+    script = _WINDOWS_PROBE_HEADER
+    if profile:
+        script += "\nWrite-ProbePhase 'profile' $env:USERPROFILE\n"
+    if chrome:
+        script += "$chrome = & {\n" + _WINDOWS_CHROME_CHECK + "}\nWrite-ProbePhase 'chrome' $chrome\n"
+    script += "Write-ProbePhase 'finished'\n"
+    status, _, phases = wsl_catalog_probe.run_phased_probe(
+        "powershell", [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+        env=env, timeout=3 if chrome else 2)
+
+    profile_phase = phases.get("profile")
+    profile_path = None
+    if profile_phase and profile_phase.arrival_ms <= 2000:
+        path_started = time.monotonic()
+        profile_path = wsl_anchor.wsl_profile_path(profile_phase.value)
+        wsl_catalog_probe.LOG.info("WSL catalog probe wslpath_ms=%d profile_resolved=%s",
+                                   round((time.monotonic() - path_started) * 1000),
+                                   profile_path is not None)
+    if not chrome:
+        return profile_path, "ready", path
+    if status != "ok":
+        # Preserve the observable distinction between Windows interop and a
+        # completed check that confirms Chrome is unavailable.
+        LOG.warning("Windows Chrome check failed: %s (interop_socket=%s)", status, socket_state)
+        return profile_path, "interop", path
+    chrome_phase = phases.get("chrome")
+    result = chrome_phase.value if chrome_phase and chrome_phase.value in _CHROME_STATES else "unknown"
+    return profile_path, result, path
+
+
+def _windows_state():
+    return windows_catalog_state(profile=False, chrome=True)[1]
 
 
 def _mac_state():
@@ -105,8 +157,9 @@ def _mac_state():
         return "debugging"
 
 
-def personal_browser_reason(*, wsl):
-    state = _windows_state() if wsl else _mac_state()
+def personal_browser_reason(*, wsl, state=None):
+    if state is None:
+        state = _windows_state() if wsl else _mac_state()
     host = "Windows" if wsl else "this Mac"
     setup = "Open chrome://inspect/#remote-debugging in Chrome and enable remote debugging."
     return {

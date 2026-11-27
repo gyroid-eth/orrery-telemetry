@@ -330,8 +330,16 @@ def windows_user_profile() -> str | None:
             env=interop_env(), capture_output=True, check=True, timeout=2,
             encoding="utf-8",
         ).stdout.rstrip("\r\n")
-        if not re.fullmatch(r"[A-Za-z]:\\[^\x00-\x1f]+", profile):
-            return None
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        return None
+    return wsl_profile_path(profile)
+
+
+def wsl_profile_path(profile: str) -> str | None:
+    """Validate a USERPROFILE value and translate it into a real WSL directory."""
+    if not re.fullmatch(r"[A-Za-z]:\\[^\x00-\x1f]+", profile):
+        return None
+    try:
         path = subprocess.run(
             ["wslpath", "-u", profile], capture_output=True, check=True, timeout=2,
             encoding="utf-8",

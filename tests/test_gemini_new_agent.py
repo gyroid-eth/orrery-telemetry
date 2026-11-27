@@ -308,7 +308,7 @@ def test_spawn_catalog_reports_my_chrome_health_for_managed_browser_harnesses(mo
 ])
 def test_windows_chrome_probe_logs_one_failure_and_reports_unverified(
         monkeypatch, tmp_path, caplog, failure, reason, socket_state):
-    from dashboard import wsl_anchor
+    from dashboard import wsl_anchor, wsl_catalog_probe
 
     probe = server.chrome_readiness
     monkeypatch.setattr(wsl_anchor, '_powershell',
@@ -322,23 +322,21 @@ def test_windows_chrome_probe_logs_one_failure_and_reports_unverified(
             raise OSError('private lookup error')
         return {} if socket_state == 'unset' else {'WSL_INTEROP': str(socket_path)}
 
-    def run(command, *, timeout, **kwargs):
-        if failure == 'timeout':
-            assert timeout == 3
-            raise subprocess.TimeoutExpired(command, timeout)
-        if failure == 'exit':
-            raise subprocess.CalledProcessError(7, command, stderr='private stderr')
-        assert failure == 'start'
-        raise OSError('private start error')
+    def run(name, command, *, timeout, **kwargs):
+        assert name == 'powershell'
+        assert timeout == 3
+        return reason, 7 if failure == 'exit' else None, {}
 
     monkeypatch.setattr(wsl_anchor, 'interop_env', interop_env)
-    monkeypatch.setattr(probe.subprocess, 'run', run)
+    monkeypatch.setattr(wsl_catalog_probe, 'run_phased_probe', run)
     message, unavailable = probe.personal_browser_reason(wsl=True)
     assert message.startswith('ORRERY cannot check Windows Chrome from WSL.')
     assert unavailable is False
-    assert [record.getMessage() for record in caplog.records] == [
-        f'Windows Chrome check failed: {reason} (interop_socket={socket_state})'
-    ]
+    recorded = [record.getMessage() for record in caplog.records if record.levelname == 'WARNING']
+    assert len(recorded) == 1
+    assert reason in recorded[0]
+    if socket_state != 'unknown':
+        assert f'interop_socket={socket_state}' in recorded[0]
 
 
 @pytest.mark.parametrize(('running', 'marker', 'connects', 'expected'), [

@@ -39,8 +39,8 @@ def test_wsl_catalog_checks_operator_then_windows_relay(monkeypatch, tmp_path, r
     monkeypatch.setattr(screen_http, "wsl_launch_interop", lambda: "/fixture/interop")
     module = screen_http.state_module(server.HOOKS_DIR)
     monkeypatch.setattr(module, "_python", lambda mail_env, deadline: "/fixture/mail-python")
-    monkeypatch.setattr(screen_http.subprocess, "run", lambda *args, **kwargs:
-                        (calls.append((args, kwargs)) or SimpleNamespace(returncode=returncode)))
+    monkeypatch.setattr(screen_http, "run_phased_probe", lambda *args, **kwargs:
+                        (calls.append((args, kwargs)) or ("test", returncode, {})))
     screen_http._windows_driver_reason.cache_clear()
     try:
         assert server._spawn_computer_catalog() == {
@@ -55,8 +55,10 @@ def test_wsl_catalog_checks_operator_then_windows_relay(monkeypatch, tmp_path, r
                           "computer_modes": ["off"] if message else ["off", "view", "control"],
                           **({"computer_use_reason": message} if message else {})}
         (argv, opts), = calls
-        assert argv[0][:2] == ["/fixture/mail-python", "-I"]
-        assert argv[0][2].endswith("/screen_driver_probe.py")
+        assert argv[0] == "cua_driver"
+        assert argv[1][:2] == ["/fixture/mail-python", "-I"]
+        assert argv[1][2].endswith("/screen_driver_probe.py")
+        assert opts["timeout"] == 10
         assert opts["env"]["WSL_INTEROP"] == "/fixture/interop"
         assert opts["env"]["AGENTSTACK_CUA_DRIVER"] == "/fixture/cua-driver.exe"
     finally:

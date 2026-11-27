@@ -218,6 +218,8 @@ API 49 は `GET /api/spawn-names` にハーネス別の `browser_modes` を追�
 
 API 58 は、Mac と WSL で Chrome DevTools MCP の My Chrome を使うハーネスに応じて、`personal_browser_status` に `{reason, unavailable}` を返します。理由がある間、起動画面の自動選択は一時ブラウザー、利用できなければ Off になります。`unavailable: true` は接続先の Chrome が停止中か、リモートデバッグに接続できないことを示し、その場合だけ My Chrome を無効にします。確認の結果が更新されても、利用者が選んだ方式は保持します。
 
+WSL の catalog では、Chrome・Windows のユーザーフォルダー・Cua Driver の確認を複数の要求で共有します。初回の確認中も候補の一覧を返し、Windows からの結果が揃うまで権限やフォルダーの候補は暫定値になります。起動や再開では選ばれた権限とフォルダーを改めて確認します。`dashboard.log` の `powershell_start_ms` は Windows 側で測る PowerShell の起動時間です。`dispatch_and_pipe_ms` は、WSL から Windows への起動の受け渡しと、最初の標準出力を受け取るまでの時間の推定値です。
+
 API 53 の macOS カタログは `computer_modes` に `off`、`view`、`control` を返します。View は `tools.screen.access: "read"`、Control は `tools.screen.access: "operate"` を使います。Off は明示した `tools` から画面の指定を外します。スマホの `/view/spawn` は選択を `computer` に渡し、旧クライアントの真偽値も受け付けます。Antigravity で利用できるブラウザのモードは `browser_modes.antigravity` を参照します。
 
 API 49 は dsh・Hermes の子へ Chrome DevTools を渡せる起動フォルダを、`dirs` と同じ表記の `native_browser_dirs` で返します。スマホは選択したフォルダが含まれる場合に Browser を表示します。起動時にも設定を検証します。
