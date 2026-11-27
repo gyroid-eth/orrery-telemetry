@@ -2891,6 +2891,8 @@ install_payload() {
     cp "$SCRIPT_DIR/lib/install_examples.py" "$BIN_DIR/lib/install_examples.py"
     cp "$REPO_ROOT/bin/lib/agentstack-launch.sh" "$BIN_DIR/lib/agentstack-launch.sh"
     cp "$REPO_ROOT/bin/lib/agentstack-register.sh" "$BIN_DIR/lib/agentstack-register.sh"
+    cp "$REPO_ROOT/bin/lib/claude_context.py" "$BIN_DIR/lib/claude_context.py"
+    cp "$REPO_ROOT/bin/lib/codex_context.py" "$BIN_DIR/lib/codex_context.py"
     cp "$REPO_ROOT/bin/lib/runtime_client.py" "$BIN_DIR/lib/runtime_client.py"
     cp "$RUNTIME_SCHEMA_SOURCE" "$BIN_DIR/lib/schema_contract.py"
     cp "$RUNTIME_FIXTURE_SOURCE" "$BIN_DIR/lib/global-server-s2a.json"

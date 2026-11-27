@@ -86,13 +86,20 @@ Source formats at the pinned runtime versions:
   is rounded to the existing integer percentage; over-capacity stays visible.
 - Hermes d923a5eb: `hermes_cli/cli_status_bar_mixin.py:1017–1129`, the native
   wide status row: `☤ Qwen │ ~24K/128K │ [██░░░░░░░░] ~19%`. Narrow/medium
-  rows without a complete capacity reading remain unknown. Native `~` readings
-  are estimates; preserving a visible percentage does not make them exact.
+  rows such as `☤ Qwen · ~19% · ◎ 88.0%` report the percentage with unknown
+  capacity. If the footer omits the percentage, context remains unknown. Native
+  `~` readings are estimates.
 
-These are observations of a terminal display, just like the existing native
-providers, not authenticated telemetry. Localized/custom/hover displays without
-the supported footer shape can remain unknown. Old offscreen transcript text
-does not supply context. No extra watcher, session file or model API is used.
+Managed Claude Code launches collect `context_window.used_percentage` from the
+native status-line JSON, with or without a user status-line command. An existing
+command continues to receive the same JSON and supply its own display. The
+dashboard accepts the observation from the Claude process in the active pane.
+Managed Codex launches request `context-remaining` when there is no configured
+footer, and the dashboard converts that observed remaining percentage to usage.
+
+Native footer observations depend on the active TUI's supported display.
+Localized, hidden and truncated footers can leave context unknown. Old offscreen
+transcript text does not supply the native dsh or Hermes reading.
 
 ## Model and helper catalog
 

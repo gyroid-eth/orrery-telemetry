@@ -732,7 +732,16 @@ raise SystemExit(int(os.environ.get("TEST_PROVIDER_EXIT", "0")))
         self.assertEqual(record["env"]["AGENTSTACK_PROTECTED_ROOTS"], f"{self.plain}:{self.repo}")
         self.assertEqual(record["args"], ["-C", str(self.repo), "--sandbox", "workspace-write",
                                           "--ask-for-approval", "on-request", "-c", "check_for_update_on_startup=false",
+                                          "-c", 'tui.status_line=["model-with-reasoning","context-remaining","current-dir"]',
                                           "--add-dir", str(self.plain)])
+
+    def test_claude_launch_adds_context_observer_without_user_settings(self) -> None:
+        result = self.run_launcher("claude", self.repo, inside=True, extra={"TMUX_PANE": "%17"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.read("provider")["args"]
+        self.assertEqual(args[0], "--settings")
+        observer = shlex.split(json.loads(args[1])["statusLine"]["command"])
+        self.assertEqual(observer[2:4], ["observe", "%17"])
 
     def test_gemini_repl_exit_status_and_model_effort_are_preserved(self) -> None:
         result = self.run_launcher("gemini", self.repo, inside=True,

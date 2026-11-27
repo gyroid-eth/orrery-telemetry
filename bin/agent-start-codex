@@ -66,12 +66,14 @@ declare -F ags_wsl_reserve_launch >/dev/null && ags_wsl_reserve_launch agent-sta
 # OAuth; an API key present in the environment overrides and breaks it.
 # --add-dir AGENTSTACK_VAULT only when set, so non-Obsidian users aren't forced.
 build_codex_cmd() {
-  local d="$1" out
+  local d="$1" out context
   out="env -u OPENAI_API_KEY $(printf '%q' "$CODEX_BIN") -C $(printf '%q' "$d")"
   out+=" --sandbox $(printf '%q' "$SANDBOX") --ask-for-approval $(printf '%q' "$APPROVAL")"
   # Same as every product-launched Codex: no startup update screen, whose
   # default choice runs `npm install -g` (#60). Update Codex yourself.
   out+=" -c check_for_update_on_startup=false"
+  context="$("${AGENTSTACK_PYTHON:-python3}" "$BIN_DIR/lib/codex_context.py" "$d")" || context=""
+  [[ -n "$context" ]] && out+=" -c $(printf '%q' "$context")"
   [[ -n "${AGENTSTACK_VAULT:-}" && -d "${AGENTSTACK_VAULT:-/nonexistent}" ]] \
     && out+=" --add-dir $(printf '%q' "$AGENTSTACK_VAULT")"
   printf '%s' "$out"

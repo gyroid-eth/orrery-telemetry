@@ -39,6 +39,10 @@ if [[ "$_ags_selected_rc" == 0 ]]; then
 fi
 
 CLAUDE_BIN="${AGENTSTACK_CLAUDE_BIN:-claude}"
+CLAUDE_COMMAND=("$CLAUDE_BIN")
+if [[ -f "$BIN_DIR/lib/claude_context.py" ]]; then
+  CLAUDE_COMMAND=("${AGENTSTACK_PYTHON:-python3}" "$BIN_DIR/lib/claude_context.py" launch "$CLAUDE_BIN")
+fi
 CLAUDE_MODEL="${AGENTSTACK_CLAUDE_MODEL:-claude-code}"
 PROJECT_KEY="${AGENTSTACK_PROJECT_KEY:-}"
 MCP_URL="${AGENTSTACK_MCP_URL:-http://127.0.0.1:18765/mcp}"
@@ -123,7 +127,7 @@ if [[ -n "${TMUX:-}" ]]; then
   # Warn (do not block) if this pane can't read a macOS privacy-protected project
   # dir — the child claude will inherit the same EPERM otherwise-undiagnosable.
   declare -F ags_warn_tcc_access >/dev/null 2>&1 && ags_warn_tcc_access "$DIR"
-  exec "$CLAUDE_BIN"
+  exec "${CLAUDE_COMMAND[@]}"
 fi
 
 # Otherwise replace the current terminal tab with a fresh tmux session. Keep
@@ -152,7 +156,7 @@ $(printf '%q' "$TMUX_BIN") new-session -s $(printf '%q' "$SESSION") -c $(printf 
   -e $(printf '%q' "AGENT_NAME=$SESSION_AGENT_NAME") \
   -e CLAUDECODE=1 \
   -e PARENT_AGENT= -e CHILD_REGISTRATION_TOKEN= -e AGENTSTACK_RESERVED_IDENTITY= \
-  "$TMUX_RESTORE_WORKSPACE_COMMAND unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; $TMUX_CLEAR_GIT_COMMAND || exit 1; if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q' "$CLAUDE_BIN"); exec \"\$SHELL\" -l"
+  "$TMUX_RESTORE_WORKSPACE_COMMAND unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; $TMUX_CLEAR_GIT_COMMAND || exit 1; if [ -n $(printf '%q' "$SESSION_TOKEN_FILE") ] && [ -r $(printf '%q' "$SESSION_TOKEN_FILE") ]; then IFS= read -r CHILD_REGISTRATION_TOKEN < $(printf '%q' "$SESSION_TOKEN_FILE") || true; export CHILD_REGISTRATION_TOKEN; fi; $(printf '%q ' "${CLAUDE_COMMAND[@]}"); exec \"\$SHELL\" -l"
 rm -f -- "\$0"
 exec "\$SHELL" -l
 EOF

@@ -13,6 +13,8 @@ _DSH = re.compile(
     rf'\bctx\s+(?:(?P<pct>\d+(?:\.\d+)?)%\s+\({_PAIR}\)'
     rf'|(?P<used2>{_COUNT})/(?P<window2>{_COUNT})\s+\((?P<pct2>\d+(?:\.\d+)?)%\))')
 _HERMES = re.compile(rf'☤\s+.+?\s+[·│]\s+(?P<estimated>~?){_PAIR}(?:\s+pinned)?\s+[·│]\s+(?:\[[█░]*\]\s+)?~?(?P<pct>\d+)%')
+_HERMES_PERCENT = re.compile(
+    r'^\s*☤\s+[^·│\n]+?\s+[·│]\s+(?:\[[█░]*\]\s+)?~?(?P<pct>\d{1,3})%(?=\s*(?:[·│]|$))')
 _HERMES_READY_PREFIX = r'^\s*[─━]+\s*ready\s*│'
 _HERMES_READY = re.compile(
     rf'{_HERMES_READY_PREFIX}\s*[^│]+│\s*~?{_PAIR}\s*│\s*\[[█░]+\]\s*'
@@ -51,6 +53,7 @@ def parse_context(text, program):
 
     dsh-tui 0.16.1: ``ctx 19% (24k/128k)`` or its noncompact inverse.
     Hermes pinned source: ``☤ model ~24k/128K [bar] ~19% ...``.
+    Its medium footer reports only the percent.
     Hermes estimates stay estimates; this function does not infer activity,
     running state, model identity or exact token counts from rounded labels.
     """
@@ -71,6 +74,9 @@ def parse_context(text, program):
             return unknown
         match = (_DSH.search(line) if program == 'dsh' else _HERMES.search(line))
         if not match:
+            if program == 'hermes' and (percent_only := _HERMES_PERCENT.match(line)):
+                percent = int(percent_only['pct'])
+                return {'ctx_used': percent, 'ctx_window': None} if percent <= 100 else unknown
             continue
         groups = match.groupdict()
         window = groups.get('window') or groups.get('window2')

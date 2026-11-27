@@ -856,20 +856,23 @@ def tmux_state() -> dict:
             "#{window_active}#{pane_active}",
             "#{pane_current_command}",
             "#{pane_pid}",
+            "claude_ctx=#{@orrery-claude-context}",
             "cwd=#{pane_current_path}",
             "#{pane_title}",
         ]
     )
     for line in _tmux(["list-panes", "-a", "-F", fmt]).splitlines():
-        parts = _split_tmux_fields(line, 5)
+        parts = _split_tmux_fields(line, 6)
         cwd = None
+        claude_context = ""
         if len(parts) >= 5:
             name, flags, cmd, pane_pid = parts[:4]
-            if len(parts) == 6 and parts[4].startswith("cwd="):
-                cwd = agent_card.absolute_cwd(parts[4][4:])
-                title = parts[5]
-            else:
-                title = SEP.join(parts[4:])
+            fields = parts[4:]
+            if fields[0].startswith("claude_ctx="):
+                claude_context = fields.pop(0).removeprefix("claude_ctx=")
+            if len(fields) >= 2 and fields[0].startswith("cwd="):
+                cwd = agent_card.absolute_cwd(fields.pop(0).removeprefix("cwd="))
+            title = SEP.join(fields)
         elif len(parts) == 4:
             # demo / older fake tmux adapters may still emit the historical
             # four-field row even when a fifth format field was requested.
@@ -882,6 +885,8 @@ def tmux_state() -> dict:
         if name in sessions:
             sessions[name]["cmd"] = cmd
             sessions[name]["pane_pid"] = _to_int(pane_pid)
+            if claude_context:
+                sessions[name]["claude_context"] = claude_context
             sessions[name]["cwd"] = cwd
             sessions[name]["title"] = title
 
@@ -1862,6 +1867,22 @@ def _tmux_row_state(name: str, s: dict, m: dict | None, process_tree) -> tuple[s
     return program, cat, running, watcher_health
 
 
+def _claude_context_runtime(session, program, process_tree):
+    if program not in ("claude", "claude-code"):
+        return {}
+    sample = re.fullmatch(r"([1-9][0-9]{0,9}):([0-9]{0,3}):([0-9]{0,12})",
+                          session.get("claude_context", ""))
+    if not sample:
+        return {}
+    pid = int(sample[1])
+    if _agent_process_pid(session.get("pane_pid"), process_tree, program,
+                          match=lambda candidate, _, __: candidate == pid) != pid:
+        return {}
+    used = int(sample[2]) if sample[2] else None
+    return {"ctx_used": used if used is not None and used <= 100 else None,
+            "ctx_window": sample[3] or None}
+
+
 def _apply_codex_app_runtime(row: dict, runtime: dict) -> None:
     """Promote a gone Codex App agent from its provider-validated snapshot."""
     app_live = _codex_app_live(runtime)
@@ -2488,6 +2509,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
              else _agent_runtime(name, s.get("created"), s.get("session_id")))
             if running else {}
         )
+        if running:
+            rt = {**rt, **_claude_context_runtime(s, program, process_tree)}
         runtime_by_name[name] = rt
         reader_fields = {}
         phase = rt.get("_reader_compaction")
@@ -3358,6 +3381,8 @@ def graph_payload(days: float, show_all: bool) -> dict:
              else _agent_runtime(name, s.get("created"), s.get("session_id")))
             if running else {}
         )
+        if running:
+            rt = {**rt, **_claude_context_runtime(s, program, process_tree)}
         return {
             "present": True,
             "running": running,
@@ -4143,6 +4168,16 @@ def _transcript_path(session: str) -> str | None:
 ABS_CLAUDE = os.path.expanduser("~/.local/bin/claude")
 
 
+def _context_helper(harness):
+    path = Path(HERE).parent / "bin" / "lib" / f"{harness}_context.py"
+    return [sys.executable, str(path)] if path.is_file() else []
+
+
+def _claude_context_command():
+    helper = _context_helper("claude")
+    return [*helper, "launch", ABS_CLAUDE] if helper else [ABS_CLAUDE]
+
+
 def _login_shell() -> str:
     """Shell for `<shell> -lic <inner>` tmux launches.
 
@@ -4406,10 +4441,11 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     # 内部の register_agent で AGENT_NAME 環境変数が空となり、サーバーが
     # ランダム名を発番してしまう (2026-05-22 GreenOstwald 事例、
     # 2026-05-26 PinkGuericke 事例)。
+    claude_command = shlex.join(_claude_context_command())
     inner = (
         'export PATH="$HOME/.local/bin:$PATH"; '
         f'export AGENT_NAME={session}; '
-        f'exec {shlex.quote(ABS_CLAUDE)} --resume {sid} -n {session}'
+        f'exec {claude_command} --resume {sid} -n {session}'
     )
     # A child started with --claude-chrome gets --chrome back on resume. Its
     # browser policy is repeated by session-start-reminder.sh from the same
@@ -4431,7 +4467,7 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
             f'export AGENT_NAME={session}; '
             f'export AGENTSTACK_RUNTIME_DIR={shlex.quote(RUNTIME_DIR)}; '
             f'export AGENTSTACK_CLAUDE_LAUNCH_ID={shlex.quote(chrome_launch_id)}; '
-            f'exec {shlex.quote(ABS_CLAUDE)} --resume {sid} -n {session}'
+            f'exec {claude_command} --resume {sid} -n {session}'
             + (' --chrome' if chrome else '')
         )
         if chrome and tools_plan is None:
@@ -4535,7 +4571,7 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
     cleanup = os.path.join(HOOKS_DIR, "cleanup-child-agent.sh")
     exit_warning = None
     if child_state is not None:
-        inner = inner.replace(f"exec {shlex.quote(ABS_CLAUDE)}", shlex.quote(ABS_CLAUDE), 1)
+        inner = inner.replace(f"exec {claude_command}", claude_command, 1)
         inner += (f'; CLAUDE_STATUS=$?; /bin/bash {shlex.quote(cleanup)}; '
                   'CLEANUP_STATUS=$?; [[ "$CLAUDE_STATUS" -ne 0 ]] && exit "$CLAUDE_STATUS"; '
                   'exit "$CLEANUP_STATUS"')
@@ -4544,7 +4580,7 @@ def do_resume(session: str, *, open_terminal: bool | None = None, replace_husk: 
         # never ran and the row this resume unretired stayed active after
         # exit (#143). Give back only the retirement; the token is kept.
         if os.path.isfile(cleanup):
-            inner = inner.replace(f"exec {shlex.quote(ABS_CLAUDE)}", shlex.quote(ABS_CLAUDE), 1)
+            inner = inner.replace(f"exec {claude_command}", claude_command, 1)
             inner += (f'; CLAUDE_STATUS=$?; AGENTSTACK_CLEANUP_RETIRE_ONLY=1 '
                       f'PROJECT_KEY={shlex.quote(registration["project_key"])} '
                       f'/bin/bash {shlex.quote(cleanup)} {shlex.quote(session)}; exit "$CLAUDE_STATUS"')
@@ -6324,9 +6360,17 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
             "error": f"Codex resume bootstrap が見つかりません: {bootstrap}",
         }
     # The product bootstrap clears inherited launch pairs, re-registers the
-    # reserved identity and persists a fresh launch generation.  `&&` is the
-    # safety boundary: a bootstrap/prepare failure must not reach Codex exec.
+    # reserved identity and persists a fresh launch generation. Codex only
+    # runs when the bootstrap succeeds.
     src = f'source {shlex.quote(bootstrap)} {shlex.quote(cwd)}'
+    context_helper = _context_helper("codex")
+    context_setup = ""
+    context_args = ""
+    if context_helper:
+        helper = shlex.join([*context_helper, cwd])
+        context_setup = (f'_orrery_context="$({helper})" || _orrery_context=""; _orrery_context_flags=(); '
+                         'if [[ -n "$_orrery_context" ]]; then _orrery_context_flags=(-c "$_orrery_context"); fi; ')
+        context_args = '"${_orrery_context_flags[@]}" '
     launch_prefix = (
         'export PATH="$HOME/.local/bin:$PATH"; '
         f'export AGENT_NAME={shlex.quote(session)}; '
@@ -6360,8 +6404,9 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
         inner = (
             f'{launch_prefix}{child_home_env}'
             f'if {src}; then '
+            f'{context_setup}'
             f'env -u OPENAI_API_KEY codex resume {sid} '
-            f'-C {shlex.quote(cwd)} '
+            f'-C {shlex.quote(cwd)} {context_args}'
             f'{_codex_child_launch_flags([child_home], standalone=codex_standalone)}; '
             'CODEX_STATUS=$?; '
             f'/bin/bash {shlex.quote(cleanup)}; CLEANUP_STATUS=$?; '
@@ -6373,9 +6418,9 @@ def _do_resume_codex(session: str, *, open_terminal: bool | None = None,
         )
     else:
         inner = (
-            f'{launch_prefix}{src} && '
+            f'{launch_prefix}if {src}; then {context_setup}'
             f'exec env -u OPENAI_API_KEY codex resume {sid} '
-            f'-C {shlex.quote(cwd)} {_codex_child_launch_flags()}'
+            f'-C {shlex.quote(cwd)} {context_args}{_codex_child_launch_flags()}; else exit $?; fi'
         )
     resume_environment = {
         "AGENTSTACK_HOME": install_home,

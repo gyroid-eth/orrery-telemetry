@@ -30,11 +30,20 @@ class NativeContext(unittest.TestCase):
         text = 'ctx 90% (115k/128k)\nanswer\n\x1b[38;2;1;2;3mctx 2.0% (2.6k/128k)\x1b[0m'
         self.assertEqual(parse_context(text, 'dsh')['ctx_used'], 2)
 
+    def test_hermes_medium_footer_reads_context_without_guessing_capacity(self):
+        # Sanitized from the macOS Hermes/inkling capture at 52 columns.
+        wide = '☤ inkling-2-mini │ ~67.9K/262.1K │ [██░░] ~26% │ ◎ 8%'
+        medium = ' ☤ inkling-2-mini · ~26% · ◎ 96% · 35m'
+        self.assertEqual(parse_context(f'{wide}\n{medium}', 'hermes'),
+                         {'ctx_used': 26, 'ctx_window': None})
+
     def test_unknown_not_zero_or_other_vendor_parser(self):
         cases = [('ctx 19% (24k/128k)', 'claude'),
                  ('ctx: 33% used\nContext 67% left\n(1M context)', 'dsh'),
                  ('ctx --', 'dsh'), ('ctx 10% (1k/0)', 'dsh'),
-                 ('☤ model · 20% · ◎ 90%', 'hermes'),
+                 ('☤ model · ◎ 90% · 12s', 'hermes'),
+                 ('☤ model · 120% · ◎ 90%', 'hermes'),
+                 ('conversation quoting ☤ model · 20%', 'hermes'),
                  ('☤ model │ ctx -- │ --', 'hermes'),
                  ('ctx 19% (24k/128k)' + '\nanswer' * 13, 'dsh'),
                  ('Σ1M tokens · cache 99%', 'hermes'),

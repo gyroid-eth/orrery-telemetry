@@ -3003,7 +3003,12 @@ build_embedded_task_prompt() {
 # text travels in a private file (a tmux environment value has a size limit)
 # that the child's shell reads once and removes.
 claude_child_launch_command() {
-    local inner='cd "$AGENTSTACK_LAUNCH_WORK_DIR" || exit $?; _ags_workspace_context="$(AGENTSTACK_EXTRA_PROTECTED_ROOTS="$AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS" /bin/bash "$AGENTSTACK_LAUNCH_CONTEXT_HELPER" workspace-context-exports "$PWD" "$AGENTSTACK_LAUNCH_PROJECT_KEY")" || exit $?; eval "$_ags_workspace_context"; unset _ags_workspace_context AGENTSTACK_LAUNCH_WORK_DIR AGENTSTACK_LAUNCH_PROJECT_KEY AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS AGENTSTACK_LAUNCH_CONTEXT_HELPER; export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config); "${CLAUDE_CHILD_BIN:-claude}" --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
+    local inner='cd "$AGENTSTACK_LAUNCH_WORK_DIR" || exit $?; _ags_workspace_context="$(AGENTSTACK_EXTRA_PROTECTED_ROOTS="$AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS" /bin/bash "$AGENTSTACK_LAUNCH_CONTEXT_HELPER" workspace-context-exports "$PWD" "$AGENTSTACK_LAUNCH_PROJECT_KEY")" || exit $?; eval "$_ags_workspace_context"; unset _ags_workspace_context AGENTSTACK_LAUNCH_WORK_DIR AGENTSTACK_LAUNCH_PROJECT_KEY AGENTSTACK_LAUNCH_EXTRA_PROTECTED_ROOTS AGENTSTACK_LAUNCH_CONTEXT_HELPER; export PATH="$HOME/.local/bin:$PATH"; MCP_ARGS=(); [[ -n "$CLAUDE_CHILD_MCP_CONFIG" ]] && MCP_ARGS=(--mcp-config "$CLAUDE_CHILD_MCP_CONFIG" --strict-mcp-config);'
+    local observer="${PROJECT_CONTEXT_HELPER%/*}/../bin/lib/claude_context.py"
+    if [[ -f "$observer" ]]; then
+        inner+=' "${AGENTSTACK_PYTHON:-python3}" '"$(printf '%q' "$observer")"' launch'
+    fi
+    inner+=' "${CLAUDE_CHILD_BIN:-claude}" --model "$CLAUDE_CHILD_MODEL" "${MCP_ARGS[@]}"'
     if [[ -n "${CLAUDE_CHILD_TOOL_FLAGS:-}" ]]; then
         inner+=" $CLAUDE_CHILD_TOOL_FLAGS"
     fi
@@ -3660,6 +3665,11 @@ ${TASK}"
                 done
                 IFS="$_ifs"
                 [[ -n "$AGENTSTACK_CODEX_EFFORT" ]] && EXTRA_ARGS+=(-c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT")
+                _context=""
+                if [[ -f "${AGENTSTACK_HOOKS_DIR:-}/../bin/lib/codex_context.py" ]]; then
+                    _context="$("${AGENTSTACK_PYTHON:-python3}" "$AGENTSTACK_HOOKS_DIR/../bin/lib/codex_context.py" "$PWD")" || _context=""
+                fi
+                [[ -n "$_context" ]] && EXTRA_ARGS+=(-c "$_context")
                 # The first task is one argv after `--` (never a subcommand or
                 # a flag), read from the 0600 file the launcher wrote.
                 # Codex never starts without its task: an unreadable or empty file ends
@@ -4559,6 +4569,11 @@ elif [[ "$USE_CODEX" == true ]]; then
             done
             IFS="$_ifs"
             [[ -n "$AGENTSTACK_CODEX_EFFORT" ]] && EXTRA_ARGS+=(-c "model_reasoning_effort=$AGENTSTACK_CODEX_EFFORT")
+            _context=""
+            if [[ -f "${AGENTSTACK_HOOKS_DIR:-}/../bin/lib/codex_context.py" ]]; then
+                _context="$("${AGENTSTACK_PYTHON:-python3}" "$AGENTSTACK_HOOKS_DIR/../bin/lib/codex_context.py" "$PWD")" || _context=""
+            fi
+            [[ -n "$_context" ]] && EXTRA_ARGS+=(-c "$_context")
             # See the pre-registered path: the first task is one argv after `--`.
             # Codex never starts without its task: an unreadable or empty file ends
             # the session here, which the launcher reports as a failed start.
