@@ -101,3 +101,33 @@ def test_unknown_paste_mode_requires_the_matching_editor_in_the_foreground_group
     assert not paste(view).allows_paste('First line\nSecond line\x1b[A')
     editor_group = 202  # A background descendant does not own the foreground.
     assert not paste(view).allows_paste(text)
+
+
+@pytest.mark.parametrize(('platform', 'exe', 'argv0', 'confirmed'), [
+    ('linux', '/home/demo/.local/bin/agy', 'renamed-process', True),
+    ('linux', None, '/home/demo/.local/bin/agy', True),
+    ('darwin', None, '/Users/demo/.local/bin/agy', True),
+    ('linux', '/home/demo/.local/bin/not-agy', '/home/demo/.local/bin/not-agy', False),
+])
+def test_native_agy_under_a_shell_requires_its_executable_or_argv0(
+    monkeypatch, platform, exe, argv0, confirmed,
+):
+    metadata = '/unused/tmux.sock\t100\t%1\t200\t1\t0\t2\t\tbash'
+    view = frame(metadata, [BORDER, '> ', BORDER, 'auto'], '%1')
+    confirm = submission['confirm_wrapped_editor']
+    scope = confirm.__globals__
+    monkeypatch.setitem(scope, 'sys', SimpleNamespace(platform=platform))
+    monkeypatch.setitem(scope, '_process_columns', lambda *args:
+                        '200 100 200 200 pts/3 Ss bash\n202 200 200 200 pts/3 S+ launcher\n')
+    monkeypatch.setitem(scope, '_process_argv', lambda pid: [argv0, '--mode', 'auto', '/tmp/agy'])
+    monkeypatch.setitem(scope, '_editor_has_terminal_input', lambda pid, tty: (pid, tty) == (202, 'pts/3'))
+
+    def readlink(path):
+        assert path == '/proc/202/exe'
+        if exe is None:
+            raise FileNotFoundError(path)
+        return exe
+
+    monkeypatch.setitem(scope, 'os', SimpleNamespace(readlink=readlink))
+    assert view.editor == 'agy' and view.empty
+    assert confirm(view).allows_paste('First line\nSecond line') is confirmed
