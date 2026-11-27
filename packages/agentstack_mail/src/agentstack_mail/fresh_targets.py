@@ -307,31 +307,34 @@ class Targets:
     async def exit(self, query):
         selected=await self.select(query)
         if selected.ended is not None:return await self.cleanup(query,mode='tmux')
-        transport,row=self.pane(selected,readiness=True)
+        transport,row=self.pane(selected)
         await self.again(selected)
         marker=selected.run/'pc-exit.json'
-        record=dict(operation='exit',revision=selected.signature,execution='unknown',**selected.public())
-        try:_write_private(marker,record)
-        except FileExistsError:
+        if marker.exists():
             saved=_read_private(marker)
             if saved.get('revision')!=selected.signature:raise B1Error('FRESH_TMUX_TARGET_CHANGED')
             return dict(ok=False,execution='unknown',error='FRESH_EXIT_OUTCOME_UNKNOWN',**selected.public())
-        buffer='orrery-exit-'+selected.intent['launch_id']
-        try:
-            await self.again(selected);transport,row=self.pane(selected,readiness=True)
-            if transport.command('load-buffer','-b',buffer,'-',input='/exit').returncode:
-                raise B1Error('FRESH_TMUX_LOAD_FAILED')
-            await self.again(selected);transport,row=self.pane(selected,readiness=True)
-            if transport.command('paste-buffer','-d','-p','-b',buffer,'-t',row['pane']['pane_id']).returncode:
-                raise B1Error('FRESH_TMUX_PASTE_UNKNOWN')
-            await self.again(selected);transport,row=self.pane(selected)
-            if transport.command('send-keys','-t',row['pane']['pane_id'],'C-m').returncode:
-                raise B1Error('FRESH_TMUX_SUBMIT_UNKNOWN')
-            await self.again(selected);self.pane(selected)
-            return dict(ok=True,actions=['exit-command-accepted'],execution='accepted',**selected.public())
-        finally:
-            try:transport.command('delete-buffer','-b',buffer)
-            except (OSError,RuntimeError):pass
+        loop=asyncio.get_running_loop()
+        tmux,_,_=delivery.helpers(self.root)
+        recorded=False
+
+        def admit():
+            asyncio.run_coroutine_threadsafe(self.again(selected),loop).result(timeout=5)
+            self.pane(selected)
+            return True
+
+        def command(*args, **kwargs):
+            nonlocal recorded
+            if args[0]=='send-keys':
+                record=dict(operation='exit',revision=selected.signature,execution='unknown',**selected.public())
+                _write_private(marker,record)
+                recorded=True
+            return transport.command(*args, **kwargs)
+
+        error,_=await asyncio.to_thread(tmux['submit_terminal_exit'],command,admit,row['pane']['pane_id'])
+        if error:
+            return dict(ok=False,execution='unknown' if recorded else 'refused',error=error,**selected.public())
+        return dict(ok=True,actions=['exit-command-accepted'],execution='accepted',**selected.public())
 
     @staticmethod
     def validate_display_route(route):

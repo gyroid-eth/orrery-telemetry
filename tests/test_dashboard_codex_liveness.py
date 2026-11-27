@@ -129,22 +129,9 @@ def test_graph_uses_the_same_husk_liveness(monkeypatch):
 
 def _exit(monkeypatch, process_tree):
     _patch_agent_inputs(monkeypatch, process_tree)
-    monkeypatch.setattr(server, "_has_session", lambda _session: True)
-    monkeypatch.setattr(server.time, "sleep", lambda _seconds: None)
-    sent = []
-
-    def fake_run(argv, **kwargs):
-        if argv[:2] == ["tmux", "display-message"]:
-            return _result("zsh\n")
-        if argv[:2] == ["tmux", "send-keys"]:
-            sent.append(argv)
-            return _result()
-        raise AssertionError(f"unexpected command: {argv}")
-
-    monkeypatch.setattr(server.subprocess, "run", fake_run)
-    from _legacy_dashboard_transport import install_legacy_transport
-    install_legacy_transport(monkeypatch, None, server, fake_run)
-    return server.do_exit("MintBoltzmann"), sent
+    from _exit_terminal import ExitTerminal
+    terminal = ExitTerminal(monkeypatch, server, "MintBoltzmann", pane_command="zsh")
+    return server.do_exit("MintBoltzmann"), terminal.mutations
 
 
 def test_exit_uses_shared_live_classification_for_slash_exit(monkeypatch):
@@ -152,17 +139,15 @@ def test_exit_uses_shared_live_classification_for_slash_exit(monkeypatch):
     result, sent = _exit(monkeypatch, process_tree)
     assert result["ok"] is True
     assert "exit-sent" in result["actions"]
-    assert any("/exit" in argv for argv in sent)
-    assert not any(argv[-2:] == ["exit", "Enter"] for argv in sent)
+    assert sent == [("paste", "/exit"), ("send-keys", "-t", "%41", "C-m")]
 
 
-def test_exit_uses_shared_husk_classification_for_shell_exit(monkeypatch):
+def test_exit_does_not_type_into_a_finished_shell(monkeypatch):
     _root, process_tree = _tree(False)
     result, sent = _exit(monkeypatch, process_tree)
-    assert result["ok"] is True
-    assert "shell-exit-sent" in result["actions"]
-    assert any(argv[-2:] == ["exit", "Enter"] for argv in sent)
-    assert not any("/exit" in argv for argv in sent)
+    assert result["ok"] is False
+    assert "remaining shell" in result["error"]
+    assert not sent
 
 
 def test_tmux_state_keeps_legacy_four_field_fake_rows(monkeypatch):

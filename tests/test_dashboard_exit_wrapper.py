@@ -12,7 +12,13 @@ from __future__ import annotations
 import importlib.util
 import os
 import pathlib
+import shlex
+import shutil
+import subprocess
 import sys
+import time
+
+import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SERVER = ROOT / "dashboard" / "server.py"
@@ -67,48 +73,24 @@ def test_descendant_walk_finds_the_agent_under_a_wrapper_shell():
     assert server._pane_agent_process("x", ps_output=_ZOMBIE_TREE) == ""
 
 
-def _run_exit(server, pane_cmd: str, tree: str, category: str):
-    sent: list[list[str]] = []
-
-    class _Done:
-        def __init__(self, stdout="", returncode=0):
-            self.stdout, self.stderr, self.returncode = stdout, "", returncode
-
-    def fake_run(argv, **_):
-        if argv[:2] == ["tmux", "display-message"] and "#{pane_current_command}" in argv:
-            return _Done(pane_cmd + "\n")
-        if argv[:2] == ["tmux", "display-message"] and "#{pane_pid}" in argv:
-            return _Done("4237\n")
-        if argv[:1] == ["ps"]:
-            return _Done(tree)
-        if argv[:2] == ["tmux", "send-keys"]:
-            sent.append(argv)
-            return _Done()
-        raise AssertionError(f"unexpected command {argv}")
-
-    originals = (server.subprocess.run, server.lookup_agent, server._has_session, server.time.sleep, server._tmux_run)
-    try:
-        server.subprocess.run = fake_run
-        server._tmux_run = lambda args, **kwargs: fake_run(["tmux", *args], **kwargs)
-        server.lookup_agent = lambda name, _rows=[{"name": "SandyTuring", "category": category, "attached": False}]: next((r for r in _rows if r['name'] == name), None)
-        server._has_session = lambda _s: True
-        server.time.sleep = lambda _s: None
-        result = server.do_exit("SandyTuring")
-    finally:
-        server.subprocess.run, server.lookup_agent, server._has_session, server.time.sleep, server._tmux_run = originals
-    return result, sent
+def _run_exit(monkeypatch, server, pane_cmd, tree, category, **terminal_options):
+    from _exit_terminal import ExitTerminal
+    terminal = ExitTerminal(monkeypatch, server, "SandyTuring", pane_command=pane_cmd, **terminal_options)
+    original = server._pane_agent_process
+    monkeypatch.setattr(server, "_pane_agent_process", lambda pane: original(pane, tree))
+    monkeypatch.setattr(server, "lookup_agent", lambda _: {"category": category, "attached": False})
+    return server.do_exit("SandyTuring"), terminal.mutations
 
 
-def test_exit_sends_slash_exit_to_codex_behind_a_bash_wrapper():
+def test_exit_sends_slash_exit_to_codex_behind_a_bash_wrapper(monkeypatch):
     server = _load_server()
-    result, sent = _run_exit(server, "bash", _WSL_TREE, "agent")
+    result, sent = _run_exit(monkeypatch, server, "bash", _WSL_TREE, "agent")
     assert result["ok"], result
     assert "exit-sent" in result["actions"] and "shell-exit-sent" not in result["actions"], result
-    assert any("/exit" in argv for argv in sent), sent
-    assert not any(argv[-2:] == ["exit", "Enter"] for argv in sent), sent
+    assert sent == [("paste", "/exit"), ("send-keys", "-t", "%41", "C-m")]
 
 
-def test_exit_keeps_slash_exit_for_a_live_agent_the_classifier_called_finished():
+def test_exit_keeps_slash_exit_for_a_live_agent_the_classifier_called_finished(monkeypatch):
     # #19 made the "finished" category authoritative for Codex, but Claude is
     # still classified from pane_current_command + title glyph, and every
     # Claude session on macOS is `zsh > claude`. A glyph-less live Claude
@@ -116,30 +98,79 @@ def test_exit_keeps_slash_exit_for_a_live_agent_the_classifier_called_finished()
     # agent below the shell and send /exit instead of typing `exit` into it.
     server = _load_server()
     live_mac_tree = "4237 913 zsh\n4250 4237 claude\n5000 1 unrelated\n"
-    result, sent = _run_exit(server, "zsh", live_mac_tree, "finished")
+    result, sent = _run_exit(monkeypatch, server, "zsh", live_mac_tree, "finished", editor="claude")
     assert result["ok"], result
     assert "wrapper-shell:zsh>claude" in result["actions"], result
     assert "exit-sent" in result["actions"] and "shell-exit-sent" not in result["actions"], result
-    assert any("/exit" in argv for argv in sent), sent
-    assert not any(argv[-2:] == ["exit", "Enter"] for argv in sent), sent
+    assert sent == [("paste", "/exit"), ("send-keys", "-t", "%41", "C-m")]
 
 
-def test_exit_still_closes_a_real_zombie_shell():
+def test_exit_leaves_a_finished_shell_for_the_operator(monkeypatch):
     server = _load_server()
-    result, sent = _run_exit(server, "bash", _ZOMBIE_TREE, "finished")
-    assert result["ok"], result
-    assert "shell-exit-sent" in result["actions"], result
-    assert any(argv[-2:] == ["exit", "Enter"] for argv in sent), sent
+    result, sent = _run_exit(monkeypatch, server, "bash", _ZOMBIE_TREE, "finished")
+    assert result["ok"] is False
+    assert "remaining shell" in result["error"]
+    assert not sent
 
 
-if __name__ == "__main__":
-    failures = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS {name}")
-            except Exception as error:  # noqa: BLE001
-                failures += 1
-                print(f"FAIL {name}: {error}")
-    sys.exit(1 if failures else 0)
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="requires tmux")
+@pytest.mark.parametrize("screen", ["model", "approval", "composer"])
+def test_exit_keys_on_a_private_tmux_server(monkeypatch, tmp_path, screen):
+    # Keep the Unix socket path below the platform limit even under xdist.
+    import tempfile
+
+    server = _load_server()
+    received = tmp_path / "input"
+    tui = r"""
+import os, pathlib, sys, tty
+capture, screen = pathlib.Path(sys.argv[1]), sys.argv[2]
+tty.setraw(0)
+options = {
+    "model": "Select a model\r\n> 1. Gemini 4 Neon\r\n  2. Gemini 4 Flash\r\nEnter to select · Esc to cancel",
+    "approval": "Do you want to make this edit to demo.txt?\r\n❯ 1. Yes\r\n  2. No\r\nEsc to cancel",
+    "composer": "› ",
+}
+os.write(1, b"\x1b[?2004h" + options[screen].encode())
+if screen == "composer":
+    os.write(1, b"\r\n? for shortcuts\x1b[1;3H")
+capture.touch()
+while True:
+    data = os.read(0, 4096)
+    if not data:
+        break
+    with capture.open("ab") as output:
+        output.write(data)
+    if screen == "composer":
+        if b"\r" in data:
+            os.write(1, b"\x1b[1;3H\x1b[K")
+        else:
+            os.write(1, data.replace(b"\x1b[200~", b"").replace(b"\x1b[201~", b""))
+"""
+    with tempfile.TemporaryDirectory(prefix="exit-test-", dir=pathlib.Path("/tmp").resolve()) as directory:
+        tmux = ["tmux", "-S", str(pathlib.Path(directory) / "s"), "-f", "/dev/null"]
+        env = {k: v for k, v in os.environ.items() if k not in {"TMUX", "TMUX_PANE", "LC_ALL"}}
+        env["LC_CTYPE"] = "C.UTF-8"
+        subprocess.run([*tmux, "new-session", "-d", "-s", "ExitProbe", "-x", "80", "-y", "20",
+                        shlex.join([sys.executable, "-I", "-c", tui, str(received), screen])],
+                       env=env, check=True, capture_output=True, text=True, timeout=5)
+        try:
+            api = server._MODE_API["runtime_tmux_api"]()
+            transport = api["Transport"](pathlib.Path(directory) / "s")
+            consumer = api["LegacyConsumer"](pathlib.Path(directory), transport=transport,
+                                              proof_reader=lambda *a, **kw: [])
+            monkeypatch.setattr(server, "_legacy_tmux_consumer", lambda: consumer)
+            monkeypatch.setattr(server, "lookup_agent", lambda _: {"category": "agent", "attached": False})
+            monkeypatch.setattr(server, "_agent_program", lambda _: "codex")
+            end = time.monotonic() + 5
+            while not received.exists() and time.monotonic() < end:
+                time.sleep(.02)
+            assert received.exists()
+            result = server.do_exit("ExitProbe")
+            if screen == "composer":
+                assert result["ok"], result
+                assert received.read_bytes() == b"\x1b[200~/exit\x1b[201~\r"
+            else:
+                assert "Close any selection or approval" in result["error"], result
+                assert received.read_bytes() == b""
+        finally:
+            subprocess.run([*tmux, "kill-server"], env=env, capture_output=True, timeout=5)

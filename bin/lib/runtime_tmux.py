@@ -586,6 +586,76 @@ def compact_readiness(text,provider):
 def compact_refusal(readiness):
     return module_api('terminal_state')['compact_refusal'](readiness)
 
+
+EXIT_INPUT_UNCONFIRMED = (
+    "Cannot confirm an empty agent input. Close any selection or approval, "
+    "clear the draft, and try Exit again.")
+EXIT_COMMAND_UNCONFIRMED = (
+    "Cannot confirm /exit in the agent input. Check the terminal before trying Exit again.")
+
+
+def submit_terminal_exit(command, admit, pane, *, interrupt_key=None, activity=None):
+    """Send Enter only when the shared input protocol confirms /exit."""
+    submission = module_api('pane_submission')
+    modal_activity = module_api('terminal_state')['current_modal_activity']
+    entered = interrupted = prepared = running = False
+    reason = 'input_not_found'
+
+    def guarded_command(*args, **kwargs):
+        nonlocal entered, running
+        result = command(*args, **kwargs)
+        if args[0] == 'send-keys' and args[-1] == 'C-m' and not result.returncode:
+            entered = True
+        if args[0] == 'display-message' and not result.returncode:
+            metadata, _, screen = result.stdout.partition('\n')
+            lines = screen.splitlines()
+            view = submission['frame'](metadata, lines, pane)
+            plain = [submission['SGR'].sub('', line) for line in lines]
+            state = activity('\n'.join(plain)) if activity else None
+            running = bool(view and view.running) or state == 'work'
+            if (not view or not view.editor or view.scrolled or view.draft_continues
+                    or modal_activity(plain) or state in ('ask', 'question')
+                    or (running and (not interrupt_key or prepared))):
+                return subprocess.CompletedProcess(args, 1, '', '')
+        return result
+
+    def admitted():
+        nonlocal interrupted, prepared
+        if not admit():
+            return False
+        if interrupt_key and not prepared:
+            view = submission['capture'](guarded_command, pane)
+            if not view or not view.empty:
+                return False
+            prepared = True
+            if running:
+                if command('send-keys', '-t', pane, interrupt_key).returncode:
+                    return False
+                interrupted = True
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    idle = submission['capture'](guarded_command, pane)
+                    if idle and idle.identity == view.identity and idle.empty:
+                        return True
+                    time.sleep(submission['POLL'])
+                return False
+        return True
+
+    def on_wait(value):
+        nonlocal reason
+        reason = value
+
+    status = submission['submit'](guarded_command, admitted, pane, '/exit', on_wait=on_wait)
+    if entered:
+        return None, interrupted
+    if status == 'unknown':
+        return EXIT_COMMAND_UNCONFIRMED, interrupted
+    if reason == 'pane_locked':
+        return "The agent input is in use. Try Exit again.", interrupted
+    if running:
+        return "The agent is working. Wait for its input prompt and try Exit again.", interrupted
+    return EXIT_INPUT_UNCONFIRMED, interrupted
+
 def identity_digest(target,principal,proof):
     return module_api('runtime_delivery')['digest'](
         dict(version=1,target=target,principal=principal,proof=proof))
