@@ -102,7 +102,7 @@ if [[ ${#GEMINI_TOOLS[@]} -gt 0 ]]; then
 fi
 
 command -v tmux >/dev/null 2>&1 || { echo "$PROG: tmux not found" >&2; exit 1; }
-command -v "$GEMINI_BIN" >/dev/null 2>&1 || { echo "$PROG: Antigravity CLI not found (expected agy)" >&2; exit 1; }
+command -v "$GEMINI_BIN" >/dev/null 2>&1 || { echo "$PROG: Antigravity CLI (agy) not found on PATH. See https://github.com/gyroid-eth/orrery/blob/master/docs/antigravity.md" >&2; exit 1; }
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || { echo "$PROG: selected Python is unavailable" >&2; exit 1; }
 [[ -x "$MAIL_HELPER" && -x "$STREAM_HELPER" && -x "$MCP_WRAPPER" ]] || { echo "$PROG: Gemini provider helpers are not installed" >&2; exit 1; }
 

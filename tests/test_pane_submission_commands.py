@@ -416,6 +416,130 @@ def test_watcher_retries_a_scrolled_notice_from_its_visible_tail(monkeypatch, ed
         assert result == 'refused' and not operations and reasons == ['editor_not_empty']
 
 
+@pytest.mark.parametrize('case', [
+    'fresh', 'retry', 'different', 'typed-marker', 'cursor-inside', 'more-below', 'no-agy-footer',
+])
+def test_watcher_submits_a_scrolled_agy_mail_notice(monkeypatch, case):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    submit = submission['submit']
+    monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
+    ticks = itertools.count()
+    monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(
+        monotonic=lambda: next(ticks) * .01, sleep=lambda _: None))
+    border = '\x1b[90m' + '─' * 80
+    footer = '\x1b[39mauto · Gemini 4 Neon (XHigh) · xhigh'
+    if case == 'retry':
+        footer = '\x1b[39m? for shortcuts  Gemini 4 Neon (XHigh) · xhigh'
+    idle = [border, '\x1b[94m>\x1b[39m ', border, footer]
+    marker = '\x1b[94m>\x1b[39m \x1b[90m↑ 7 more lines\x1b[39m'
+    tail = [
+        '  保存）、そのあと別の画面で開いて内容を確認します。',
+        '  最後に識別用の印を記録します。',
+    ]
+    notice = ('ORRERY Mail notification: message from FixtureSender [normal]: 作業の確認。 '
+              'Body (complete; no inbox fetch needed): 見本を作成（' + ' '.join(s.strip() for s in tail))
+    column = 2 + sum(2 if ord(c) > 127 else 1 for c in tail[-1].strip())
+    if case == 'different':
+        tail[-1] = tail[-1].replace('印', '値')
+    elif case == 'typed-marker':
+        marker = '> ↑ 7 more lines'
+    elif case == 'cursor-inside':
+        column -= 2
+    after = [border, footer]
+    if case == 'more-below':
+        after.insert(0, '  \x1b[90m↓ 2 more lines\x1b[39m')
+    elif case == 'no-agy-footer':
+        after[1] = 'Unrelated status'
+    scrolled = [border, marker, *tail, *after]
+    screen = idle if case == 'fresh' else scrolled
+    effects = []
+
+    def tmux(*args, input=None):
+        nonlocal screen
+        operation = args[0]
+        if operation == 'display-message':
+            position = '1\t0\t2' if screen is idle else f'3\t0\t{column}'
+            metadata = f'/tmp/fixture.sock\t100\t%1\t200\t{position}\t1\tagy'
+            return subprocess.CompletedProcess(args, 0, '\n'.join([metadata, *screen, '']), '')
+        effects.append(operation)
+        if operation == 'load-buffer':
+            assert input == notice
+        elif operation == 'paste-buffer':
+            screen = scrolled
+        elif operation == 'send-keys':
+            assert args[-1] == 'C-m'
+            screen = idle
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    result = submit(tmux, lambda: True, '%1', notice)
+    if case == 'fresh':
+        assert result == 'accepted' and effects == ['load-buffer', 'paste-buffer', 'send-keys', 'delete-buffer']
+    elif case == 'retry':
+        assert result == 'accepted' and effects == ['send-keys']
+    else:
+        assert result == 'refused' and not effects
+
+
+@pytest.mark.parametrize('case', ['fresh', 'retry', 'different', 'cursor-inside'])
+def test_watcher_submits_a_classic_hermes_notice_with_its_prompt_scrolled_off(monkeypatch, case):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    submit = submission['submit']
+    monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
+    ticks = itertools.count()
+    monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(
+        monotonic=lambda: next(ticks) * .01, sleep=lambda _: None))
+    border = '─' * 80
+    status = ' ☤ fixture-model │ ~18.6K/1M │ [░░░░░░░░░░] ~2% ─ Fetch canonical task'
+    idle = [status, border, '❯ ', border]
+    tail = [
+        'ox fetch needed): This is a synthetic initial task.',
+        'Report the price and arrival date of the blue bicycle.',
+        'Add each result on its own row, keeping the file unchanged.',
+        'Use the named inventory in the current fixture.',
+        'If any details are missing, record what was unavailable.',
+        'Finish by confirming the result to the fixture parent.',
+        'The final comparison goes in the reply only.',
+        'Unique marker: HERMES-FIXTURE-4917.',
+    ]
+    notice = ('ORRERY Mail notification: message from FixtureSender [normal]: Initial task. '
+              'Body (complete; no inb' + ' '.join(tail))
+    draft = tail[:]
+    if case == 'different':
+        draft[-1] = 'Unique marker: HERMES-FIXTURE-4918.'
+    screen = idle if case == 'fresh' else [status, border, *draft, border]
+    effects = []
+    reasons = []
+
+    def tmux(*args, input=None):
+        nonlocal screen
+        operation = args[0]
+        if operation == 'display-message':
+            row = len(screen) - 2
+            column = (2 if screen is idle or case == 'cursor-inside' else len(draft[-1]))
+            metadata = f'/tmp/fixture.sock\t100\t%1\t200\t{row}\t0\t{column}\t\tbash'
+            return subprocess.CompletedProcess(args, 0, '\n'.join([metadata, *screen, '']), '')
+        effects.append(operation)
+        if operation == 'load-buffer':
+            assert input == notice
+        elif operation == 'paste-buffer':
+            screen = [status, border, *draft, border]
+        elif operation == 'send-keys':
+            assert args[-1] == 'C-m'
+            screen = idle
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    result = submit(tmux, lambda: True, '%1', notice, on_wait=reasons.append)
+    if case == 'fresh':
+        assert result == 'accepted' and not reasons
+        assert effects == ['load-buffer', 'paste-buffer', 'send-keys', 'delete-buffer']
+    elif case == 'retry':
+        assert result == 'accepted' and not reasons
+        assert effects == ['send-keys']
+    else:
+        assert result == 'refused' and not effects
+        assert reasons == ['editor_not_empty']
+
+
 def test_expired_submit_after_load_still_deletes_its_buffer(monkeypatch):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']

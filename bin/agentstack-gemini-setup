@@ -40,7 +40,7 @@ case "${1:-}" in
 esac
 
 if [[ ( "$mode" == "install" || "$mode" == "check" ) && ! -x "$MCP_COMMAND" ]]; then
-  die "session-bound MCP runner is not installed: $MCP_COMMAND"
+  die "session-bound MCP runner is not installed: $MCP_COMMAND. Re-run the ORRERY installer. See https://github.com/gyroid-eth/orrery/blob/master/docs/antigravity.md"
 fi
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || \
   die "selected Python is unavailable: $PYTHON_BIN"
@@ -97,7 +97,9 @@ if mode == "check":
             and entry.get("args", []) == [] and entry.get("enabled") is not False
             and entry.get("disabled") is not True):
         raise SystemExit(0)
-    raise SystemExit(f"managed '{server_key}' entry is missing, disabled or points to a different command")
+    raise SystemExit(f"managed '{server_key}' entry is missing, disabled or points to a different command. "
+                     "Review `scripts/install-gemini-provider.sh --dry-run --configure-mcp` from the Telemetry checkout, "
+                     "then run `scripts/install-gemini-provider.sh --configure-mcp` to apply it.")
 
 if mode == "uninstall":
     servers.pop(server_key, None)

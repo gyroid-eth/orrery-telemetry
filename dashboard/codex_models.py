@@ -515,10 +515,13 @@ def resolve_effort(model: str, raw: str = "", catalog: ModelCatalog | None = Non
 
 def provider_catalog() -> dict:
     catalog = resolve_catalog()
+    cli_available = bool(catalog.models and resolve_launcher().binary)
     configured_effort = read_launcher_setting("AGENTSTACK_CODEX_DEFAULT_EFFORT").strip().lower()
     effort_error = "invalid AGENTSTACK_CODEX_DEFAULT_EFFORT" if configured_effort and configured_effort not in EFFORTS else ""
     return {
         "id": "codex", "label": "Codex", "program": "codex-cli",
+        "harnesses": [{"id": "codex-cli", "label": "Codex", "available": cli_available,
+                       "default": cli_available, "reason": None if cli_available else "runtime_not_prepared"}],
         "models": list(catalog.models), "default_model": "" if catalog.error and "AGENTSTACK_CODEX_DEFAULT_MODEL" in catalog.error else catalog.default_model,
         "model_source": catalog.source, "model_error": catalog.error if "AGENTSTACK_CODEX_DEFAULT_MODEL" not in catalog.error else "",
         "default_error": catalog.error if "AGENTSTACK_CODEX_DEFAULT_MODEL" in catalog.error else "",

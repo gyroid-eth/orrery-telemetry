@@ -9454,6 +9454,14 @@ def _spawn_catalog_providers():
         mode="fresh" if FRESH_MODE else "global" if GLOBAL_MODE else "legacy")
 
 
+def _spawn_harness_setup_hint(harness, reason):
+    if reason in ("runtime_not_prepared", "plain_generation_required", "runtime_version_mismatch",
+                  "thin_config_unavailable", "harness_not_enabled"):
+        return (f"{harness} runtime is unavailable. "
+                "See https://github.com/gyroid-eth/orrery/blob/master/docs/native-setup.md")
+    return None
+
+
 
 def _native_browser_directories(dirs):
     """Which preset folders can copy Chrome DevTools into a native child."""
@@ -9542,6 +9550,9 @@ def spawn_names_payload() -> dict:
     # The legacy fallback starts in the project, with home as a second chip.
     dirs = _spawn_directory_presets() or (["~"] if FRESH_MODE else [d for d in (PROJECT_KEY, "~") if d])
     claude_catalog = _claude_catalog()
+    # Check the last child-shell path or the native installer's usual location.
+    claude_available = bool(shutil.which(claude_models_mod.child_cli_path()) or
+                            shutil.which(os.path.expanduser("~/.local/bin/claude")))
     claude_models = list(claude_catalog.models)
     claude_default = _claude_default_model(claude_models)
     local_catalog = _standard_catalog_module().discover_catalog(_spawn_catalog_providers(),
@@ -9560,6 +9571,8 @@ def spawn_names_payload() -> dict:
         "default_model": claude_default,
         "providers": [
             {"id": "claude", "label": "Claude", "program": "claude-code", "models": list(claude_models), "default_model": claude_default,
+             "harnesses": [{"id": "claude-code", "label": "Claude Code", "available": claude_available,
+                            "default": claude_available, "reason": None if claude_available else "runtime_not_prepared"}],
              "efforts": list(claude_models_mod.EFFORT_LEVELS), "effort_default": "",
              "model_efforts": {m: list(claude_models_mod.effort_policy(m)[0]) for m in claude_models},
              "model_effort_defaults": {m: claude_models_mod.effort_policy(m)[1] for m in claude_models},
@@ -10361,8 +10374,9 @@ def do_spawn(payload: dict) -> dict:
                     mode='fresh' if FRESH_MODE else 'global' if GLOBAL_MODE else 'legacy', backend=provider, harness=harness,
                     model=model, url_index=payload.get('url_index'), url_key=payload['url_key'])
                 selections.append({'id': harness, 'available': True})
-            except (ValueError, OSError, TypeError, KeyError):
-                return {'ok': False, 'error': 'configured URL/model selection is unavailable',
+            except (ValueError, OSError, TypeError, KeyError) as exc:
+                hint = _spawn_harness_setup_hint(harness, str(exc))
+                return {'ok': False, 'error': hint or 'configured URL/model selection is unavailable',
                         'error_code': 'spawn_pair_unavailable'}
         elif 'url_index' in payload or 'url_key' in payload:
             return {'ok': False, 'error': 'url_index requires a dynamic Local connection'}
@@ -10375,7 +10389,8 @@ def do_spawn(payload: dict) -> dict:
                                       if h.get("id") == harness)
         selected = selections[0] if len(selections) == 1 else None
         if not selected or selected.get("available") is not True:
-            return {"ok": False, "error": "model and harness are unavailable",
+            hint = _spawn_harness_setup_hint(harness, selected.get("reason") if selected else None)
+            return {"ok": False, "error": hint or "model and harness are unavailable",
                     "error_code": "spawn_pair_unavailable"}
         if effort and effort not in (selected.get("efforts") or []):
             return {"ok": False, "error": "effort not supported for model and harness"}

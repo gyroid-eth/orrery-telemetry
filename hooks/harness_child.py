@@ -526,7 +526,12 @@ def main():
         reason = str(error) if re.fullmatch(r'[a-z_]+', str(error)) else type(error).__name__
         if isinstance(error, child_tools.ToolsError):
             reason = 'unsupported_mcp_selection'
-        print('Harness ' + args.action + ' failed: ' + reason, file=sys.stderr)
+        message = 'Harness ' + args.action + ' failed: ' + reason
+        if (args.harness in HARNESSES and reason in {'runtime_not_prepared', 'plain_generation_required',
+                'runtime_version_mismatch', 'thin_config_unavailable', 'harness_not_enabled', 'FileNotFoundError'}):
+            message += (f'. Install or repair {args.harness}. '
+                        'See https://github.com/gyroid-eth/orrery/blob/master/docs/native-setup.md')
+        print(message, file=sys.stderr)
         return 1
     return 0
 

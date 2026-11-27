@@ -557,14 +557,16 @@ def test_warm_pool_identities_and_report_follow_the_same_resolution(tmp_path):
     assert "Claude model sonnet -> claude-sonnet-6 (local_catalog: catalog is stale)" in result.stderr
 
 
-def test_alias_report_names_the_bundled_table_and_why():
+def test_alias_report_names_the_bundled_table_and_why(tmp_path):
+    _versioned_claude(tmp_path / ".local/bin/claude", "2.1.280")
+    env = {"HOME": str(tmp_path), "CHILD_SHELL": "/bin/bash", "PATH": "/usr/bin:/bin"}
     result = _model_call("report_claude_alias", "", "claude-opus-5-5",
-                         prelude="load_claude_aliases || exit 1")
+                         extra_env=env, prelude="load_claude_aliases || exit 1")
     assert result.returncode == 0, result.stderr
     assert ("Claude model (default opus) -> claude-opus-5-5 "
             "(bundled: no readable local Claude Code model catalog)") in result.stderr
     pinned = _model_call("report_claude_alias", "sonnet-5", "claude-sonnet-5",
-                         prelude="load_claude_aliases || exit 1")
+                         extra_env=env, prelude="load_claude_aliases || exit 1")
     assert pinned.stderr == ""
 
 

@@ -139,7 +139,7 @@ def _cli_models(binary: str) -> tuple[str, ...]:
 def _discover_models() -> tuple[str, ...]:
     # Use the same path as launch preflight. Services may exclude the CLI
     # installer's standard ~/.local/bin from their own PATH.
-    binary = _which(os.environ.get("AGENTSTACK_GEMINI_BIN") or "agy", _launch_path())
+    binary = _gemini_cli()
     if not binary:
         return ()
     try:
@@ -208,6 +208,7 @@ def _fixed_effort(model: str) -> bool:
 
 def _catalog_item(models: list[str]) -> dict:
     available = set(models)
+    cli_available = bool(_gemini_cli())
     model_efforts = {}
     for model in models:
         if _fixed_effort(model):
@@ -221,6 +222,8 @@ def _catalog_item(models: list[str]) -> dict:
         "id": PROVIDER_ID,
         "label": "Antigravity",
         "program": "antigravity",
+        "harnesses": [{"id": "antigravity", "label": "Antigravity", "available": cli_available,
+                       "default": cli_available, "reason": None if cli_available else "runtime_not_prepared"}],
         "models": list(models),
         "default_model": models[0],
         "efforts": list(_EFFORTS),
@@ -590,6 +593,10 @@ def _which(command: str, path: str) -> str:
     return shutil.which(command, path=path) or ""
 
 
+def _gemini_cli() -> str:
+    return _which(os.environ.get("AGENTSTACK_GEMINI_BIN") or "agy", _launch_path())
+
+
 def _git(git: str, *args: str) -> str:
     try:
         result = subprocess.run(
@@ -613,8 +620,9 @@ def _runtime_requirements(base: Any) -> tuple[dict, str]:
         if not _executable(helper):
             return {}, f"Gemini provider helper is not installed: {helper}"
     path = _launch_path()
-    if not _which(os.environ.get("AGENTSTACK_GEMINI_BIN") or "agy", path):
-        return {}, "Antigravity CLI not found for provider gemini (expected agy)"
+    if not _gemini_cli():
+        return {}, ("Antigravity CLI not found for provider gemini (expected agy). "
+                    "See https://github.com/gyroid-eth/orrery/blob/master/docs/antigravity.md")
     for command, label in (
         (os.environ.get("AGENTSTACK_PYTHON") or "python3", "selected Python"),
         ("tmux", "tmux"),
@@ -745,9 +753,10 @@ def _install_catalog(base: Any, integration: _Integration) -> None:
         if error:
             return payload
         provider = _catalog_item(models)
-        _, reason = _runtime_requirements(base)
-        if reason:
-            provider["harnesses"] = [{"id": "antigravity", "available": False, "reason": "runtime_not_prepared"}]
+        if provider["harnesses"][0]["available"]:
+            _, reason = _runtime_requirements(base)
+            if reason:
+                provider["harnesses"] = [{"id": "antigravity", "available": False, "reason": "runtime_not_prepared"}]
         payload["providers"] = [*providers, provider]
         return payload
 

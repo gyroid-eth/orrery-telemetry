@@ -236,9 +236,14 @@ def test_gemini_mac_spawn_passes_managed_screen_to_the_adapter(monkeypatch, gemi
 # Catalog and the single explicit-effort policy owner
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("platform", ["darwin", "linux"])
-def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
+@pytest.mark.parametrize("cli_available", [True, False])
+def test_spawn_catalog_exposes_gemini_provider(monkeypatch, tmp_path, platform, cli_available):
     monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform=platform))
-    monkeypatch.setattr(gemini_runtime, "_runtime_requirements", lambda base: ({}, ""))
+    cli = tmp_path / "agy"
+    if cli_available:
+        _executable(cli, "#!/bin/sh\n")
+    monkeypatch.setenv("AGENTSTACK_GEMINI_BIN", str(cli))
+    monkeypatch.setattr(gemini_runtime, "_runtime_requirements", lambda base: ({}, "" if cli_available else "CLI missing"))
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
     monkeypatch.setattr(
         server,
@@ -251,6 +256,8 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
         "id": "gemini",
         "label": "Antigravity",
         "program": "antigravity",
+        "harnesses": [{"id": "antigravity", "label": "Antigravity", "available": cli_available,
+                       "default": cli_available, "reason": None if cli_available else "runtime_not_prepared"}],
         "models": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"],
         "default_model": "gemini-3.8-flash-high",
         "efforts": ["low", "medium", "high", "xhigh"],
@@ -319,8 +326,10 @@ def test_mac_my_chrome_requires_running_process_and_working_debugging_port(
     assert probe._mac_state() == expected
 
 
-def test_spawn_catalog_marks_gemini_unavailable_before_launch(monkeypatch):
-    monkeypatch.setattr(gemini_runtime, "_runtime_requirements", lambda base: ({}, "CLI missing"))
+def test_spawn_catalog_marks_gemini_unavailable_before_launch(monkeypatch, tmp_path):
+    cli = _executable(tmp_path / "agy", "#!/bin/sh\n")
+    monkeypatch.setenv("AGENTSTACK_GEMINI_BIN", str(cli))
+    monkeypatch.setattr(gemini_runtime, "_runtime_requirements", lambda base: ({}, "spawn adapter missing"))
     gemini = next(provider for provider in server.spawn_names_payload()["providers"]
                   if provider["id"] == "gemini")
     assert gemini["harnesses"] == [
@@ -888,7 +897,8 @@ def test_preflight_failures_do_not_register_junk_identities(gemini_env, monkeypa
     assert [label for label, error in checks if not error] == []
     errors = dict(checks)
     assert errors["helper"].startswith("Gemini provider helper is not installed")
-    assert errors["agy"] == "Antigravity CLI not found for provider gemini (expected agy)"
+    assert errors["agy"] == ("Antigravity CLI not found for provider gemini (expected agy). "
+                             "See https://github.com/gyroid-eth/orrery/blob/master/docs/antigravity.md")
     assert errors["git"] == "provider gemini requires a git repository"
     assert errors["base"] == "could not resolve worktree base for provider gemini: no-such-rev"
     assert errors["base-option"].startswith("worktree base must not start with '-'")
@@ -1326,6 +1336,7 @@ def _extract_ui_script(rendered: str) -> str:
 def test_provider_switching_does_not_leak_capability_state(monkeypatch):
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
     monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(gemini_runtime, "_gemini_cli", lambda: "/fixture/bin/agy")
     catalog = {"providers": [
         {"id": "claude", "label": "Claude", "program": "claude-code",
          "models": ["claude-sonnet-5"], "default_model": "claude-sonnet-5", "efforts": None},

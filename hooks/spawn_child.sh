@@ -1072,6 +1072,9 @@ resolve_claude_child_bin() {
     fi
     declare -F claude_child_bin >/dev/null || return 0
     CLAUDE_CHILD_BIN="$(claude_child_bin "$CHILD_SHELL")"
+    if [[ -z "$CLAUDE_CHILD_BIN" ]]; then
+        echo "Error: Claude Code CLI (claude) not found in the child shell. See https://github.com/gyroid-eth/orrery/blob/master/docs/install.md" >&2
+    fi
 }
 
 # A warm session may have been started before the catalog changed. The status
@@ -1443,7 +1446,7 @@ resolve_codex_bin() {
     local codex_bin
     codex_bin="$(find_codex_bin)"
     if [[ -z "$codex_bin" ]]; then
-        echo "Error: no usable Codex CLI found (reasons above, if any candidate was found). Install Codex where this shell can run it, or set AGENTSTACK_CODEX_BIN to its path (on WSL, a codex under /mnt is the Windows install and cannot run here)." >&2
+        echo "Error: no usable Codex CLI found (reasons above, if any candidate was found). Install Codex where this shell can run it, or set AGENTSTACK_CODEX_BIN to its path (on WSL, a codex under /mnt is the Windows install and cannot run here). See https://github.com/gyroid-eth/orrery/blob/master/docs/install.md" >&2
         return 1
     fi
     printf '%s\n' "$codex_bin"
