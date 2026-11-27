@@ -55,10 +55,26 @@ def _windows_state():
     powershell = wsl_anchor._powershell()
     if not powershell:
         return _windows_failure("powershell_not_found")
-    try:
-        env = wsl_anchor.interop_env()
-    except OSError:
-        return _windows_failure("interop_socket_lookup_failed")
+    previous = None
+    for _ in range(2):
+        try:
+            env = wsl_anchor.interop_env()
+        except wsl_anchor.InteropUnavailable:
+            return _windows_failure("no_usable_interop_socket")
+        except OSError:
+            return _windows_failure("interop_socket_lookup_failed")
+        path = env.get("WSL_INTEROP", "")
+        if path == previous:
+            break
+        state = _windows_chrome_state(powershell, env)
+        if state != "interop":
+            return state
+        wsl_anchor.invalidate_interop(path)
+        previous = path
+    return "interop"
+
+
+def _windows_chrome_state(powershell, env):
     try:
         result = subprocess.run(
             [powershell, "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_CHECK],

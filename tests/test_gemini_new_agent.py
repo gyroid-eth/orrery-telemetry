@@ -341,6 +341,28 @@ def test_windows_chrome_probe_logs_one_failure_and_reports_unverified(
     ]
 
 
+def test_windows_chrome_retries_after_the_selected_socket_fails(monkeypatch):
+    from dashboard import wsl_anchor
+
+    choices = iter(("/fixture/broken_interop", "/fixture/working_interop"))
+    monkeypatch.setattr(wsl_anchor, "_powershell", lambda: "powershell.exe")
+    monkeypatch.setattr(wsl_anchor, "interop_env", lambda: {"WSL_INTEROP": next(choices)})
+    invalidated = []
+    monkeypatch.setattr(wsl_anchor, "invalidate_interop", invalidated.append)
+    calls = []
+
+    def run(argv, *, env, timeout, **kwargs):
+        calls.append(env["WSL_INTEROP"])
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0, "ready\n", "")
+
+    monkeypatch.setattr(server.chrome_readiness.subprocess, "run", run)
+    assert server.chrome_readiness.personal_browser_reason(wsl=True) == ("", False)
+    assert calls == ["/fixture/broken_interop", "/fixture/working_interop"]
+    assert invalidated == ["/fixture/broken_interop"]
+
+
 @pytest.mark.parametrize(('running', 'marker', 'connects', 'expected'), [
     (False, None, False, 'stopped'),
     (True, None, False, 'debugging'),

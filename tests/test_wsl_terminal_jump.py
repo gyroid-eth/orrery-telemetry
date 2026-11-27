@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 import dashboard.server as server
 
 
@@ -23,6 +25,15 @@ def _pretend_wsl(monkeypatch, *, wt_present: bool = True, distro: str = "Ubuntu"
         if (name == "wt.exe" and wt_present) else None,
     )
     monkeypatch.setattr(server, "TERMINAL_SETTING", "auto")
+
+
+@pytest.fixture
+def verified_windows_interop(monkeypatch, tmp_path):
+    """Model the result of a successful Windows check in the fake WSL session."""
+    env = {"WSL_INTEROP": str(tmp_path / "verified_interop")}
+    monkeypatch.setattr(server._wsl_anchor_module(), "interop_env", lambda: env)
+    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path))
+    return env
 
 
 def test_auto_detects_windows_terminal_inside_wsl(monkeypatch):
@@ -44,12 +55,12 @@ def test_wt_setting_is_accepted_explicitly(monkeypatch):
     assert server._terminal_adapter() == "wt"
 
 
-def test_jump_opens_a_tab_that_attaches_inside_the_distro(monkeypatch, tmp_path):
+def test_jump_opens_a_tab_that_attaches_inside_the_distro(monkeypatch, tmp_path, verified_windows_interop):
     _pretend_wsl(monkeypatch, distro="Ubuntu-24.04")
-    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path))
     seen: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
+        assert kwargs["env"] == verified_windows_interop
         seen.append(list(cmd))
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -72,12 +83,12 @@ def test_jump_opens_a_tab_that_attaches_inside_the_distro(monkeypatch, tmp_path)
     assert "TMUX=" in body and "AGENTSTACK_HOME=" in body
 
 
-def test_resume_line_with_semicolons_never_reaches_the_windows_command_line(monkeypatch, tmp_path):
+def test_resume_line_with_semicolons_never_reaches_the_windows_command_line(
+        monkeypatch, tmp_path, verified_windows_interop):
     """wt.exe splits its command line on `;` and the WSL interop re-quotes
     each argument, which broke `export A=..; exec claude --resume ..`. The
     only thing wt sees now is the script path."""
     _pretend_wsl(monkeypatch)
-    monkeypatch.setattr(server, "RUNTIME_DIR", str(tmp_path))
     seen: list[list[str]] = []
     monkeypatch.setattr(
         server.subprocess, "run",
@@ -86,9 +97,10 @@ def test_resume_line_with_semicolons_never_reaches_the_windows_command_line(monk
     from _legacy_dashboard_transport import install_legacy_transport
     install_legacy_transport(monkeypatch, tmp_path, server, lambda *a, **kw: subprocess.CompletedProcess([], 0, "", ""))
     inner = 'export PATH="$HOME/.local/bin:$PATH"; export AGENT_NAME=X; exec claude --resume abc -n X'
-    server._open_terminal_tmux(
+    out = server._open_terminal_tmux(
         ["tmux", "new-session", "-A", "-s", "X", "-c", "/tmp/p", "bash", "-lic", inner], title="X"
     )
+    assert out == {"ok": True, "adapter": "wt"}
     (cmd,) = seen
     assert not any(";" in a or '"' in a or " " in a for a in cmd[cmd.index("--exec"):]), cmd
     body = open(cmd[-1], encoding="utf-8").read()
@@ -98,14 +110,16 @@ def test_resume_line_with_semicolons_never_reaches_the_windows_command_line(monk
     assert body.startswith("#!/bin/bash\n") and "rm -f" in body
 
 
-def test_wt_failure_is_reported_not_swallowed(monkeypatch):
+def test_wt_failure_is_reported_not_swallowed(monkeypatch, tmp_path, verified_windows_interop):
     _pretend_wsl(monkeypatch)
-    monkeypatch.setattr(
-        server.subprocess, "run",
-        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "wt: no window"),
-    )
+
+    def fake_run(cmd, **kwargs):
+        assert kwargs["env"] == verified_windows_interop
+        return subprocess.CompletedProcess(cmd, 1, "", "wt: no window")
+
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
     from _legacy_dashboard_transport import install_legacy_transport
-    install_legacy_transport(monkeypatch, None, server, lambda *a, **kw: subprocess.CompletedProcess([], 0, "", ""))
+    install_legacy_transport(monkeypatch, tmp_path, server, lambda *a, **kw: subprocess.CompletedProcess([], 0, "", ""))
     out = server._open_terminal_tmux(["tmux", "attach", "-t", "=X"], title="X")
     assert out["ok"] is False and "wt: no window" in out["error"]
 
