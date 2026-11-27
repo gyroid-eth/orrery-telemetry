@@ -187,6 +187,64 @@ def test_unknown_sessions_retain_all_backlog(tmp_path, monkeypatch):
     assert path.exists()
 
 
+def test_an_open_editor_blocks_mail_health_even_after_other_deliveries(tmp_path, monkeypatch):
+    agents = tmp_path / 'agents'
+    agents.mkdir()
+    state_path = tmp_path / 'notify-state.json'
+    now = int(time.time())
+    entries = {}
+    live = set()
+
+    def signal(agent, key, *, file_key=None, old=True, online=True):
+        attempt = now - 8
+        if online:
+            live.add(agent)
+        if file_key is None:
+            path = agents / (agent + '.signal')
+        else:
+            directory = agents / agent
+            directory.mkdir(exist_ok=True)
+            path = directory / (file_key + '.signal')
+        path.write_text('{}')
+        stamp = attempt - 60 if old else now
+        os.utime(path, (stamp, stamp))
+        entries[f'{agent}:{key}'] = {
+            'agent': agent, 'msg_key': key, 'last_result': 'submit_deferred',
+            'last_attempt_epoch': attempt, 'editor_blocked_since_epoch': now - 185,
+        }
+        return path
+
+    pending = signal('PendingAgent', '10', file_key='10')
+    signal('PendingAgent', '11', file_key='11').unlink()
+    legacy = signal('LegacyAgent', '12')
+    signal('ReplacedLegacy', '13', old=False)
+    signal('DifferentSignal', '14', file_key='15')
+    signal('EndedSession', '16', file_key='16', online=False)
+    signal('RecentWait', '17', file_key='17')
+    entries['RecentWait:17']['editor_blocked_since_epoch'] = now - 30
+    entries['OtherAgent:18'] = {'last_result': 'success', 'last_attempt_epoch': now - 2,
+                               'last_success_epoch': now - 2}
+    state_path.write_text(json.dumps(entries))
+
+    monkeypatch.setattr(server.mail_signals, 'session_names', lambda: live)
+    monkeypatch.setattr(server, '_signal_agent_dirs', lambda: [str(agents)])
+    monkeypatch.setattr(server, 'RUNTIME_DIR', str(tmp_path))
+    monkeypatch.setattr(server, 'NOTIFY_STATE_FILE', str(state_path))
+    monkeypatch.setattr(server, '_launchctl_job_running', lambda label: False)
+    monkeypatch.setattr(server, '_systemd_user_unit_running', lambda label: False)
+    monkeypatch.setattr(server, '_pidfile_process_running', lambda *a: (True, 1234))
+    monkeypatch.setattr(server, '_MAIL_HEALTH_CACHE', {'ts': 0., 'data': None})
+    health = server.mail_watcher_health()
+    assert health['blocked_recipients'] == ['LegacyAgent', 'PendingAgent']
+    assert health['status'] == 'yellow'
+
+    pending.unlink()
+    legacy.unlink()
+    server._MAIL_HEALTH_CACHE.update(ts=0., data=None)
+    health = server.mail_watcher_health()
+    assert health['blocked_recipients'] == [] and health['status'] == 'green'
+
+
 @pytest.mark.parametrize('failure', ['timeout', 'missing-tool', 'permission'])
 def test_session_measurement_failures_are_not_absence(monkeypatch, failure):
     from dashboard import mail_signals

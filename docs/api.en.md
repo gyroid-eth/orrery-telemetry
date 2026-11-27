@@ -666,6 +666,7 @@ The response includes at least these diagnostics:
   "actionable_signal_count":0,
   "orphan_signal_count":0,
   "signal_sessions_known":true,
+  "blocked_recipients":[],
   "last_success_age_s":4,
   "recent_results":{"success":3}
 }
@@ -674,6 +675,8 @@ The response includes at least these diagnostics:
 The header indicator uses the watcher process, signal backlog, most recent success time, and delivery results from the last ten minutes.
 
 API 11 keeps `signal_count` as the total, including legacy signals, and adds `actionable_signal_count`, `orphan_signal_count` and `signal_sessions_known`. Only signals at least 24 hours old with a confirmed absent tmux recipient and no persistent headless runtime manifest are orphans. Measurement failures keep all signals actionable. A stopped watcher or more than 50 actionable signals is `red`; a pending actionable signal with no success in the last 120 seconds is `yellow`; otherwise health is `green`.
+
+`blocked_recipients` lists recipients whose terminal notification has remained unresolved for at least three minutes and still has a corresponding signal. These delays turn the health indicator `yellow` even when other recipients are receiving notifications. The `red` conditions take precedence. The dashboard Mail indicator shows the affected recipients.
 
 ## GET `/portrait`
 
