@@ -20,10 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('interleaving', [
     'left-in-editor', 'manual-enter', 'cleared', 'changed-draft', 'changed-inner-space',
 ])
-def test_watcher_restarts_after_pasting_a_wrapped_notice(monkeypatch, editor, interleaving, body_length):
+def test_watcher_restarts_after_pasting_a_wrapped_notice(monkeypatch, tmp_path, editor, interleaving, body_length):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
-    monkeypatch.setitem(submit.__globals__, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
+    monkeypatch.setitem(submit.__globals__, 'try_lock',
+                        lambda view: os.open(tmp_path / 'pane.lock', os.O_RDWR | os.O_CREAT, 0o600))
     now = itertools.count()
     monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(
         monotonic=lambda: next(now) * .1, sleep=lambda seconds: None))
@@ -258,6 +259,70 @@ def test_watcher_treats_claude_prompt_suggestion_as_empty(styled, column, empty)
     assert submission['frame'](metadata, lines, '%1').empty is empty
 
 
+@pytest.mark.parametrize('busy', [False, True])
+def test_watcher_retries_its_own_folded_codex_notice_after_a_transient_clear(monkeypatch, tmp_path, busy):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    submit = submission['submit']
+    lock = tmp_path / 'pane.lock'
+    monkeypatch.setitem(submit.__globals__, 'try_lock',
+                        lambda view: os.open(lock, os.O_RDWR | os.O_CREAT, 0o600))
+    now = itertools.count()
+    monkeypatch.setitem(submit.__globals__, 'time', SimpleNamespace(
+        monotonic=lambda: next(now) * .03, sleep=lambda _: None))
+    notice = 'ORRERY Mail notification: message from Fixture [normal]: ' + '日本語🧪' * 300
+    draft = f'\x1b[38;5;6m[Pasted Content {len(notice)} chars]\x1b[39m'
+    idle = 'gpt-5.4 default · fixture'
+    queue = '  \x1b[1mtab\x1b[0m to queue message          100% context left'
+    screen = draft
+    transient = False
+    consume = False
+    effects = []
+    reasons = []
+
+    def command(*args, input=None):
+        nonlocal screen, transient
+        operation = args[0]
+        if operation == 'display-message':
+            current = '' if transient else screen
+            transient = False
+            footer = queue if current and busy else idle
+            lines = [f'\x1b[1m›\x1b[0m {current}', '', footer]
+            column = 2 + len(submission['SGR'].sub('', current))
+            meta = f'/tmp/fixture.sock\t100\t%1\t200\t0\t0\t{column}\t1\tcodex-code-mode-host'
+            return subprocess.CompletedProcess(args, 0, '\n'.join([meta, *lines, '']), '')
+        effects.append(operation if operation != 'send-keys' else args[-1])
+        if operation == 'load-buffer':
+            assert input == notice
+        elif operation == 'paste-buffer':
+            screen = draft
+        elif operation == 'send-keys':
+            if consume:
+                screen = ''
+            else:
+                transient = True
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    # A pre-existing capsule, even with the exact length, has no owner receipt.
+    assert submit(command, lambda: True, '%1', notice, on_wait=reasons.append) == 'refused'
+    assert effects == [] and reasons == ['editor_not_empty']
+
+    screen = ''
+    key = 'Tab' if busy else 'C-m'
+    assert submit(command, lambda: True, '%1', notice, on_wait=reasons.append) == 'unknown'
+    assert effects == ['load-buffer', 'paste-buffer', key, 'delete-buffer']
+    assert reasons[-1] == 'enter_not_confirmed' and screen == draft
+
+    effects.clear()
+    wrong_notice = notice.replace('Fixture', 'Another')
+    assert len(wrong_notice) == len(notice)
+    assert submit(command, lambda: True, '%1', wrong_notice, on_wait=reasons.append) == 'refused'
+    assert effects == [] and reasons[-1] == 'editor_not_empty'
+
+    consume = True
+    assert submit(command, lambda: True, '%1', notice) == 'accepted'
+    assert effects == [key] and screen == '' and not lock.read_bytes()
+
+
 def test_watcher_reads_the_end_of_a_scrolled_claude_draft():
     # A tall draft scrolls inside Claude's frame and hides the prompt glyph.
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
@@ -360,11 +425,12 @@ def test_codex_resumes_captured_notice_with_scroll_arrow_attached_to_text():
 
 @pytest.mark.parametrize('editor', ['agy', 'claude', 'codex', 'dsh', 'hermes'])
 @pytest.mark.parametrize('case', ['same', 'changed', 'generic-trailer'])
-def test_watcher_retries_a_scrolled_notice_from_its_visible_tail(monkeypatch, editor, case):
+def test_watcher_retries_a_scrolled_notice_from_its_visible_tail(monkeypatch, tmp_path, editor, case):
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
     submit = submission['submit']
     frames = submit.__globals__
-    monkeypatch.setitem(frames, 'try_lock', lambda view: os.open(os.devnull, os.O_RDONLY))
+    monkeypatch.setitem(frames, 'try_lock',
+                        lambda view: os.open(tmp_path / 'pane.lock', os.O_RDWR | os.O_CREAT, 0o600))
     # A distinct section remains visible before the shared preview trailer.
     trailer = ' ... Fetch inbox to read the rest.'
     body = '日本語の通知本文と折り返しを確かめます。Fixture 41097 shows the right ending.'
