@@ -276,7 +276,27 @@ def _managed_mail_approval_rules(home, cwd, config_dir):
     return [f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS] if found else []
 
 
-def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None):
+def _prompt_with_mcp_tools(prompt, *, managed_mail, parent, browser_mode):
+    instructions = []
+    if managed_mail:
+        recipient = parent or "<recipient agent name>"
+        arguments = json.dumps({"to": [recipient], "subject": "<subject>", "body_md": "<message>"})
+        instructions.append(
+            "For ORRERY Mail, use Antigravity's `call_mcp_tool` with `ServerName: orrery-mail`, "
+            f"`ToolName: send_message`, and `Arguments: {arguments}`. "
+            "The bound Mail server supplies your identity. Antigravity's built-in `send_message` "
+            "is for its own subagents."
+        )
+    if browser_mode in ("temporary", "personal"):
+        instructions.append(
+            "For browser work requested in the task, use Antigravity's `call_mcp_tool` with "
+            '`ServerName: chrome-devtools` and the specific browser action as `ToolName`. '
+            'To open a page, use `ToolName: new_page` and `Arguments: {"url": "<requested URL>"}`.'
+        )
+    return "\n\n".join([*instructions, prompt])
+
+
+def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, screen_mode=None, parent=None):
     if (prompt is None) == (conversation is None):
         raise ValueError("Provide the first task or an existing conversation")
     settings = {"trustedWorkspaces": [str(cwd)], "enableTerminalSandbox": True,
@@ -290,17 +310,21 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
     except FileNotFoundError:
         configured = {}
     permissions = configured.get("permissions") or {}
+    selection = _tool_selection(plan) if screen_mode is None or prompt is not None else None
     if screen_mode is None:
-        screen_mode = child_tools.screen_mode(_tool_selection(plan))
+        screen_mode = child_tools.screen_mode(selection)
     screen_permissions = []
     if screen_mode in ("view", "control"):
         screen_policy = child_tools._screen_state()
         screen_tools = screen_policy["VIEW_TOOLS"] if screen_mode == "view" else screen_policy["TOOLS"]
         screen_permissions = [f"mcp({child_tools.SCREEN_SERVER}/{tool})" for tool in screen_tools]
+    mail_rules = _managed_mail_approval_rules(home, cwd, config_dir)
     settings["permissions"] = {**permissions, "allow": list(dict.fromkeys(
-        [*permissions.get("allow", ()), *_managed_mail_approval_rules(home, cwd, config_dir),
-         *screen_permissions]
+        [*permissions.get("allow", ()), *mail_rules, *screen_permissions]
     ))}
+    if prompt is not None:
+        prompt = _prompt_with_mcp_tools(prompt, managed_mail=bool(mail_rules), parent=parent,
+                                        browser_mode=selection["tools"].get("browser_mode"))
     extra = []
     if config_dir is not None:
         settings["trustedWorkspaces"].append(str(config_dir))
@@ -395,7 +419,7 @@ def run(runtime, name, task_file=None, conversation=None):
             [sys.executable, str(history_helper()), "prepare", str(state["agent_id"]), identity],
             env=env, text=True, timeout=5).strip()
         return subprocess.run(command(plan, cwd, prompt=prompt, conversation=conversation,
-                                      config_dir=config_dir, screen_mode=screen_mode),
+                                      config_dir=config_dir, screen_mode=screen_mode, parent=parent),
                               env=env).returncode
     finally:
         try:
