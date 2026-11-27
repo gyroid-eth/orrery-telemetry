@@ -43,6 +43,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from functools import cache
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -401,6 +402,25 @@ def _session_alive(child: str) -> bool:
         return True  # cannot tell: keep watching until the time limit
 
 
+@cache
+def _terminal_state():
+    root = Path(__file__).resolve().parents[1]
+    library = root / 'bin/lib/terminal_state.py'
+    return runpy.run_path(str(library if library.is_file() else root / 'dashboard/terminal_state.py'))
+
+
+def _chrome_question_open(child: str) -> bool | None:
+    try:
+        result = subprocess.run(["tmux", "capture-pane", "-p", "-t", f"={child}:"],
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode or not result.stdout.strip():
+            return None
+        terminal = _terminal_state()
+        return terminal["claude_chrome_question"](terminal["normalize"](result.stdout).splitlines())
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def watch(child: str, parent: str, prompt_head: str, launched: float | None = None) -> int:
     wait = int(os.environ.get("CHILD_START_WAIT_SECONDS") or 180)
     poll = float(os.environ.get("CHILD_START_POLL_SECONDS") or 5)
@@ -410,6 +430,8 @@ def watch(child: str, parent: str, prompt_head: str, launched: float | None = No
     # a warm session), not when this watcher started: that is after the ready
     # wait and registration, and a quick child may have answered by then.
     started_at = launched if launched else time.time()
+    wait_since = started_at
+    waiting_for_chrome = os.environ.get("CHILD_START_WAITING_FOR_CHROME") == "true"
     turn = FirstTurn(prompt_head, parent)
     transcript: Transcript | None = None
     early = ""  # the early notice already sent: timeout, thinking or unverified
@@ -439,14 +461,17 @@ def watch(child: str, parent: str, prompt_head: str, launched: float | None = No
             transcript.update()
             tell(turn.status())
             return 0
-        elapsed = time.time() - started_at
-        if elapsed >= wait and not early and status != "working":
+        now = time.time()
+        if waiting_for_chrome and (status != "pending" or _chrome_question_open(child) is False):
+            waiting_for_chrome = False
+            wait_since = now
+        if not waiting_for_chrome and now - wait_since >= wait and not early and status != "working":
             early = "unverified" if transcript is None else ("thinking" if status == "thinking" else "timeout")
             tell(early)
         if not _session_alive(child):
             _note(f"Claude child {child} ended before its first turn finished ({status})")
             return 0
-        if elapsed >= limit:
+        if now - started_at >= limit:
             _note(f"Claude child {child}: stopped watching after {int(limit)}s ({status})")
             return 0
         time.sleep(poll)

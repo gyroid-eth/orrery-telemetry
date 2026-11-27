@@ -1,10 +1,8 @@
 """Claude readiness: screens the launcher must not answer, and failure records.
 
-Claude Code asks some questions once, for the user ("Claude in Chrome extension
-detected"). Answering may change the user's default for every later session,
-so the launcher stops at once without sending a key, saves the screen and tells
-the operator what to do. Other choice screens are recorded and stopped after
-10s; a timeout or a dead session also leaves the screen in the incidents log.
+Claude Code asks some questions once, for the user. The known Chrome choice
+stays open without launcher input. Unrecognized choices, timeouts, and dead
+sessions retain their existing failure diagnostics.
 """
 from __future__ import annotations
 
@@ -36,6 +34,7 @@ CHROME_PROMPT = """\
     Yes, use my browser
   Enter to confirm · Esc to keep browser tools off
 """
+INCOMPLETE_CHROME_PROMPT = CHROME_PROMPT[:CHROME_PROMPT.index("  Enter to confirm")]
 CHROME_NOTICE = """\
   Claude in Chrome
   Claude can use Chrome through its extension: open sites, fill forms, take
@@ -204,20 +203,16 @@ def _keys(calls):
     return [c for c in calls if c.startswith("send-keys")]
 
 
-def test_chrome_question_stops_at_once_without_any_key(tmp_path):
+def test_chrome_question_leaves_the_child_alive_without_any_key(tmp_path):
     result, calls, polls, incidents = _launch(tmp_path, [CHROME_PROMPT])
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "Probe-Curie"
     assert _keys(calls) == []
-    assert polls == 1  # no waiting out the 60s timeout
-    assert "one-time question about Claude in Chrome" in result.stderr
+    assert not any(c.startswith(("kill-session", "load-buffer", "paste-buffer")) for c in calls)
+    assert polls == 1
+    assert "Waiting for your Claude in Chrome choice" in result.stderr
     assert "No key was sent" in result.stderr
-    assert "answer it yourself (or choose with /chrome)" in result.stderr
-    assert "readiness timeout" not in result.stderr
-    assert "not answered by the launcher (Probe-Curie)" in incidents
-    assert "|   ❯ No, keep browser tools off" in incidents
-    assert "|   Enter to confirm" in incidents
-    # The session is cleaned up as before.
-    assert any(c.startswith("kill-session") for c in calls)
+    assert not incidents
 
 
 @pytest.mark.parametrize("screen", [ONBOARDING_THEME, ONBOARDING_LOGIN, ONBOARDING_LOGIN_DONE, ONBOARDING_SECURITY],
@@ -240,8 +235,10 @@ def test_first_run_setup_stops_at_once_with_a_reason_and_no_key(tmp_path, screen
     assert any(c.startswith("kill-session") for c in calls)
 
 
-def test_chrome_question_also_leaves_a_reason_line(tmp_path):
-    result, calls, polls, incidents = _launch(tmp_path, [CHROME_PROMPT])
+def test_incomplete_chrome_question_still_leaves_a_reason_line(tmp_path):
+    result, calls, polls, incidents = _launch(tmp_path, [INCOMPLETE_CHROME_PROMPT])
+    assert result.returncode != 0
+    assert _keys(calls) == []
     assert "[spawn_child] reason: Claude Code is asking a one-time question about Claude in Chrome." in result.stderr
 
 
@@ -281,11 +278,11 @@ def test_chrome_question_replacing_the_trust_dialog_gets_no_key(tmp_path):
     """The wait loop saw the trust dialog, but by the time the trust helper
     captured again the Chrome question was up: no key may be sent."""
     result, calls, polls, incidents = _launch(tmp_path, [TRUST_OLD, CHROME_PROMPT])
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
     assert _keys_with_screens(tmp_path) == []
     assert "trust dialog is no longer on screen; not pressing a key" in result.stderr
-    assert "one-time question about Claude in Chrome" in result.stderr
-    assert "\u276f No, keep browser tools off" in incidents
+    assert "Waiting for your Claude in Chrome choice" in result.stderr
+    assert not incidents
 
 
 @pytest.mark.parametrize("trust", ["old", "new"])
@@ -294,9 +291,9 @@ def test_trust_keys_land_only_on_trust_screens(tmp_path, trust):
     # Chrome question. Every key must be sent while screen 2 is up.
     screen = TRUST_OLD if trust == "old" else TRUST_NEW_SELECTED
     result, calls, polls, incidents = _launch(tmp_path, [screen, screen, CHROME_PROMPT])
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
     assert _keys_with_screens(tmp_path) == ["screen=2 -t Probe-Curie C-m"]
-    assert "one-time question about Claude in Chrome" in result.stderr
+    assert "Waiting for your Claude in Chrome choice" in result.stderr
 
 
 def test_new_trust_dialog_that_turns_into_the_question_after_down_gets_no_enter(tmp_path):
@@ -304,7 +301,7 @@ def test_new_trust_dialog_that_turns_into_the_question_after_down_gets_no_enter(
     # capture after it shows the Chrome question (3), so Enter is not sent.
     result, calls, polls, incidents = _launch(
         tmp_path, [TRUST_NEW_UNSELECTED, TRUST_NEW_UNSELECTED, CHROME_PROMPT])
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
     assert _keys_with_screens(tmp_path) == ["screen=2 -t Probe-Curie Down"]
     assert "Yes row is not selected; not pressing Enter" in result.stderr
 
@@ -387,9 +384,21 @@ def test_a_trust_dialog_with_a_confirm_footer_is_still_accepted(tmp_path):
 def test_chrome_question_is_recognised_by_its_options_alone(tmp_path):
     options_only = CHROME_PROMPT.replace("Claude in Chrome extension detected", "Browser tools")
     result, calls, _polls, _incidents = _launch(tmp_path, [options_only])
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
     assert _keys(calls) == []
-    assert "one-time question about Claude in Chrome" in result.stderr
+    assert "Waiting for your Claude in Chrome choice" in result.stderr
+
+
+@pytest.mark.parametrize("screen", [
+    CHROME_PROMPT,
+    CHROME_PROMPT.replace("❯ No", "  No").replace("  Yes", "❯ Yes"),
+    CHROME_PROMPT.replace("Enter to confirm · Esc to keep", "Enter to confirm ·\n  Esc to keep"),
+])
+def test_chrome_question_appears_in_need_you_until_it_is_answered(screen):
+    from dashboard.server import _parse_runtime
+
+    assert _parse_runtime(screen)["act_state"] == "ask"
+    assert _parse_runtime(screen + READY + "\n  ? for shortcuts\n")["act_state"] == "wait"
 
 
 def test_unrecognised_choice_screen_stops_after_ten_seconds(tmp_path):
@@ -450,7 +459,7 @@ def test_dead_session_records_its_last_screen(tmp_path):
 
 
 @pytest.mark.parametrize("screen, guidance", [
-    (CHROME_PROMPT, "answer it yourself (or choose with /chrome), then launch the child again."),
+    (INCOMPLETE_CHROME_PROMPT, "answer it yourself (or choose with /chrome), then launch the child again."),
     (UNKNOWN_CHOICE, "answer it once in a normal 'claude' session, then launch the child again."),
     (LOADING, "refusing to inject the task into an unknown screen state."),
 ])
