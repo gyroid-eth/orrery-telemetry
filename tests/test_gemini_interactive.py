@@ -327,6 +327,7 @@ def test_delegated_first_task_names_the_configured_mcp_tools(managed, monkeypatc
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(agy.subprocess, "run", launch)
+    monkeypatch.setattr(agy, "_run_first_task", lambda argv, *, env, **kwargs: launch(argv, env=env).returncode)
     task = tmp_path / "handoff"
     original = "Canonical task:\nReport the result.\n"
     child_resume._atomic_json(task, {"message": {"content": original}})
@@ -338,6 +339,58 @@ def test_delegated_first_task_names_the_configured_mcp_tools(managed, monkeypatc
     assert 'Arguments: {"to": ["FixtureParent"], "subject": "<subject>", "body_md": "<message>"}' in prompt
     assert ("`ServerName: chrome-devtools`" in prompt) == (browser_mode != "off")
     assert ("`ToolName: new_page`" in prompt) == (browser_mode != "off")
+
+
+@pytest.mark.parametrize("browser_ready", [True, False])
+def test_first_task_waits_for_same_panes_mcp_tools(monkeypatch, tmp_path, browser_ready):
+    menu, task = tmp_path / "menu", tmp_path / "task"
+    browser_row = "✓ chrome-devtools  Tools: new_page"
+    ready_menu = ["MCP Servers", "✓ orrery-mail  Tools: send_message",
+                  "Keyboard: ↑/↓ Navigate  enter Actions  esc Exit"]
+    states = iter([
+        "? for shortcuts  Gemini 3.8 Flash · low",
+        "\n".join(ready_menu + ["◌ chrome-devtools"]),
+        "\n".join(ready_menu + ([browser_row] if browser_ready else [])),
+        "working",
+    ])
+    pane = "%4"
+    actions = []
+    now = 0
+
+    def count_sleep(seconds):
+        nonlocal now
+        now += seconds
+
+    def tmux(argv, **kwargs):
+        operation = argv[1] if argv[0] == "tmux" else argv[2]
+        if operation == "display-message":
+            assert argv[-2] == pane
+            return SimpleNamespace(returncode=0, stdout=IDENTITY)
+        if operation == "capture-pane":
+            return SimpleNamespace(returncode=0, stdout=next(states, "\n".join(ready_menu)))
+        actions.append((operation, argv[-1]))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.time, "monotonic", lambda: now)
+    monkeypatch.setattr(agy.time, "sleep", count_sleep)
+    monkeypatch.setattr(agy.subprocess, "run", tmux)
+    process = SimpleNamespace(poll=lambda: None)
+    positional = (process, pane, IDENTITY, task, menu, {"orrery-mail", "chrome-devtools"}, 1)
+    if browser_ready:
+        agy._deliver_first_task(*positional)
+        assert actions == [("submit-input", str(menu)), ("send-keys", "Escape"), ("submit-input", str(task))]
+    else:
+        with pytest.raises(ValueError, match="MCP tools did not become ready"):
+            agy._deliver_first_task(*positional)
+        assert actions == [("submit-input", str(menu))]
+
+
+def test_startup_marker_applies_only_to_current_launch(managed):
+    runtime, _, _ = managed
+    startup = agy._startup_path(runtime, NAME)
+    child_resume._atomic_json(startup, {"tmux": IDENTITY, "error": "fixture error"})
+    assert agy._startup_state(runtime, NAME, IDENTITY)["error"] == "fixture error"
+    assert agy._startup_state(runtime, NAME, IDENTITY + "-old") == {}
 
 
 def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_folder(tmp_path, monkeypatch):
@@ -398,6 +451,7 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
 
     monkeypatch.setattr(agy.subprocess, "check_output", check_output)
     monkeypatch.setattr(agy.subprocess, "run", launch)
+    monkeypatch.setattr(agy, "_run_first_task", lambda argv, *, env, **kwargs: launch(argv, env=env).returncode)
     task = tmp_path / "handoff"
     child_resume._atomic_json(task, {"message": {"content": "One initial task."}})
     assert agy.run(runtime, NAME, task_file=task) == 0
@@ -455,6 +509,7 @@ def test_standalone_resume_rotates_the_screen_binding_and_keeps_a_lower_operator
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(agy.subprocess, "run", launch)
+    monkeypatch.setattr(agy, "_run_first_task", lambda argv, **kwargs: launch(argv).returncode)
     task = tmp_path / "handoff"
     child_resume._atomic_json(task, {"message": {"content": "Fixture task"}})
     assert agy.run(runtime, NAME, task_file=task) == 0

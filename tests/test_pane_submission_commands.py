@@ -13,6 +13,19 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_early_antigravity_footer_and_mcp_menu_are_recognized():
+    submission = runpy.run_path(str(ROOT / "bin/lib/pane_submission.py"))
+    metadata = "/tmp/fixture.sock\t100\t%1\t200\t1\t0\t2\t1\tagy"
+    border = "─" * 80
+    blank = submission["frame"](metadata,
+        [border, "> ", border, "? for shortcuts    Gemini 3.8 Flash · low"], "%1")
+    assert blank.editor == "agy" and blank.empty
+    menu = submission["frame"](metadata, [border, "> ", border, "MCP Servers",
+        ">  ✓ orrery-mail  Tools: send_message", "Keyboard: ↑/↓ Navigate  enter Actions  esc Exit",
+        "Gemini 3.8 Flash · low"], "%1")
+    assert menu.slash_view == ("agy", "/mcp")
+
+
 @pytest.mark.parametrize(('editor', 'body_length'), [
     ('agy', 111), ('claude', 111), ('codex', 111), ('dsh', 111), ('hermes', 111),
     ('hermes', 264), ('hermes', 2000),

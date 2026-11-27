@@ -281,10 +281,20 @@
       ? next.browser_modes : null;
   }
 
+  function personalBrowserNotice(next) {
+    const why = browserModes(next)?.includes('personal') && next.personal_browser_status?.reason;
+    return why ? 'My Chrome: ' + why : '';
+  }
+
   function syncBrowser(next, reset = false) {
     const modes = browserModes(next);
     if (modes) {
-      if (reset || !modes.includes(browserMode)) browserMode = modes.includes('personal') ? 'personal' : 'off';
+      const status = next.personal_browser_status;
+      const unavailable = status?.unavailable === true;
+      if (reset || !modes.includes(browserMode) || browserMode === 'personal' && unavailable) {
+        browserMode = unavailable ? (modes.includes('temporary') ? 'temporary' : 'off')
+          : modes.includes('personal') ? 'personal' : 'off';
+      }
       browserTool.hidden = false;
       browser.dataset.browserMode = browserMode;
       browser.removeAttribute('role');
@@ -300,6 +310,8 @@
       browser.setAttribute('aria-label', browser.title);
       for (const [mode, button] of browserChoices) {
         button.hidden = !modes.includes(mode);
+        button.disabled = mode === 'personal' && unavailable;
+        button.title = mode === 'personal' ? status?.reason || '' : '';
         button.setAttribute('aria-pressed', String(mode === browserMode));
       }
       if (!modes.length && browserMenu.matches(':popover-open')) browserMenu.hidePopover();
@@ -341,7 +353,8 @@
     modelChip.title = level < 0 ? name : name + ' · ' + effortLabel(value);
     modelChip.setAttribute('aria-label', 'Model settings: ' + modelChip.title);
     if (!editor.hidden) {
-      const message = next?.launch_blocked ? 'Antigravity needs a parent agent and declared resources. Set these in the Telemetry dashboard.' : '';
+      const message = next?.launch_blocked ? 'Antigravity needs a parent agent and declared resources. Set these in the Telemetry dashboard.'
+        : personalBrowserNotice(next);
       for (const destination of [notice, modelNotice]) {
         if (destination.textContent !== message) destination.textContent = message;
         destination.hidden = !message;
@@ -534,7 +547,7 @@
     }
     $('spawn-summary').replaceChildren(...labels);
     $('spawn-task-copy').textContent = selection.task;
-    show('review');
+    show('review', personalBrowserNotice(route));
     $('spawn-edit').focus({preventScroll:true});
   }
 

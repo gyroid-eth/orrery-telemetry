@@ -49,7 +49,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 57
+API_GENERATION = 58
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -71,9 +71,10 @@ if __name__ == '__main__':
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
-    from dashboard import codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
+    from dashboard import chrome_readiness, codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
     from dashboard.local_model_makers import LOCAL_MAKER_ASSETS
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
+    import chrome_readiness
     import codex_models
     import mail_signals
     import provider_stalls
@@ -9479,6 +9480,29 @@ def _spawn_browser_modes():
     return tools.launch_browser_modes(config)
 
 
+def _spawn_browser_catalog():
+    tools = _child_tools_module()
+    config = tools.native_codex_config(resume=_child_resume_module())
+    modes = tools.launch_browser_modes(config)
+    catalog = {"browser_modes": modes}
+    wsl = _is_wsl()
+    harnesses = {key for key in ("codex", "dsh", "hermes", "antigravity") if "personal" in modes.get(key, ())}
+    if harnesses and (sys.platform == "darwin" or wsl):
+        # Claude's personal mode uses Claude in Chrome. An explicit Codex
+        # channel can likewise connect to a different Chrome installation.
+        if "codex" in harnesses:
+            custom = tools._native_codex_browser(config, explicit=True)
+            if custom and any(arg.split("=", 1)[0] == "--channel" for arg in custom[1].get("args", ())):
+                harnesses.discard("codex")
+        if harnesses:
+            reason, unavailable = chrome_readiness.personal_browser_reason(wsl=wsl)
+            if reason:
+                catalog["personal_browser_status"] = {
+                    key: {"reason": reason, "unavailable": unavailable} for key in sorted(harnesses)
+                }
+    return catalog
+
+
 def _spawn_computer_catalog():
     if _is_wsl():
         reason = ("Computer use is unavailable in this launch mode." if FRESH_MODE or GLOBAL_MODE else
@@ -9531,7 +9555,7 @@ def spawn_names_payload() -> dict:
         "dirs": dirs,
         "native_browser_dirs": _native_browser_directories(dirs) if local_catalog and not FRESH_MODE else [],
         "supports_browser_off": not FRESH_MODE,
-        **({"browser_modes": _spawn_browser_modes()} if not FRESH_MODE else {}),
+        **(_spawn_browser_catalog() if not FRESH_MODE else {}),
         "models": list(claude_models),
         "default_model": claude_default,
         "providers": [

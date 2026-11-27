@@ -13,6 +13,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import uuid
 
 if "child_resume" not in globals():
@@ -29,6 +31,7 @@ if "child_tools" not in globals():
 
 PROGRAM = "antigravity"
 TMUX_FORMAT = "#{session_name}|#{session_id}|#{session_created}|#{pid}"
+STARTUP_TIMEOUT = 22
 WRITE_TOOLS = {"write_to_file": "Write", "replace_file_content": "Edit",
                "multi_replace_file_content": "Edit"}
 ACTIVITY = {"idle": "wait", "working": "work", "tool_use": "work",
@@ -66,6 +69,18 @@ def saved_conversation(runtime, name, registration):
 
 def _status_path(runtime, name):
     return child_resume._paths(runtime, name)[0].with_suffix(".agy-status.json")
+
+
+def _startup_path(runtime, name):
+    return _status_path(runtime, name).with_suffix(".startup")
+
+
+def _startup_state(runtime, name, identity):
+    try:
+        state = child_resume._load_state(_startup_path(runtime, name))
+    except (OSError, ValueError, child_resume.ResumeStateError):
+        return {}
+    return state if state.get("tmux") == identity else {}
 
 
 def read_status(runtime, name, identity):
@@ -336,6 +351,94 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
             *(["--conversation", conversation] if conversation else ["-i", prompt])]
 
 
+def _mcp_menu(rows):
+    return ("MCP Servers" in rows
+            and any(row.startswith("Keyboard: ↑/↓ Navigate") and "esc Exit" in row for row in rows))
+
+
+def _ready_mcp_servers(rows):
+    if not _mcp_menu(rows):
+        return set()
+    return {
+        match[1] for row in rows
+        if (match := re.match(r"^(?:>\s+)?✓\s+(\S+)\s+Tools:\s+\S", row))
+    }
+
+
+def _deliver_first_task(process, pane, identity, task_file, menu_file, servers, deadline):
+    stage = "opening"
+    waiting_on = servers
+
+    def tmux(*args):
+        command = ([sys.executable, str(_home() / "bin/lib/runtime_tmux_consumer.py")]
+                   if args[0] in {"submit-input", "send-keys"} else ["tmux"])
+        return subprocess.run([*command, *args], capture_output=True, encoding="utf-8",
+                              timeout=max(0.1, min(8, deadline - time.monotonic())))
+
+    def same_pane():
+        reply = tmux("display-message", "-p", "-t", pane, TMUX_FORMAT)
+        return reply.returncode == 0 and reply.stdout.strip() == identity
+
+    while process.poll() is None and time.monotonic() < deadline:
+        if not same_pane():
+            raise ValueError("The Antigravity pane changed before its first task")
+        rows = {row.strip() for row in tmux("capture-pane", "-p", "-t", pane).stdout.splitlines()}
+        if stage == "opening" and _mcp_menu(rows):
+            stage = "waiting"
+        if stage == "waiting":
+            waiting_on = servers - _ready_mcp_servers(rows)
+            if not waiting_on and same_pane():
+                if tmux("send-keys", "-t", pane, "Escape").returncode:
+                    raise ValueError("Antigravity's MCP manager could not be closed")
+                stage = "submitting"
+        elif stage == "opening" and any(row.startswith("? for shortcuts") for row in rows):
+            result = tmux("submit-input", pane, str(menu_file))
+            if result.returncode not in (0, 3):
+                raise ValueError("Antigravity's MCP manager could not be opened safely")
+            if result.returncode == 0:
+                stage = "waiting"
+        elif stage == "submitting" and not _mcp_menu(rows):
+            result = tmux("submit-input", pane, str(task_file))
+            if result.returncode == 0:
+                return
+            if result.returncode != 3:
+                raise ValueError("Antigravity did not confirm submission of its first task")
+        time.sleep(0.15)
+    if stage == "waiting" and waiting_on:
+        names = ", ".join(sorted(waiting_on))
+        raise ValueError(f"Antigravity MCP tools did not become ready ({names}). Check /mcp and try again.")
+    raise ValueError("Antigravity did not accept its first task. Check CLI sign-in and workspace trust.")
+
+
+def _run_first_task(argv, *, env, runtime, name, identity, servers):
+    startup = _startup_path(runtime, name)
+    child_resume._atomic_json(startup, {"tmux": identity})
+    try:
+        with tempfile.TemporaryDirectory(prefix="agy-first-task-", dir=runtime) as directory:
+            menu, task = (Path(directory) / name for name in ("menu", "task"))
+            menu.write_text("/mcp", encoding="utf-8")
+            task.write_text(argv[-1], encoding="utf-8")
+            process = subprocess.Popen(argv[:-2], env=env)
+            try:
+                _deliver_first_task(process, env["TMUX_PANE"], identity, task, menu, set(servers),
+                                    time.monotonic() + STARTUP_TIMEOUT)
+            except BaseException:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                raise
+        startup.unlink()
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        message = str(error) if isinstance(error, ValueError) else "Antigravity's MCP startup check could not run"
+        child_resume._atomic_json(startup, {"tmux": identity, "error": message})
+        raise ValueError(message) from error
+    return process.wait()
+
+
 def run(runtime, name, task_file=None, conversation=None):
     path, token, _child_home, _mcp, _lock = child_resume._paths(runtime, name)
     state = child_resume._load_state(path)
@@ -418,9 +521,12 @@ def run(runtime, name, task_file=None, conversation=None):
         env["AGENTSTACK_AGY_HISTORY_LAUNCH"] = subprocess.check_output(
             [sys.executable, str(history_helper()), "prepare", str(state["agent_id"]), identity],
             env=env, text=True, timeout=5).strip()
-        return subprocess.run(command(plan, cwd, prompt=prompt, conversation=conversation,
-                                      config_dir=config_dir, screen_mode=screen_mode, parent=parent),
-                              env=env).returncode
+        argv = command(plan, cwd, prompt=prompt, conversation=conversation, config_dir=config_dir,
+                       screen_mode=screen_mode, parent=parent)
+        if prompt is not None:
+            return _run_first_task(argv, env=env, runtime=runtime, name=name, identity=identity,
+                                   servers=mcp["mcpServers"])
+        return subprocess.run(argv, env=env).returncode
     finally:
         try:
             if workspace_mcp and written_mcp is not None:
@@ -559,6 +665,12 @@ def main():
     args = parser.parse_args()
     runtime = Path(os.environ["AGENTSTACK_RUNTIME_DIR"])
     if args.action in {"ready", "wake-ready"}:
+        startup = _startup_state(runtime, args.name, args.identity)
+        if startup:
+            if args.action == "ready" and startup.get("error"):
+                print(startup["error"])
+                return 2
+            return 1
         activity = read_status(runtime, args.name, args.identity).get("activity")
         return 0 if activity == "wait" or (args.action == "ready" and activity) else 1
     name = os.environ["AGENT_NAME"]

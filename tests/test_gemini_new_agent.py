@@ -272,6 +272,53 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
     }
 
 
+@pytest.mark.parametrize(('status', 'unavailable'), [('stopped', True), ('debugging', True), ('ready', False), ('interop', False)])
+def test_spawn_catalog_reports_my_chrome_health_for_managed_browser_harnesses(monkeypatch, status, unavailable):
+    tools = server._child_tools_module()
+    modes = {key:['off','temporary','personal'] for key in ('claude-code','codex','dsh','hermes','antigravity')}
+    monkeypatch.setattr(server, '_is_wsl', lambda: True)
+    monkeypatch.setattr(tools, 'native_codex_config', lambda **_: {})
+    monkeypatch.setattr(tools, 'launch_browser_modes', lambda _: modes)
+    monkeypatch.setattr(server.chrome_readiness, '_windows_state', lambda: status)
+
+    catalog = server._spawn_browser_catalog()
+    assert catalog['browser_modes'] == modes
+    if status == 'ready':
+        assert 'personal_browser_status' not in catalog
+    else:
+        entries = catalog['personal_browser_status']
+        assert entries.keys() == modes.keys() - {'claude-code'}
+        assert all(entry['unavailable'] is unavailable for entry in entries.values())
+        assert 'chrome://inspect/#remote-debugging' in entries['dsh']['reason']
+
+
+@pytest.mark.parametrize(('running', 'marker', 'connects', 'expected'), [
+    (False, None, False, 'stopped'),
+    (True, None, False, 'debugging'),
+    (True, '12345\n', False, 'debugging'),
+    (True, '12345\n', True, 'ready'),
+])
+def test_mac_my_chrome_requires_running_process_and_working_debugging_port(
+        monkeypatch, tmp_path, running, marker, connects, expected):
+    probe = server.chrome_readiness
+    monkeypatch.setattr(probe.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(probe.subprocess, 'run', lambda *a, **k: types.SimpleNamespace(returncode=0 if running else 1))
+    if marker is not None:
+        path = tmp_path / 'Library/Application Support/Google/Chrome/DevToolsActivePort'
+        path.parent.mkdir(parents=True)
+        path.write_text(marker)
+
+    def connect(address, *, timeout):
+        assert address == ('127.0.0.1', 12345)
+        if not connects:
+            raise ConnectionRefusedError
+        from contextlib import nullcontext
+        return nullcontext()
+
+    monkeypatch.setattr(probe.socket, 'create_connection', connect)
+    assert probe._mac_state() == expected
+
+
 def test_spawn_catalog_marks_gemini_unavailable_before_launch(monkeypatch):
     monkeypatch.setattr(gemini_runtime, "_runtime_requirements", lambda base: ({}, "CLI missing"))
     gemini = next(provider for provider in server.spawn_names_payload()["providers"]
@@ -1508,7 +1555,7 @@ def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, i
     _executable(fake_bin / "uname", f"#!/bin/sh\nprintf '%s\\n' {kernel}\n")
     capture = tmp_path / "launch.json"
     _executable(fake_bin / "agy", f"#!{sys.executable}\n" + """
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 args = sys.argv[1:]
 added = Path(args[args.index("--add-dir") + 1])
@@ -1517,14 +1564,36 @@ assert (added / ".agents/mcp_config.json").is_file()
 Path(os.environ["FIXTURE_CAPTURE"]).write_text(json.dumps(
     {"cwd": os.getcwd(), "args": args, "parent": os.getenv("PARENT_AGENT"),
      "node": os.getenv("AGENTSTACK_DSH_NODE")}))
+delivered = Path(os.environ["FIXTURE_CAPTURE"]).with_suffix(".task")
+until = time.monotonic() + 8
+while not delivered.is_file() and time.monotonic() < until:
+    time.sleep(.05)
+assert delivered.is_file()
 """)
     _executable(fake_bin / "tmux", f"#!{sys.executable}\n" + """
 import json, os, subprocess, sys
 from pathlib import Path
 args = sys.argv[1:]
 identity = "FixtureAgy|$1|1000|123"
+capture = Path(os.environ["FIXTURE_CAPTURE"])
+opened = capture.with_suffix(".menu")
 if args[0] == "display-message":
     print(identity)
+elif args[0] == "capture-pane":
+    if opened.exists():
+        print("MCP Servers\\n✓ orrery-mail  Tools: send_message\\nKeyboard: ↑/↓ Navigate  enter Actions  esc Exit")
+    else:
+        print("? for shortcuts   Gemini Fixture · low")
+elif args[0] == "submit-input":
+    content = Path(args[2]).read_text()
+    if content == "/mcp":
+        opened.touch()
+    else:
+        assert not opened.exists()
+        capture.with_suffix(".task").write_text(content)
+elif args[0] == "send-keys":
+    assert args[-1] == "Escape"
+    opened.unlink()
 elif args[0] == "new-session":
     workdir = args[args.index("-c") + 1]
     runner = args.index("/bin/bash")
@@ -1539,6 +1608,9 @@ elif args[0] == "new-session":
 else:
     sys.exit(1)
 """)
+    consumer = home / "bin/lib/runtime_tmux_consumer.py"
+    consumer.parent.mkdir()
+    shutil.copy2(fake_bin / "tmux", consumer)
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
     token = tmp_path / "handoff.token"
@@ -1569,9 +1641,10 @@ else:
     assert observed["cwd"] == str(launched_folder)
     assert observed["parent"] is None
     assert observed["node"] == str(tmp_path / "local node/bin/node")
-    assert observed["args"][-2] == "-i"
-    assert observed["args"][-1].count("One canonical task.") == 1
-    assert "independent Antigravity agent" in observed["args"][-1]
+    assert "-i" not in observed["args"]
+    delivered = capture.with_suffix(".task").read_text()
+    assert delivered.count("One canonical task.") == 1
+    assert "independent Antigravity agent" in delivered
     assert not any((directory / ".agents").exists() for directory in (selected, launched_folder))
     assert not list((runtime / "child-agents").glob("*.agy-config"))
     assert not token.exists() and not binding.exists() and not task.exists()

@@ -396,7 +396,7 @@ cleanup_failure() {
     fi
     rm -f "$TASK_EVENT_FILE" "$RUNNER_FILE" "$MCP_CONFIG" "$DURABLE_TOKEN" "$GIT_EXCLUDES_FILE" "$TASK_FILE"
     if [[ "$INTERACTIVE_PREPARED" == true ]]; then
-      rm -f "$RUNTIME_DIR/child-agents/$CHILD_NAME.json"
+      rm -f "$RUNTIME_DIR/child-agents/$CHILD_NAME.json" "$RUNTIME_DIR/child-agents/$CHILD_NAME.agy-status.startup"
       if [[ "$STANDALONE" == true ]]; then
         rm -rf "$RUNTIME_DIR/child-agents/$CHILD_NAME.agy-config"
       fi
@@ -617,9 +617,12 @@ TMUX_STARTED=true
 if [[ "$INTERACTIVE" == 1 ]]; then
   identity="$(tmux display-message -p -t "=$CHILD_NAME:" '#{session_name}|#{session_id}|#{session_created}|#{pid}')"
   deadline=$((SECONDS + 25))
-  until AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" "$PYTHON_BIN" "$INTERACTIVE_HELPER" ready "$CHILD_NAME" "$identity"; do
-    if (( SECONDS >= deadline )) || ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
-      echo "$PROG: Antigravity did not reach its interactive prompt. Check the CLI sign-in, worktree trust and Reader setup." >&2
+  until startup_status=$(AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" "$PYTHON_BIN" "$INTERACTIVE_HELPER" ready "$CHILD_NAME" "$identity"); do
+    if [[ -n "$startup_status" ]]; then
+      echo "$PROG: $startup_status" >&2
+      exit 1
+    elif (( SECONDS >= deadline )) || ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
+      echo "$PROG: Antigravity did not accept its first task. Check CLI sign-in, worktree trust and MCP setup." >&2
       exit 1
     fi
     sleep 0.25

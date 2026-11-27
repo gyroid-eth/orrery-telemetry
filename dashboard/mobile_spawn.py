@@ -76,6 +76,7 @@ def _catalog_choices(value):
         raise SpawnError('catalog_unavailable', 503)
     models = []
     browser_modes = value.get('browser_modes')
+    personal_browser_status = value.get('personal_browser_status')
     computer_modes = value.get('computer_modes')
     managed_screen = value.get('computer_use_transport') == 'orrery-screen'
     for provider in value['providers']:
@@ -115,6 +116,12 @@ def _catalog_choices(value):
                     modes = browser_modes.get(key)
                     routes[-1]['browser_modes'] = [mode for mode in _BROWSER_MODES
                                                     if isinstance(modes, list) and mode in modes]
+                if isinstance(personal_browser_status, dict):
+                    status = personal_browser_status.get(key)
+                    if isinstance(status, dict) and _text(status.get('reason'), 240):
+                        routes[-1]['personal_browser_status'] = {
+                            'reason': status['reason'], 'unavailable': status.get('unavailable') is True,
+                        }
                 if isinstance(computer_modes, list):
                     routes[-1]['computer_modes'] = [mode for mode in _COMPUTER_MODES if mode in computer_modes]
                 if managed_screen:

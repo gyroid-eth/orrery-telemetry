@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":57}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":58}
 ```
 
 version の解決順は [インストール](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md#version)を参照してください。
@@ -215,6 +215,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 ## GET `/api/spawn-names`
 
 API 49 は `GET /api/spawn-names` にハーネス別の `browser_modes` を追加します。起動時に `tools.browser_mode` へ `off`、`temporary`、`personal` のいずれかを指定します。従来の Browser 指定との併用はできません。
+
+API 58 は、Mac と WSL で Chrome DevTools MCP の My Chrome を使うハーネスに応じて、`personal_browser_status` に `{reason, unavailable}` を返します。`unavailable: true` は接続先の Chrome が停止中か、リモートデバッグに接続できないことを示します。この場合、起動画面は一時ブラウザーを選び、一時ブラウザーもなければ Off を選びます。
 
 API 53 の macOS カタログは `computer_modes` に `off`、`view`、`control` を返します。View は `tools.screen.access: "read"`、Control は `tools.screen.access: "operate"` を使います。Off は明示した `tools` から画面の指定を外します。スマホの `/view/spawn` は選択を `computer` に渡し、旧クライアントの真偽値も受け付けます。Antigravity で利用できるブラウザのモードは `browser_modes.antigravity` を参照します。
 
