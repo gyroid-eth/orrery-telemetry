@@ -387,6 +387,68 @@ def test_watcher_requires_a_stable_clear_after_the_submit_key(monkeypatch, tmp_p
     assert keys == ['C-m']
 
 
+@pytest.mark.parametrize('editor', ['agy', 'claude', 'codex', 'dsh', 'hermes'])
+def test_retry_does_not_paste_again_after_an_operator_clears_the_owned_draft(
+    monkeypatch, tmp_path, editor,
+):
+    submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))
+    submit = submission['submit']
+    scope = submit.__globals__
+    monkeypatch.setitem(scope, 'try_lock',
+                        lambda view: os.open(tmp_path / 'pane.lock', os.O_RDWR | os.O_CREAT, 0o600))
+    frames = itertools.count()
+    monkeypatch.setitem(scope, 'time', SimpleNamespace(
+        monotonic=lambda: next(frames) * .05, sleep=lambda _: None))
+    adapter = runpy.run_path(str(ROOT / 'bin/lib/runtime_tmux_consumer.py'))
+    handoff = adapter['_NotificationHandoff']
+    monkeypatch.setenv('AGENTSTACK_RUNTIME_DIR', str(tmp_path))
+    signal = tmp_path / '41428.signal'
+    signal.write_text('{}')
+    st = signal.stat()
+    signal_id = f'{st.st_dev}:{st.st_ino}:{st.st_mtime_ns}:{st.st_size}'
+    notice = 'ORRERY Mail notification: message from Fixture [normal]: Check the fixture scope.'
+    identity = (Path('/tmp/fixture.sock'), 100, '%1', 200)
+    frame = submission['Frame']
+    draft = ''
+    calls = []
+    reasons = []
+
+    def capture(command, pane):
+        return frame(*identity, draft, False, editor=editor, bracketed=True)
+
+    def command(*args, input=None):
+        nonlocal draft
+        calls.append(args[0])
+        if args[0] == 'paste-buffer':
+            assert (tmp_path / 'notify-state.json').is_file()
+            draft = notice
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    def attempt(key='Fixture:41428'):
+        current = handoff(str(signal), signal_id, key)
+        return submit(command, current.current, '%1', notice, on_wait=reasons.append,
+                      claim_handoff=current.claim)
+
+    monkeypatch.setitem(scope, 'capture', capture)
+    assert attempt() == 'unknown'
+    assert reasons[-1] == 'enter_not_confirmed'
+    assert 'paste-buffer' in calls
+
+    calls.clear()
+    draft = ''  # The operator submitted or cleared the draft between watcher runs.
+    assert attempt() == 'unknown' and reasons[-1] == 'prior_delivery_unconfirmed'
+    assert 'paste-buffer' not in calls and 'send-keys' not in calls
+
+    calls.clear()
+    assert attempt('Fixture:41429') == 'unknown' and reasons[-1] == 'enter_not_confirmed'
+    assert 'paste-buffer' in calls  # Identical text with its own signal key remains deliverable.
+
+    calls.clear()
+    signal.unlink()  # A fetch or a read can consume this hint during delivery.
+    assert attempt() == 'refused'
+    assert not calls
+
+
 def test_watcher_reads_the_end_of_a_scrolled_claude_draft():
     # A tall draft scrolls inside Claude's frame and hides the prompt glyph.
     submission = runpy.run_path(str(ROOT / 'bin/lib/pane_submission.py'))

@@ -293,8 +293,10 @@ try:
         entry["terminal"] = True
     if result == "success" or entry.get("terminal") or not reason:
         entry.pop("editor_blocked_since_epoch", None)
-    elif reason in {"editor_not_empty", "editor_waiting", "draft_not_confirmed", "enter_not_confirmed", "enter_failed"}:
+    elif reason in {"editor_not_empty", "editor_waiting", "draft_not_confirmed", "enter_not_confirmed", "enter_failed", "prior_delivery_unconfirmed"}:
         entry.setdefault("editor_blocked_since_epoch", now)
+    if result == "success" or entry.get("terminal"):
+        entry.pop("editor_handoff_epoch", None)
     waiting = None
     if reason:
         count = entry.get("wait_count", 0) + 1
@@ -802,7 +804,12 @@ deliver_worker() {
     # A terminated wrapper can leave a child holding stderr open. A file
     # captures its diagnostic without making the watcher wait for pipe EOF.
     diagnostic_file=$(mktemp "${TMPDIR:-/tmp}/agentstack-notify-reason.XXXXXX") || diagnostic_file=""
-    run_to "$((TMUX_TIMEOUT + 2))" tmux submit-input "$pane_id" "$paste_file" \
+    local -a submit_args
+    submit_args=(submit-input "$pane_id" "$paste_file")
+    if [[ -n "$signal_identity" ]]; then
+        submit_args+=(--notice "$signal_file" "$signal_identity" "$agent_name:$msg_key")
+    fi
+    AGENTSTACK_RUNTIME_DIR="$STATE_DIR" run_to "$((TMUX_TIMEOUT + 2))" tmux "${submit_args[@]}" \
         2>"${diagnostic_file:-/dev/null}" || submit_rc=$?
     rm -f "$paste_file"
     if [[ -n "$diagnostic_file" ]]; then
@@ -813,7 +820,7 @@ deliver_worker() {
         local result="submit_failed"
         if (( submit_rc == 3 )); then result="submit_deferred"; fi
         case "$submit_reason" in
-            input_not_found|pane_locked|pane_changed|editor_not_empty|editor_waiting|editor_changed|paste_unavailable|load_buffer_failed|paste_failed|draft_not_confirmed|enter_failed|enter_not_confirmed|terminal_unavailable|submission_deadline|completion_mismatch|completion_unverified) ;;
+            input_not_found|pane_locked|pane_changed|editor_not_empty|editor_waiting|editor_changed|paste_unavailable|load_buffer_failed|paste_failed|draft_not_confirmed|enter_failed|enter_not_confirmed|prior_delivery_unconfirmed|terminal_unavailable|submission_deadline|completion_mismatch|completion_unverified) ;;
             *) submit_reason="$result" ;;
         esac
         state_mark_result "$agent_name" "$msg_key" "$result" "watcher" "$submit_reason"

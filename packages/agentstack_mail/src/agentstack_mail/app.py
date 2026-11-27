@@ -8405,6 +8405,8 @@ def build_mcp_server() -> FastMCP:
             agent = await _get_agent(project, agent_name)
             await _get_message(project, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
+            if read_ts:
+                await clear_notification_signal(get_settings(), project.slug, agent.name, message_id=message_id)
             await ctx.info(f"Marked message {message_id} read for '{agent.name}'.")
             return {"message_id": message_id, "read": bool(read_ts), "read_at": _iso(read_ts) if read_ts else None}
         except Exception as exc:
@@ -8479,6 +8481,8 @@ def build_mcp_server() -> FastMCP:
             await _get_message(project, message_id)
             read_ts = await _update_recipient_timestamp(agent, message_id, "read_ts")
             ack_ts = await _update_recipient_timestamp(agent, message_id, "ack_ts")
+            if read_ts:
+                await clear_notification_signal(get_settings(), project.slug, agent.name, message_id=message_id)
             await ctx.info(f"Acknowledged message {message_id} for '{agent.name}'.")
             return {
                 "message_id": message_id,

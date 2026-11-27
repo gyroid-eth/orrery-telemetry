@@ -3290,6 +3290,8 @@ async def clear_notification_signal(
     settings: Settings,
     project_slug: str,
     agent_name: str,
+    *,
+    message_id: int | None = None,
 ) -> bool:
     """Clear notification signal for an agent (called when inbox is read).
 
@@ -3299,6 +3301,7 @@ async def clear_notification_signal(
         settings: Application settings
         project_slug: Project identifier
         agent_name: Target agent name
+        message_id: Clear just this acknowledged message's signal, including during the grace window.
 
     Returns:
         True if signal was cleared, False if file didn't exist or error
@@ -3327,15 +3330,16 @@ async def clear_notification_signal(
     def _clear_signal() -> bool:
         cleared = False
         # Remove legacy single-file signal if present.
-        if legacy_path.exists() and not _within_grace(legacy_path):
+        if message_id is None and legacy_path.exists() and not _within_grace(legacy_path):
             legacy_path.unlink()
             cleared = True
         # Remove all per-message signal files for this agent (the watcher
         # normally unlinks each on successful inject; this handles leftovers
         # such as messages whose recipient session was offline at signal time).
         if per_msg_dir.is_dir():
-            for p in per_msg_dir.glob("*.signal"):
-                if _within_grace(p):
+            candidates = per_msg_dir.glob("*.signal") if message_id is None else (per_msg_dir / f"{message_id}.signal",)
+            for p in candidates:
+                if message_id is None and _within_grace(p):
                     continue
                 try:
                     p.unlink()
