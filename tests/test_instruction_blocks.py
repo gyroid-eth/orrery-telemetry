@@ -174,6 +174,19 @@ def test_detector_parent_only_isolates_bad_source(env,monkeypatch):
     assert not any('sibling' in f['source_path'] for f in findings)
 
 
+def test_claude_check_points_to_codex_for_its_unrecognized_workspace_block(env):
+    codex = engine(env, 'codex')
+    claude = engine(env)
+    source = Path(env['AGENTSTACK_PROJECT_KEY']) / 'AGENTS.md'
+    source.write_bytes(b'Personal notes\n' + codex.block)
+    finding = next(f for f in claude.detect() if f['source_path'] == str(source))
+    assert finding['kind'] == 'edited' and not finding['cleanup_argv']
+    assert 'Claude setup could not identify' in finding['reason']
+    assert 'agentstack-codex-setup --check' in finding['reason']
+    codex_finding = next(f for f in codex.detect() if f['source_path'] == str(source))
+    assert codex_finding['kind'] == 'legacy' and codex_finding['cleanup_argv']
+
+
 def test_provider_configure_is_marker_only_and_launch_readonly(env):
     e=engine(env);home=e.install/'runtime/provider-home/claude';home.mkdir(parents=True)
     target=home/'CLAUDE.md';target.write_text('provider personal note\n')

@@ -23,6 +23,7 @@ from agentstack_mail.reservation_paths import (
     paths_overlap,
 )
 from agentstack_mail import reservation_paths
+from agentstack_mail import wsl_drvfs
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = json.loads(
@@ -347,11 +348,61 @@ def test_nonascii_case_table_unknown_rejects_initial_acquire(
 
 
 @pytest.mark.parametrize("rule", [None, "hfs", "exact"])
-def test_japanese_case_profile_requires_native_apfs_rule(tmp_path, monkeypatch, rule):
+def test_japanese_case_profile_requires_native_filesystem_evidence(tmp_path, monkeypatch, rule):
     monkeypatch.setattr(reservation_paths, "unicode_rule_at", lambda _: rule)
     monkeypatch.setattr(reservation_paths, "case_insensitive_at", lambda _: True)
     with pytest.raises(ReservationError, match="UNICODE_RULES_UNKNOWN|CASE_RULES_UNKNOWN"):
         normalize_path(str(tmp_path / "日本語.py"))
+
+
+@pytest.fixture
+def drvfs_vault(tmp_path, monkeypatch):
+    mount = (tmp_path / "Mounted Windows").resolve()
+    vault = mount / "Users" / "利用 者" / "Obsidian Vault"
+    vault.mkdir(parents=True)
+    mounts = tmp_path / "mountinfo"
+    monkeypatch.setattr(wsl_drvfs, "MOUNTINFO", mounts)
+    monkeypatch.setattr(wsl_drvfs, "running_in_wsl", lambda: True)
+    monkeypatch.setattr(reservation_paths.sys, "platform", "linux")
+    device = mount.stat().st_dev
+    mount_field = str(mount).replace(" ", r"\040")
+    mounts.write_text(
+        f"40 31 {os.major(device)}:{os.minor(device)} / {mount_field} rw,noatime "
+        r"- 9p C:\134 rw,aname=drvfs;path=C:\134;uid=1000;gid=1000;symlinkroot=/mnt/,cache=0x5,access=client"
+        "\n"
+    )
+    return vault, mounts
+
+
+def test_wsl_drvfs_reserves_japanese_paths_with_spaces_and_detects_aliases(server, drvfs_vault):
+    vault, _ = drvfs_vault
+    service, _ = server
+    a = client(service, vault, "alpha")
+    b = client(service, vault, "beta")
+    path = vault / "𠮷のが Ａ Draft.md"
+    assert normalize_path(str(path)).value == str(path)
+    a.call("reserve_files", paths=[str(path)])
+    for alias in ("𠮷のが ａ draft.MD", "𠮷のが *.MD"):
+        with pytest.raises(ReservationError, match="CONFLICT"):
+            b.call("reserve_files", paths=[str(vault / alias)])
+    for different in ("𠮷のか\u3099 Ａ Draft.md", "𠮷のが A Draft.md"):
+        assert b.call("reserve_files", paths=[str(vault / different)])
+
+
+def test_wsl_drvfs_requires_matching_mount_and_driver(drvfs_vault, monkeypatch):
+    vault, mounts = drvfs_vault
+    original = mounts.read_text()
+    assert reservation_paths.unicode_rule_at(vault) == "drvfs"
+    mounts.write_text(original.replace("aname=drvfs", "aname=tools"))
+    assert reservation_paths.unicode_rule_at(vault) is None
+    mounts.write_text(original)
+    monkeypatch.setattr(wsl_drvfs, "running_in_wsl", lambda: False)
+    assert reservation_paths.unicode_rule_at(vault) is None
+    monkeypatch.setattr(wsl_drvfs, "running_in_wsl", lambda: True)
+    # A nested non-DrvFs mount must win, even when the parent is DrvFs.
+    mount_field = str(vault).replace(" ", r"\040")
+    mounts.write_text(original + f"41 40 0:11 / {mount_field} rw - 9p none rw,aname=tools\n")
+    assert reservation_paths.unicode_rule_at(vault) is None
 
 
 @pytest.mark.parametrize("name", ["日本語.py", "ひらがな.py", "カタカナ.py", "ㇰ.py", "＃１２＋ｶﾀｶﾅ.py"])

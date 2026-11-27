@@ -471,6 +471,31 @@ def test_an_unreadable_wanted_file_does_not_end_the_anchor(tmp_path):
 
 # --- starting the Windows client ------------------------------------------------
 
+def test_windows_user_profile_uses_interop_and_preserves_unicode(monkeypatch, tmp_path):
+    profile = tmp_path / "利用 者"
+    profile.mkdir()
+    windows_path = r"D:\Profiles\利用 者"
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["encoding"] == "utf-8" and kwargs["timeout"] == 2
+        if argv[0] == "/fixture/powershell.exe":
+            assert kwargs["env"] == {"WSL_INTEROP": "/fixture/live_interop"}
+            assert "$env:USERPROFILE" in argv[-1]
+            return subprocess.CompletedProcess(argv, 0, windows_path + "\r\n")
+        assert argv == ["wslpath", "-u", windows_path]
+        return subprocess.CompletedProcess(argv, 0, str(profile) + "\n")
+
+    monkeypatch.setattr(wsl_anchor, "_powershell", lambda: "/fixture/powershell.exe")
+    monkeypatch.setattr(wsl_anchor, "interop_env", lambda: {"WSL_INTEROP": "/fixture/live_interop"})
+    monkeypatch.setattr(wsl_anchor.subprocess, "run", run)
+    assert wsl_anchor.windows_user_profile() == str(profile.resolve())
+    assert len(calls) == 2
+    profile.rmdir()
+    assert wsl_anchor.windows_user_profile() is None
+
+
 def test_the_powershell_starts_a_hidden_foreground_wsl_exe():
     script = wsl_anchor.start_script("Example Ubuntu", ["/usr/bin/python3", "/a b/wsl_anchor.py", "hold", "/s", "n"])
     assert "Invoke-CimMethod -ClassName Win32_Process -MethodName Create" in script

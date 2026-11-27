@@ -342,7 +342,7 @@ curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
 }
 ```
 
-When `path` is omitted, the first `AGENTSTACK_SPAWN_ROOTS` entry is used. For a path outside allowed roots, containing `..`, or naming a nonexistent directory, it returns:
+When `path` is omitted, the first `AGENTSTACK_SPAWN_ROOTS` entry is used. The default root is the POSIX home directory. In WSL, when the Windows user profile is available through interop, it is also a default root and a suggested launch folder. Explicit `AGENTSTACK_SPAWN_ROOTS` and `AGENTSTACK_SPAWN_DIRS` take precedence over their respective defaults. For a path outside allowed roots, containing `..`, or naming a nonexistent directory, it returns:
 
 ```json
 {"path":null,"dirs":[]}

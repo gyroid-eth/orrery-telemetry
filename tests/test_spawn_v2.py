@@ -242,6 +242,30 @@ def test_spawn_names_keeps_an_explicit_spawn_dirs_unchanged(monkeypatch):
     assert server.spawn_names_payload()["dirs"] == ["/a", "/b"]
 
 
+def test_wsl_windows_profile_is_a_default_and_browsable(monkeypatch, tmp_path):
+    home = tmp_path / "linux-home"
+    profile = tmp_path / "Windows Users" / "利用 者"
+    vault = profile / "Obsidian の vault"
+    home.mkdir()
+    vault.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("AGENTSTACK_SPAWN_DIRS", raising=False)
+    monkeypatch.delenv("AGENTSTACK_SPAWN_ROOTS", raising=False)
+    monkeypatch.setattr(server, "PROJECT_KEY", "")
+    monkeypatch.setattr(server, "_spawn_windows_profile", lambda: str(profile.resolve()))
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "Curie\n"})())
+    monkeypatch.setattr(server, "_spawn_name_status", lambda _: "available")
+
+    assert server.spawn_names_payload()["dirs"] == ["~", str(profile.resolve())]
+    assert server.spawn_directory_suggestions(str(profile))["dirs"] == [
+        {"name": vault.name, "path": str(vault.resolve())}
+    ]
+    assert not server.spawn_directory_suggestions(str(profile.parent))["dirs"]
+    monkeypatch.setenv("AGENTSTACK_SPAWN_ROOTS", str(home))
+    assert server.spawn_names_payload()["dirs"] == ["~"]
+    assert server.spawn_directory_suggestions(str(profile))["path"] is None
+
+
 def test_spawn_names_advertises_codex_provider(monkeypatch):
     monkeypatch.setenv("AGENTSTACK_CODEX_MODELS", "gpt-test-a, gpt-test-b")
     monkeypatch.setattr(server.codex_models, "resolve_launcher",

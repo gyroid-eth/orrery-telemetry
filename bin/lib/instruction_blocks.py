@@ -427,6 +427,10 @@ class Engine:
             block = block_bytes(data or b'')
             kind = 'missing' if block is None else ('legacy' if self.known(data, path, receipt) else 'edited')
             reason = None if kind != 'edited' else 'template provenance unknown; compare locally and remove only the marker span after review'
+            if kind == 'edited' and self.provider == 'claude' and path.name == 'AGENTS.md' and parse(data)[2] == 'codex':
+                reason = ("ORRERY found a Codex managed block, but Claude setup could not identify its template. "
+                          "Run `agentstack-codex-setup --check` from that folder and use the cleanup command if offered. "
+                          "If Codex cannot identify it either, review the marked block in the file before editing.")
         except Refused as exc:
             block, kind, reason = None, 'malformed', str(exc)
         return {'source_path': str(path), 'kind': kind, 'template_id': self.known(data, path, receipt) if kind == 'legacy' else None,

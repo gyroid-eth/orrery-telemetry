@@ -341,7 +341,7 @@ curl -s 'http://127.0.0.1:8770/api/fs/dirs?path=/Users/me/code'
 }
 ```
 
-`path` を省略すると `AGENTSTACK_SPAWN_ROOTS` の先頭を使います。許可 root 外、`..` を含む path、存在しない directory には:
+`path` を省略すると `AGENTSTACK_SPAWN_ROOTS` の先頭を使います。既定の root はホームフォルダーです。WSL で Windows 側の利用者フォルダーを取得できた場合は、そのフォルダーも既定の root と起動時の候補に加わります。明示した `AGENTSTACK_SPAWN_ROOTS` と `AGENTSTACK_SPAWN_DIRS` はそれぞれ優先されます。許可 root 外、`..` を含む path、存在しない directory には:
 
 ```json
 {"path":null,"dirs":[]}

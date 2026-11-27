@@ -315,6 +315,34 @@ def interop_env(run_dir: str = "/run/WSL") -> dict:
     return env
 
 
+def windows_user_profile() -> str | None:
+    """Resolve the Windows account's profile through this WSL instance."""
+    powershell = _powershell()
+    if not powershell:
+        return None
+    command = (
+        "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); "
+        "[Console]::WriteLine($env:USERPROFILE)"
+    )
+    try:
+        profile = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+            env=interop_env(), capture_output=True, check=True, timeout=2,
+            encoding="utf-8",
+        ).stdout.rstrip("\r\n")
+        if not re.fullmatch(r"[A-Za-z]:\\[^\x00-\x1f]+", profile):
+            return None
+        path = subprocess.run(
+            ["wslpath", "-u", profile], capture_output=True, check=True, timeout=2,
+            encoding="utf-8",
+        ).stdout.rstrip("\n")
+        if not os.path.isabs(path) or any(ord(character) < 32 for character in path):
+            return None
+        return os.path.realpath(path) if os.path.isdir(path) else None
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        return None
+
+
 def start_script(distro: str, argv: list[str]) -> str:
     """Ask the local WMI provider to create wsl.exe outside the caller's job."""
     arguments = subprocess.list2cmdline(["-d", distro, "--exec", *argv])
