@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 
 SERVER = "orrery-screen"
@@ -263,7 +264,7 @@ def _deployment_python(mail_env):
     return None
 
 
-def _python(mail_env):
+def _python(mail_env, *, deadline=None):
     explicit = os.environ.get("AGENTSTACK_SCREEN_PYTHON")
     enroll = os.environ.get("AGENTSTACK_MAIL_ENROLL_BIN")
     candidates = [explicit] if explicit else [
@@ -277,10 +278,13 @@ def _python(mail_env):
         binary = shutil.which(candidate)
         if not binary or (explicit and not Path(explicit).is_absolute()):
             continue
+        timeout = 8 if deadline is None else min(8, deadline - time.monotonic())
+        if timeout <= 0:
+            break
         try:
             result = subprocess.run([binary, "-I", "-c", "from agentstack_mail import screen_mcp"],
                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, timeout=8)
+                                    stderr=subprocess.DEVNULL, timeout=timeout)
         except (OSError, subprocess.TimeoutExpired):
             continue
         if result.returncode == 0:

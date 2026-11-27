@@ -239,6 +239,7 @@ def test_gemini_mac_spawn_passes_managed_screen_to_the_adapter(monkeypatch, gemi
 def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
     monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform=platform))
     monkeypatch.setenv("AGENTSTACK_GEMINI_BIN", "/fixture/missing-agy")
+    monkeypatch.setattr(gemini_runtime, "_runtime_requirements", lambda base: ({}, ""))
     monkeypatch.delenv("AGENTSTACK_GEMINI_MODELS", raising=False)
     monkeypatch.setattr(
         server,
@@ -267,11 +268,67 @@ def test_spawn_catalog_exposes_gemini_provider(monkeypatch, platform):
             "resume": False,
             "runtime": True,
             "transcript": False,
-            "standalone": platform == "darwin",
+            "standalone": True,
             "worktree_required": True,
             "resources_required": True,
         },
     }
+
+
+@pytest.mark.parametrize(('status', 'unavailable'), [('stopped', True), ('debugging', True), ('ready', False), ('interop', False)])
+def test_spawn_catalog_reports_my_chrome_health_for_managed_browser_harnesses(monkeypatch, status, unavailable):
+    tools = server._child_tools_module()
+    modes = {key:['off','temporary','personal'] for key in ('claude-code','codex','dsh','hermes','antigravity')}
+    monkeypatch.setattr(server, '_is_wsl', lambda: True)
+    monkeypatch.setattr(tools, 'native_codex_config', lambda **_: {})
+    monkeypatch.setattr(tools, 'launch_browser_modes', lambda _: modes)
+    monkeypatch.setattr(server.chrome_readiness, '_windows_state', lambda: status)
+
+    catalog = server._spawn_browser_catalog()
+    assert catalog['browser_modes'] == modes
+    if status == 'ready':
+        assert 'personal_browser_status' not in catalog
+    else:
+        entries = catalog['personal_browser_status']
+        assert entries.keys() == modes.keys() - {'claude-code'}
+        assert all(entry['unavailable'] is unavailable for entry in entries.values())
+        assert 'chrome://inspect/#remote-debugging' in entries['dsh']['reason']
+
+
+@pytest.mark.parametrize(('running', 'marker', 'connects', 'expected'), [
+    (False, None, False, 'stopped'),
+    (True, None, False, 'debugging'),
+    (True, '12345\n', False, 'debugging'),
+    (True, '12345\n', True, 'ready'),
+])
+def test_mac_my_chrome_requires_running_process_and_working_debugging_port(
+        monkeypatch, tmp_path, running, marker, connects, expected):
+    probe = server.chrome_readiness
+    monkeypatch.setattr(probe.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(probe.subprocess, 'run', lambda *a, **k: types.SimpleNamespace(returncode=0 if running else 1))
+    if marker is not None:
+        path = tmp_path / 'Library/Application Support/Google/Chrome/DevToolsActivePort'
+        path.parent.mkdir(parents=True)
+        path.write_text(marker)
+
+    def connect(address, *, timeout):
+        assert address == ('127.0.0.1', 12345)
+        if not connects:
+            raise ConnectionRefusedError
+        from contextlib import nullcontext
+        return nullcontext()
+
+    monkeypatch.setattr(probe.socket, 'create_connection', connect)
+    assert probe._mac_state() == expected
+
+
+def test_spawn_catalog_marks_gemini_unavailable_before_launch(monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "_runtime_requirements", lambda base: ({}, "CLI missing"))
+    gemini = next(provider for provider in server.spawn_names_payload()["providers"]
+                  if provider["id"] == "gemini")
+    assert gemini["harnesses"] == [
+        {"id": "antigravity", "available": False, "reason": "runtime_not_prepared"},
+    ]
 
 
 def test_argon_from_cli_uses_selected_effort_in_launch(gemini_env, monkeypatch):
@@ -334,13 +391,14 @@ def test_direct_cli_launchers_keep_historical_high_effort_fallback():
         assert 'EFFORT="${AGENTSTACK_GEMINI_EFFORT:-high}"' in path.read_text(encoding="utf-8")
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS interactive Antigravity launcher")
-def test_direct_gemini_delegation_passes_tools_to_the_mac_adapter(tmp_path):
+@pytest.mark.parametrize("kernel", ["Darwin", "Linux"])
+def test_direct_gemini_delegation_passes_tools_to_the_interactive_adapter(tmp_path, kernel):
     repo = _make_repo(tmp_path)
     home = tmp_path / "install"
     fake_bin = tmp_path / "bin"
     _executable(fake_bin / "agy", "#!/bin/sh\n")
     _executable(fake_bin / "tmux", "#!/bin/sh\n")
+    _executable(fake_bin / "uname", f"#!/bin/sh\nprintf '%s\\n' {kernel}\n")
     hooks = home / "hooks"
     hooks.mkdir(parents=True)
     shutil.copy2(ROOT / "hooks" / "child_tools.py", hooks / "child_tools.py")
@@ -364,11 +422,11 @@ def test_direct_gemini_delegation_passes_tools_to_the_mac_adapter(tmp_path):
         "FIXTURE_ADAPTER_ARGS": str(out),
     }
     result = _REAL_RUN(["/bin/bash", str(ROOT / "hooks/spawn_gemini_child.sh"),
-                        "--resources", "src/**", "--tools", "screen:read", "Fixture task", str(repo)],
+                        "--resources", "src/**", "--tools", "browser-mode:temporary", "Fixture task", str(repo)],
                        env=env, text=True, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
     argv = out.read_text().splitlines()
-    assert argv[argv.index("--tools") + 1] == "screen:read"
+    assert argv[argv.index("--tools") + 1] == "browser-mode:temporary"
     assert argv[-2:] == ["", str(repo.resolve())]
 
 
@@ -396,8 +454,8 @@ def test_gemini_spawn_requires_explicit_effort(tmp_path):
     assert result == {"ok": False, "error": "effort required for provider gemini"}
 
 
-def test_gemini_spawn_rejects_standalone_on_linux_and_invalid_engine_options(tmp_path, monkeypatch):
-    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="linux"))
+def test_gemini_spawn_rejects_standalone_on_unsupported_os_and_invalid_engine_options(tmp_path, monkeypatch):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="freebsd"))
     common = {
         "parent": "Parent-Curie",
         "task": "inspect the dashboard",
@@ -879,8 +937,9 @@ def test_gemini_spawn_dispatches_existing_preregistered_adapter(gemini_env):
     assert not list(gemini_env.runtime.glob("provider-gemini-*"))
 
 
-def test_gemini_standalone_dispatches_without_git_parent_or_reservations(gemini_env, monkeypatch):
-    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform="darwin"))
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_gemini_standalone_dispatches_without_git_parent_or_reservations(gemini_env, monkeypatch, platform):
+    monkeypatch.setattr(gemini_runtime, "sys", types.SimpleNamespace(platform=platform))
     monkeypatch.setenv("PARENT_AGENT", "Unrelated")
     picked = gemini_env.tmp / "picked folder"
     picked.mkdir()
@@ -1431,6 +1490,7 @@ def _adapter_run(tmp_path: pathlib.Path, resources: str, block_reserve: bool = F
     fake_bin = tmp_path / "fake-bin"
     _executable(fake_bin / "agy", "#!/bin/sh\n")
     _executable(fake_bin / "tmux", "#!/bin/sh\n")
+    _executable(fake_bin / "uname", "#!/bin/sh\nprintf 'FreeBSD\\n'\n")
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     token = runtime / "one-shot.token"
@@ -1480,7 +1540,8 @@ def _mail_calls(run) -> list[str]:
 
 
 @pytest.mark.parametrize("isolation", [False, True])
-def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, isolation):
+@pytest.mark.parametrize("kernel", ["Darwin", "Linux"])
+def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, isolation, kernel):
     selected = _make_repo(tmp_path) if isolation else tmp_path / "vault"
     selected.mkdir(exist_ok=True)
     home = tmp_path / "install"
@@ -1496,30 +1557,60 @@ def test_standalone_bash_adapter_runs_without_parent_or_reservations(tmp_path, i
     for helper in ("agentstack-gemini-child-mail", "agentstack-gemini-stream", "agentstack-gemini-mcp"):
         _executable(home / "bin" / helper, "#!/bin/sh\nexit 99\n")
     fake_bin = tmp_path / "commands"
-    _executable(fake_bin / "uname", "#!/bin/sh\nprintf 'Darwin\\n'\n")
+    _executable(fake_bin / "uname", f"#!/bin/sh\nprintf '%s\\n' {kernel}\n")
     capture = tmp_path / "launch.json"
     _executable(fake_bin / "agy", f"#!{sys.executable}\n" + """
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 args = sys.argv[1:]
 added = Path(args[args.index("--add-dir") + 1])
 assert (added / ".agents/hooks.json").is_file()
 assert (added / ".agents/mcp_config.json").is_file()
 Path(os.environ["FIXTURE_CAPTURE"]).write_text(json.dumps(
-    {"cwd": os.getcwd(), "args": args, "parent": os.getenv("PARENT_AGENT")}))
+    {"cwd": os.getcwd(), "args": args, "parent": os.getenv("PARENT_AGENT"),
+     "node": os.getenv("AGENTSTACK_DSH_NODE")}))
+capture = Path(os.environ["FIXTURE_CAPTURE"])
+submitted = capture.with_suffix(".trigger")
+until = time.monotonic() + 8
+while not submitted.is_file() and time.monotonic() < until:
+    time.sleep(.05)
+assert submitted.read_text() == os.environ["AGENTSTACK_AGY_FIRST_TASK_TRIGGER"]
+staging = Path(os.environ["AGENTSTACK_AGY_FIRST_TASK_DIR"])
+capture.with_suffix(".task").write_text((staging / "payload").read_text())
+(staging / "acknowledged").touch()
+time.sleep(.3)
 """)
     _executable(fake_bin / "tmux", f"#!{sys.executable}\n" + """
 import json, os, subprocess, sys
 from pathlib import Path
 args = sys.argv[1:]
 identity = "FixtureAgy|$1|1000|123"
+capture = Path(os.environ["FIXTURE_CAPTURE"])
+opened = capture.with_suffix(".menu")
 if args[0] == "display-message":
     print(identity)
+elif args[0] == "capture-pane":
+    if opened.exists():
+        print("MCP Servers\\n✓ orrery-mail  Tools: send_message\\nKeyboard: ↑/↓ Navigate  enter Actions  esc Exit")
+    else:
+        print("? for shortcuts   Gemini Fixture · low")
+elif args[0] == "submit-input":
+    content = Path(args[2]).read_text()
+    if content == "/mcp":
+        opened.touch()
+    else:
+        assert not opened.exists()
+        capture.with_suffix(".trigger").write_text(content)
+elif args[0] == "send-keys":
+    assert args[-1] == "Escape"
+    opened.unlink()
 elif args[0] == "new-session":
     workdir = args[args.index("-c") + 1]
     runner = args.index("/bin/bash")
     assert args[runner-2:runner] == ["-e", "AGENTSTACK_GEMINI_INTERACTIVE=1"]
-    result = subprocess.run(args[runner:], cwd=workdir, env={**os.environ, "TMUX_PANE": "%1"})
+    env = {**os.environ, "TMUX_PANE": "%1"}
+    env.pop("AGENTSTACK_DSH_NODE", None)
+    result = subprocess.run(args[runner:], cwd=workdir, env=env)
     assert result.returncode == 0
     status = Path(os.environ["AGENTSTACK_RUNTIME_DIR"]) / "child-agents/FixtureAgy.agy-status.json"
     status.write_text(json.dumps({"tmux": identity, "activity": "wait"}))
@@ -1527,6 +1618,9 @@ elif args[0] == "new-session":
 else:
     sys.exit(1)
 """)
+    consumer = home / "bin/lib/runtime_tmux_consumer.py"
+    consumer.parent.mkdir()
+    shutil.copy2(fake_bin / "tmux", consumer)
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
     token = tmp_path / "handoff.token"
@@ -1546,6 +1640,7 @@ else:
              "PARENT_AGENT":"Unrelated", "AGENTSTACK_HOME":str(home), "AGENTSTACK_HOOKS_DIR":str(hooks),
              "AGENTSTACK_LABEL_PREFIX":"org.agentstack.test.gemini-adapter",
              "AGENTSTACK_PYTHON":sys.executable, "AGENTSTACK_RUNTIME_DIR":str(runtime),
+             "AGENTSTACK_DSH_NODE":str(tmp_path / "local node/bin/node"),
              "AGENTSTACK_WORKTREE_ROOT":str(tmp_path / "worktrees"), "AGENTSTACK_PROJECT_KEY":"/fixture",
              "AGENTSTACK_GEMINI_TASK_FILE":str(task), "FIXTURE_CAPTURE":str(capture)},
         capture_output=True, text=True, timeout=30,
@@ -1555,9 +1650,11 @@ else:
     launched_folder = tmp_path / "worktrees/FixtureAgy" if isolation else selected
     assert observed["cwd"] == str(launched_folder)
     assert observed["parent"] is None
-    assert observed["args"][-2] == "-i"
-    assert observed["args"][-1].count("One canonical task.") == 1
-    assert "independent Antigravity agent" in observed["args"][-1]
+    assert observed["node"] == str(tmp_path / "local node/bin/node")
+    assert "-i" not in observed["args"]
+    delivered = capture.with_suffix(".task").read_text()
+    assert delivered.count("One canonical task.") == 1
+    assert "independent Antigravity agent" in delivered
     assert not any((directory / ".agents").exists() for directory in (selected, launched_folder))
     assert not list((runtime / "child-agents").glob("*.agy-config"))
     assert not token.exists() and not binding.exists() and not task.exists()

@@ -50,9 +50,7 @@ MCP_WRAPPER="$AGENTSTACK_HOME_DIR/bin/agentstack-gemini-mcp"
 GEMINI_TOOLS=()
 CLEANUP_HELPER="$HOOKS_DIR/cleanup-child-agent.sh"
 INTERACTIVE=0
-if [[ "$(uname -s)" == Darwin ]]; then
-  INTERACTIVE=1
-fi
+case "$(uname -s)" in Darwin|Linux) INTERACTIVE=1 ;; esac
 INTERACTIVE_HELPER="$HOOKS_DIR/gemini_interactive.py"
 
 usage() {
@@ -83,7 +81,7 @@ WORK_DIR="${2:-$PWD}"
 [[ -n "$CHILD_TOKEN_FILE" && -s "$CHILD_TOKEN_FILE" ]] || { echo "$PROG: child token file is required" >&2; exit 2; }
 [[ -n "$PROJECT_KEY" ]] || { echo "$PROG: AGENTSTACK_PROJECT_KEY is required" >&2; exit 2; }
 if [[ "$STANDALONE" == true ]]; then
-  [[ "$INTERACTIVE" == 1 ]] || { echo "$PROG: standalone Antigravity requires macOS" >&2; exit 2; }
+  [[ "$INTERACTIVE" == 1 ]] || { echo "$PROG: standalone Antigravity requires macOS or Linux" >&2; exit 2; }
   [[ -z "$RESOURCES" ]] || { echo "$PROG: declared resources require a parent" >&2; exit 2; }
   export PARENT_AGENT=""
 else
@@ -398,7 +396,7 @@ cleanup_failure() {
     fi
     rm -f "$TASK_EVENT_FILE" "$RUNNER_FILE" "$MCP_CONFIG" "$DURABLE_TOKEN" "$GIT_EXCLUDES_FILE" "$TASK_FILE"
     if [[ "$INTERACTIVE_PREPARED" == true ]]; then
-      rm -f "$RUNTIME_DIR/child-agents/$CHILD_NAME.json"
+      rm -f "$RUNTIME_DIR/child-agents/$CHILD_NAME.json" "$RUNTIME_DIR/child-agents/$CHILD_NAME.agy-status.startup"
       if [[ "$STANDALONE" == true ]]; then
         rm -rf "$RUNTIME_DIR/child-agents/$CHILD_NAME.agy-config"
       fi
@@ -541,6 +539,9 @@ export AGENTSTACK_MCP_URL=$(printf '%q' "$MCP_URL")
 export AGENTSTACK_MAIL_ENV=$(printf '%q' "$MAIL_ENV")
 export AGENTSTACK_MAIL_HTTP_BEARER_MODE=$(printf '%q' "$HTTP_BEARER_MODE")
 export AGENTSTACK_PYTHON=$(printf '%q' "$PYTHON_BIN")
+${AGENTSTACK_DSH_NODE:+export AGENTSTACK_DSH_NODE=$(printf '%q' "$AGENTSTACK_DSH_NODE")}
+${WSL_INTEROP:+export WSL_INTEROP=$(printf '%q' "$WSL_INTEROP")}
+${WSL_DISTRO_NAME:+export WSL_DISTRO_NAME=$(printf '%q' "$WSL_DISTRO_NAME")}
 export AGENTSTACK_EXTRA_PROTECTED_ROOTS=$(printf '%q' "$AGENTSTACK_EXTRA_PROTECTED_ROOTS")
 . $(printf '%q' "$PROJECT_CONTEXT_HELPER") || exit 1
 agentstack_apply_workspace_context "\$PWD" "\$AGENTSTACK_PROJECT_KEY" || exit 1
@@ -616,9 +617,12 @@ TMUX_STARTED=true
 if [[ "$INTERACTIVE" == 1 ]]; then
   identity="$(tmux display-message -p -t "=$CHILD_NAME:" '#{session_name}|#{session_id}|#{session_created}|#{pid}')"
   deadline=$((SECONDS + 25))
-  until AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" "$PYTHON_BIN" "$INTERACTIVE_HELPER" ready "$CHILD_NAME" "$identity"; do
-    if (( SECONDS >= deadline )) || ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
-      echo "$PROG: Antigravity did not reach its interactive prompt. Check the CLI sign-in, worktree trust and Reader setup." >&2
+  until startup_status=$(AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" "$PYTHON_BIN" "$INTERACTIVE_HELPER" ready "$CHILD_NAME" "$identity"); do
+    if [[ -n "$startup_status" ]]; then
+      echo "$PROG: $startup_status" >&2
+      exit 1
+    elif (( SECONDS >= deadline )) || ! tmux has-session -t "=$CHILD_NAME" 2>/dev/null; then
+      echo "$PROG: Antigravity did not accept its first task. Check CLI sign-in, worktree trust and MCP setup." >&2
       exit 1
     fi
     sleep 0.25
