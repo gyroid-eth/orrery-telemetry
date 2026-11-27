@@ -198,6 +198,8 @@ os.chmod(a.out,0o600)
     assert Path(source['instructions_file']).read_bytes() == renderer.render(
         'harness',(ROOT/'codex/AGENTS.md').read_bytes(),str(ROOT),args.project_key)
     instructions = Path(source['instructions_file']).read_text()
+    assert 'end your turn and keep the session open' in instructions
+    assert 'Do not wait in a sleep loop.' in instructions
     assert not any(word in instructions.lower() for word in ('codex', 'claude-code'))
     import shlex
     invocation = child.command(state, 'FixtureChild').split('; native_rc=$?',1)[0]

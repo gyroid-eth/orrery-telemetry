@@ -96,6 +96,43 @@ def test_session_start_migration_notices_only_for_participants(env,participant):
     result=subprocess.run(['/bin/bash',str(ROOT/'hooks/session-start-reminder.sh')],input=json.dumps({'session_id':'instruction-review-session'}),env=values,capture_output=True,text=True,timeout=60)
     assert result.returncode==0,result.stderr
     assert ('ORRERY instruction migration:' in result.stdout)==participant
+    if participant:
+        assert 'ORRERY instruction migration: 1 notice.' in result.stdout
+        assert f'{str(source)!r} [legacy]' in result.stdout
+        assert 'agentstack-claude-setup in this working directory' in result.stdout
+
+
+@pytest.mark.parametrize('kind,action', [
+    ('current', ''),
+    ('duplicate', 'review the cleanup command for this copy'),
+    ('edited', 'agentstack-claude-setup --print'),
+    ('malformed', 'fix the managed block markers'),
+    ('unknown', 'INSTRUCTION_PATH_UNSAFE'),
+])
+def test_session_notices_identify_file_and_operator_action(env, kind, action):
+    e = engine(env)
+    e.home.mkdir()
+    e.target.write_bytes(e.block)
+    source = e.cwd / 'CLAUDE.md'
+    if kind == 'duplicate':
+        legacy(e, source)
+    elif kind == 'edited':
+        source.write_bytes(m.BEGIN['claude'] + b'\nEdited notes\n' + m.END + b'\n')
+    elif kind == 'malformed':
+        source.write_bytes(m.BEGIN['claude'] + b'\n')
+    elif kind == 'unknown':
+        source.mkdir()
+    before = tree(Path(env['HOME']))
+    result = subprocess.run([sys.executable, str(ROOT/'bin/lib/instruction_blocks.py'),
+                             '--provider', 'claude', '--session-notices'],
+                            env=env, text=True, capture_output=True, check=True)
+    if kind == 'current':
+        assert result.stdout == ''
+    else:
+        assert 'ORRERY instruction migration: 1 notice.' in result.stdout
+        assert f'{str(source)!r} [{kind}]' in result.stdout
+        assert action in result.stdout
+    assert tree(Path(env['HOME'])) == before
 
 
 @pytest.mark.parametrize('generation',['current','history'])

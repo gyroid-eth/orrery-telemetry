@@ -238,6 +238,8 @@ and stop; do not change settings or invent another messaging path.
 
 ## Waiting For Replies
 
+After sending your completion report or a question that blocks your work, end your turn and keep the session open. Replies arrive as ORRERY Mail notifications. Do not wait in a sleep loop.
+
 Do not write your own waiting loop. A `fetch_inbox` polling loop consumes the
 push notification's dirty bit, so the reply then sits unread; a pane-diff loop
 keeps firing stale events. Both happened. Pick one of three patterns:
