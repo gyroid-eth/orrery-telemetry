@@ -52,14 +52,6 @@ resolve_agent_name() {
         printf '%s\n' "$AGENT_NAME"
         return 0
     fi
-    if [[ -n "${TMUX_PANE:-}" ]]; then
-        local pane_key metadata_file
-        pane_key="${TMUX_PANE//%/_}"
-        metadata_file="$RUNTIME_DIR/agent_name_${pane_key}"
-        if [[ -f "$metadata_file" ]]; then
-            tr -d '[:space:]' < "$metadata_file" 2>/dev/null
-        fi
-    fi
 }
 
 get_agentstack_token() {
@@ -224,13 +216,13 @@ conn.close()
 # SessionStart lease whose provider PID is still running (ours has exited).
 # When tmux cannot be read, the answer is unknown: keep the identity.
 identity_live_elsewhere() {
-    local name="$1" panes pane key lease pid
+    local name="$1" panes pane record lease pid
     if panes="$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null)"; then
         while IFS= read -r pane; do
             [[ -n "$pane" && "$pane" != "${TMUX_PANE:-}" ]] || continue
-            key="${pane//%/_}"
-            if [[ -f "$RUNTIME_DIR/agent_name_${key}" ]] &&
-                [[ "$(tr -d '[:space:]' < "$RUNTIME_DIR/agent_name_${key}" 2>/dev/null)" == "$name" ]]; then
+            record="$("${AGENTSTACK_PYTHON:-python3}" "${PROJECT_CONTEXT_LIB%/*}/pane-name.py" \
+                read "$RUNTIME_DIR" "$pane")" || return 0
+            if [[ "${record#*|}" == "$name" ]]; then
                 return 0
             fi
         done <<< "$panes"

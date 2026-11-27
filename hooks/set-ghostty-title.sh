@@ -37,9 +37,8 @@ fi
 
 # Write TMUX_PANE-based agent-name metadata used by other hooks.
 if [[ -n "$TMUX_PANE" ]]; then
-    mkdir -p "$RUNTIME_DIR"
-    PANE_KEY="${TMUX_PANE//%/_}"
-    echo -n "$AGENT_NAME" > "$RUNTIME_DIR/agent_name_${PANE_KEY}"
+    "${AGENTSTACK_PYTHON:-python3}" "$(dirname "${BASH_SOURCE[0]}")/pane-name.py" \
+        write "$RUNTIME_DIR" "$TMUX_PANE" "$AGENT_NAME"
 fi
 
 if ! grep -qxF "$AGENT_NAME" "$MANAGED_FILE" 2>/dev/null; then
