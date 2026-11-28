@@ -248,10 +248,18 @@ ORRERY に参加する Claude Code の SessionStart は、指示ファイルの�
 
 ## ローカルモデルの鍵をagentのshellから読まない
 
-ClaudeのBashと、Codex pluginのexec_command / shell_command / shellは、同じ
-`deny-llm-key-read.py`を呼びます。Codexでは更新したhookを人が`/hooks`で確認・承認し、
-新しいprocessから使ってください。installerは通常のhooks treeとpluginとして配布し、
-承認を自動化しません。
+Claude の Bash、dsh、Hermes は共通の `deny-llm-key-read.py` を使います。
+Codex CLI は shell hook に `Bash` という名前を使います。既存の ORRERY plugin の
+matcher は旧来のツール名で定義されているため、次の exec policy が指定のコマンドを止めます。
+
+macOS と WSL では、ORRERY が Codex の起動・再開用 HOME に
+`rules/orrery-child-shell-guard.rules` を生成します。Mac では
+`screencapture`・`osascript` の直接実行と `security find-generic-password`、
+WSL では `secret-tool lookup`・`secret-tool search` の直接実行を拒否します。
+既存のユーザー rules は併用できます。この policy は生成された Codex の中で働き、
+ORRERY 自身の unlock や他のハーネスの key_cmd はその外で動きます。
+Codex は起動時に rules を読み込み、hook の承認操作は不要です。
+Quartz の呼び出しや別のスクリプトの内部は接頭辞ルールの対象外です。
 
 鍵の値は読まず、既存の定義にある参照だけを読みます。既定は
 `$AGENTSTACK_HOME/integrations/dsh/backend.json`（`backends.*.keychain`）。別の既存定義を

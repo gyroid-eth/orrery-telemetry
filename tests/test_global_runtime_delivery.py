@@ -358,6 +358,17 @@ def test_codex_launch_reads_approved_fixed_plan_without_approving(server,monkeyp
     assert delivery.codex_trust()==plan
     row=delivery.prepare_launch('codex',cwd=client.isolation)
     assert delivery.provider_command(row)[0]=='/usr/bin/true'
+    import runpy
+    expected = runpy.run_path(str(ROOT / 'hooks/child_resume.py'))['codex_child_exec_rules']()
+    generated = home / 'rules/orrery-child-shell-guard.rules'
+    if expected is None:
+        assert not generated.exists()
+    else:
+        assert generated.read_bytes() == expected
+        generated.unlink()
+        assert delivery.provider_command(row)[0] == '/usr/bin/true'
+        assert generated.read_bytes() == expected
+    assert delivery.codex_trust() == plan
     (plugin/'hooks/hooks.json').write_text(json.dumps({'hooks':{'Stop':[]}}))
     with pytest.raises(api['ClientError'],match='CODEX_HOOK_CONFIGURE_REQUIRED'):
         delivery.provider_command(row)

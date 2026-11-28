@@ -617,6 +617,8 @@ def test_real_resume_command_can_cleanup_and_resume_again(
     sessions.mkdir(parents=True)
     source_config = source_home / "config.toml"
     _private(source_config, 'profile_marker = "first"\n')
+    source_rules = source_home / "rules" / "user.rules"
+    _private(source_rules, '# operator rules\n')
     session_id = SESSION_ID
     rollout = sessions / "rollout-fixture.jsonl"
     _seed_bound_child_receipt(
@@ -788,6 +790,10 @@ def test_real_resume_command_can_cleanup_and_resume_again(
         "count=$(cat \"$FAKE_CODEX_COUNT\" 2>/dev/null || printf 0)\n"
         "count=$((count + 1)); printf '%s' \"$count\" > \"$FAKE_CODEX_COUNT\"\n"
         "cp \"$CODEX_HOME/config.toml\" \"$FAKE_CODEX_CAPTURE.$count.toml\"\n"
+        "cp \"$CODEX_HOME/rules/user.rules\" \"$FAKE_CODEX_CAPTURE.$count.user.rules\"\n"
+        "if [[ -f \"$CODEX_HOME/rules/orrery-child-shell-guard.rules\" ]]; then\n"
+        "  cp \"$CODEX_HOME/rules/orrery-child-shell-guard.rules\" \"$FAKE_CODEX_CAPTURE.$count.guard.rules\"\n"
+        "fi\n"
         "printf '%s\\n' \"$*\" > \"$FAKE_CODEX_CAPTURE.$count.args\"\n"
         "\"$AGENTSTACK_PYTHON\" \"$FAKE_RECORDER\" < \"$FAKE_HOOK_PAYLOAD\"\n",
         encoding="utf-8",
@@ -912,6 +918,17 @@ def test_real_resume_command_can_cleanup_and_resume_again(
         assert 'profile_marker = "second"' in Path(
             f"{capture}.2.toml"
         ).read_text(encoding="utf-8")
+
+        import runpy
+        expected = runpy.run_path(str(ROOT / "hooks/child_resume.py"))["codex_child_exec_rules"]()
+        for launch in (1, 2):
+            assert Path(f"{capture}.{launch}.user.rules").read_bytes() == source_rules.read_bytes()
+            captured_rules = Path(f"{capture}.{launch}.guard.rules")
+            if expected is None:
+                assert not captured_rules.exists()
+            else:
+                assert captured_rules.read_bytes() == expected
+        assert sorted(p.name for p in source_rules.parent.iterdir()) == ["user.rules"]
     finally:
         fixture_server.shutdown()
         fixture_server.server_close()

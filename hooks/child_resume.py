@@ -19,6 +19,7 @@ import importlib.util
 import json
 import math
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -325,6 +326,53 @@ def _atomic_bytes(path: Path, raw: bytes, mode: int = 0o600) -> None:
             os.unlink(temporary)
         except FileNotFoundError:
             pass
+
+
+
+CODEX_CHILD_RULES = "orrery-child-shell-guard.rules"
+
+
+def codex_child_exec_rules() -> bytes | None:
+    if sys.platform == "darwin":
+        return (
+            'prefix_rule(pattern = [["screencapture", "/usr/sbin/screencapture", '
+            '"osascript", "/usr/bin/osascript"]], decision = "forbidden", '
+            'justification = "Use Cua Driver for the desktop or chrome MCP / CDP for the browser.")\n'
+            'prefix_rule(pattern = [["security", "/usr/bin/security"], "find-generic-password"], '
+            'decision = "forbidden", justification = "Keep model credentials out of the child shell. '
+            'Use the managed launcher or auth runner.")\n'
+        ).encode()
+    if sys.platform == "linux" and "microsoft" in platform.release().lower():
+        return (
+            'prefix_rule(pattern = [["secret-tool", "/usr/bin/secret-tool"], ["lookup", "search"]], '
+            'decision = "forbidden", justification = "Keep model credentials out of the child shell. '
+            'Use the managed launcher or auth runner.")\n'
+        ).encode()
+    return None
+
+
+def install_codex_child_exec_rules(home: Path, rules: bytes, inherited: Path | None = None) -> None:
+    directory = home / "rules"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise ValueError("the Codex child rules directory is unsafe")
+    if inherited is not None and inherited.exists():
+        for entry in inherited.iterdir():
+            if entry.name == CODEX_CHILD_RULES:
+                raise ValueError("the source Codex home uses the reserved ORRERY child rule filename")
+            (directory / entry.name).symlink_to(entry)
+    target = directory / CODEX_CHILD_RULES
+    try:
+        info = target.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise ValueError("the ORRERY Codex child rule file is unsafe")
+        if info.st_size == len(rules) and target.read_bytes() == rules:
+            return
+    _atomic_bytes(target, rules)
 
 
 def _read_private(path: Path, label: str, limit: int) -> bytes:
@@ -2216,6 +2264,10 @@ def _build_home_unlocked(
     try:
         os.chmod(temporary, 0o700)
         sandbox_metadata = {".git", ".agents", ".codex"}
+        rules = codex_child_exec_rules()
+        if rules is not None:
+            sandbox_metadata.add("rules")
+            install_codex_child_exec_rules(temporary, rules, inherited=source / "rules")
         for entry in source.iterdir():
             if entry.name == "config.toml" or entry.name in sandbox_metadata:
                 continue

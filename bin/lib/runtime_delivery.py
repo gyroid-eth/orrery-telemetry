@@ -623,6 +623,16 @@ class RuntimeDelivery(RuntimeFiles):
             self.fail('CODEX_HOOK_CONFIGURE_REQUIRED')
         return plan
 
+    def codex_child_rules(self, home):
+        helper = Path(self.client.config['wrapper_root']) / 'hooks/child_resume.py'
+        try:
+            api = runpy.run_path(str(helper))
+            rules = api['codex_child_exec_rules']()
+            if rules is not None:
+                api['install_codex_child_exec_rules'](home, rules)
+        except (OSError, ValueError):
+            self.fail('CODEX_CHILD_RULES_UNAVAILABLE')
+
     def configure_codex(self, action, approval=None):
         c=self.client
         home=self.directory(c.runtime_dir/'provider-home/codex')
@@ -648,6 +658,7 @@ class RuntimeDelivery(RuntimeFiles):
                 self.fail('CODEX_HOOK_CONFIGURE_REQUIRED')
             builder['build'](Path(c.config['wrapper_root'])/'integrations/codex_app',market,'agentstack-global')
             market.chmod(0o700)
+            self.codex_child_rules(home)
             env=dict(os.environ,CODEX_HOME=str(home))
             for args in ([binary,'plugin','marketplace','add',str(market),'--json'],
                          [binary,'plugin','add','agentstack-codex-app@agentstack-global','--json']):
@@ -672,6 +683,7 @@ class RuntimeDelivery(RuntimeFiles):
             self.fail('OPERATOR_CONFIRMATION_REQUIRED')
         if approval.get('shared_codex_home')!=str(home) or approval.get('cwd')!=str(c.isolation):
             self.fail('CODEX_HOOK_CONFIGURE_REQUIRED')
+        self.codex_child_rules(home)
         trust['apply_trust'](approval)
         self.api['atomic_json'](path,approval,before_replace=lambda:self.fail('CODEX_HOOK_CONFIGURE_REQUIRED') if self.read(path)!=current else None)
         self.codex_trust()
@@ -845,6 +857,7 @@ class RuntimeDelivery(RuntimeFiles):
                 args+=['--resume',provider_session_id]
         elif provider=='codex':
             plan=self.codex_trust()
+            self.codex_child_rules(home)
             args=[binary,'-C',row['cwd'],'-c','check_for_update_on_startup=false',
                   '-c','mcp_servers.orrery-mail.command='+json.dumps(proxy[0]),
                   '-c','mcp_servers.orrery-mail.args='+json.dumps(proxy[1:]),
