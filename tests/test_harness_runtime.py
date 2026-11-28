@@ -44,9 +44,15 @@ def test_linux_catalog_requires_explicit_ss_reference_without_looking_up_key(tmp
 
 @pytest.mark.parametrize('program,command,expected', [
     ('dsh', '/fixed/node /fixed/node_modules/@deepseek-ai/dsh/lib/bin.js --profile x', True),
+    ('dsh', "/fixed/node /fixed/node_modules/@deepseek-ai/dsh/lib/bin.js --prompt It's ready", True),
+    ('dsh', "/fixed/node /fixed/mcp/server.js It's ready", False),
     ('dsh', '/fixed/node /fixed/mcp/server.js', False),
     ('dsh', 'node', False),
     ('hermes', '/fixed/venv/bin/python /fixed/venv/bin/hermes chat', True),
+    ('hermes', "/fixed/venv/bin/python /fixed/venv/bin/hermes chat --query don't stop", True),
+    ('hermes', "python3 -m hermes_cli.main chat --query don't stop", True),
+    ('hermes', "hermes don't stop", True),
+    ('hermes', "python3 /fixed/mcp.py --query don't stop", False),
     ('hermes', 'python3 -m hermes_cli.main chat', True),
     ('hermes', 'hermes', True),
     ('hermes', 'python3 /fixed/mcp.py', False),
@@ -58,6 +64,7 @@ def test_native_entry_identity(program, command, expected):
 
 @pytest.mark.parametrize('command,returncode,expected', [
     ('node /fixed/node_modules/@deepseek-ai/dsh/lib/bin.js', 0, True),
+    ("node /fixed/node_modules/@deepseek-ai/dsh/lib/bin.js --prompt It's ready", 0, True),
     ('node /fixed/mcp.js', 0, False),
     ('python /fixed/node_modules/@deepseek-ai/dsh/lib/bin.js', 0, False),
     ('node', 0, False),

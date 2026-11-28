@@ -18,7 +18,7 @@ METADATA = "/unused/tmux.sock\t100\t%1\t200\t1\t0\t2\t1\tpython"
     [
         ([BORDER, "> ", BORDER, "Gemini 4 Neon (Low) · low"], ""),
         ([BORDER, "> Keep this draft", BORDER, "Gemini 4 Neon (Low) · low"], "Keep this draft"),
-        ([BORDER, "> ", BORDER, "Another model · low"], None),
+        ([BORDER, "> ", BORDER, "Another model · low"], ""),
         ([BORDER, "> ", BORDER, "Gemini 4 Neon (Low) · launching"], None),
         (["", "> ", BORDER, "Gemini 4 Neon (Low) · low"], None),
     ],
@@ -82,6 +82,13 @@ def test_hermes_compact_hint_requires_an_adjacent_status_bar():
      'node /home/demo/node_modules/@google/gemini-cli/dist/index.js'),
     ('dsh', [BORDER, '⌸ ❯ ', BORDER], 'mainthread', 'node /home/demo/node_modules/@deepseek-ai/dsh/lib/bin.js'),
     ('hermes', [BORDER, '❯ ', BORDER, ' ☤ fixture status'], 'python3', 'python3 -m hermes_cli.main'),
+    ('dsh', [BORDER, '⌸ ❯ ', BORDER], 'node', "node /home/demo/node_modules/@deepseek-ai/dsh/lib/bin.js don't stop"),
+    ('hermes', [BORDER, '❯ ', BORDER, ' ☤ fixture status'], 'python3',
+     "python3 /home/demo/venv/bin/hermes don't stop"),
+    ('claude', [BORDER, '❯ ', BORDER], 'node', "node /home/demo/bin/claude don't stop"),
+    ('codex', ['', '› '], 'node', "node /home/demo/bin/codex don't stop"),
+    ('agy', [BORDER, '> ', BORDER, 'Gemini 4 Neon (Low) · low'], 'node',
+     "node /home/demo/bin/gemini don't stop"),
 ])
 def test_unknown_paste_mode_requires_the_matching_editor_in_the_foreground_group(
     monkeypatch, editor, rows, command, argv,
@@ -141,3 +148,20 @@ def test_native_agy_under_a_shell_requires_its_executable_or_argv0(
     monkeypatch.setitem(scope, 'os', SimpleNamespace(readlink=readlink))
     assert view.editor == 'agy' and view.empty
     assert confirm(view).allows_paste('First line\nSecond line') is confirmed
+
+
+@pytest.mark.parametrize(("highlight", "option", "expected"), [
+    ("\x1b[1;7m", "/exit", "/exit"),
+    ("\x1b[0;1m\x1b[38;2;0;0;46m\x1b[48;2;99;168;248m", "/exit", "/exit"),
+    ("\x1b[0;1m\x1b[38;2;0;0;46m\x1b[48;2;99;168;248m", "/help", "/help"),
+    ("\x1b[1m", "/exit", None),
+    ("\x1b[48;2;99;168;248m\x1b[49m", "/exit", None),
+])
+def test_codex_completion_requires_active_row_highlight(highlight, option, expected):
+    metadata = "/tmp/fixture.sock\t100\t%1\t200\t2\t0\t7\t1\tcodex"
+    lines = [f"{highlight}› {option}  native command\x1b[0m", "",
+             "\x1b[1m›\x1b[0m /exit", "", "  GPT-6.2-Sol high · Context 12% left"]
+    view = frame(metadata, lines, "%1")
+    assert view.draft == "/exit" and view.selected
+    assert view.selected_command == expected
+    assert submission["ready"](view, "/exit") is (expected == "/exit")

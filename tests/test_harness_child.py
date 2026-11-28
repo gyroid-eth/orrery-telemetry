@@ -164,6 +164,21 @@ def test_generation_reads_personal_skills_at_each_launch(tmp_path, monkeypatch, 
 
 
 @pytest.mark.parametrize('program', ['dsh','hermes'])
+@pytest.mark.parametrize('parent', ['', 'FixtureParent'])
+def test_prepare_stops_before_starting_with_a_locked_keyring(tmp_path, monkeypatch, program, parent):
+    args = staged(tmp_path, program)
+    args.parent_agent = parent
+    ref = dict(store='secret-service', attributes={'service': 'synthetic-reference'})
+    monkeypatch.setattr(child, 'sys', SimpleNamespace(platform='linux'))
+    monkeypatch.setattr(child, 'selection', lambda *a: {'credential_ref': ref})
+    monkeypatch.setattr(child.llm_secret_reader, 'ref_is_locked', lambda candidate: candidate == ref)
+    monkeypatch.setattr(child, 'generate_plan', lambda *a: pytest.fail('launch plan for locked credentials'))
+    with pytest.raises(ValueError, match='^credential_keyring_locked$'):
+        child.prepare(args)
+    assert not (Path(args.runtime_dir) / 'child-agents' / 'FixtureChild.harness').exists()
+
+
+@pytest.mark.parametrize('program', ['dsh','hermes'])
 @pytest.mark.parametrize('helper', [None,'same','alternate'])
 def test_native_generation_keeps_identity_prompt_and_shared_instructions(tmp_path, program, helper, monkeypatch):
     args = staged(tmp_path, program)

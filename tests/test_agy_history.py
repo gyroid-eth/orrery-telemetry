@@ -86,6 +86,26 @@ def test_new_launch_invalidates_the_old_receipt(launch):
     assert result["history_binding"] == "unbound" and result["transcript_path"] is None
 
 
+def test_resume_binds_before_first_invocation_and_native_conflicts_invalidate_it(launch):
+    runtime, generation, prior_tmux, old_nonce, transcript, payload = launch
+    agy_history.record(runtime, NAME, old_nonce, payload)
+    previous = agy_history.binding(runtime, NAME, REGISTRATION, generation)
+    resumed = {**generation, "session_id": "$4"}
+    nonce = agy_history.prepare(runtime, transcript.parents[6], NAME, 5, "fixture",
+                                payload["workspacePaths"][0], prior_tmux.replace("|$3|", "|$4|"))
+    with pytest.raises(ValueError, match="saved conversation"):
+        agy_history.confirm_resume(runtime, NAME, old_nonce, SID, previous)
+    with pytest.raises(ValueError, match="saved conversation"):
+        agy_history.confirm_resume(runtime, NAME, nonce, OTHER_SID, previous)
+    assert agy_history.binding(runtime, NAME, REGISTRATION, resumed)["history_binding"] == "unbound"
+    agy_history.confirm_resume(runtime, NAME, nonce, SID, previous)
+    assert agy_history.binding(runtime, NAME, REGISTRATION, generation)["history_binding"] == "stale"
+    assert agy_history.binding(runtime, NAME, REGISTRATION, resumed)["history_session_id"] == SID
+    agy_history.record(runtime, NAME, nonce, dict(payload, conversationId=OTHER_SID,
+                        transcriptPath=str(transcript).replace(SID, OTHER_SID)))
+    assert agy_history.binding(runtime, NAME, REGISTRATION, resumed)["history_binding_reason_code"] == "session_conflict"
+
+
 def test_first_task_is_exact_and_consumed_once_for_the_bound_invocation(launch):
     runtime, _, _, nonce, _, payload = launch
     folder = runtime / "agy-first-task-fixture"

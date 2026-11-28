@@ -77,6 +77,25 @@ def test_timeout_is_fixed_and_has_no_helper_output(prepared):
     assert error.value.__suppress_context__
 
 
+@pytest.mark.parametrize('output,rc,expected', [
+    ('aoao 0 1 "/org/freedesktop/secrets/collection/ORRERY/1"\n', 0, True),
+    ('aoao 1 "/org/freedesktop/secrets/collection/login/1" 1 "/locked/item"\n', 0, False),
+    ('aoao 0 0\n', 0, False),
+    ('aoao 0 1 "/fake/path"\n', 1, False),
+])
+def test_lock_probe_checks_only_matching_item_metadata(prepared, monkeypatch, output, rc, expected):
+    monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/fixture/bus')
+
+    def run(argv, **options):
+        assert argv[1] == '--address=unix:path=/fixture/bus'
+        assert argv[-7:] == ['SearchItems', 'a{ss}', '2', 'account', 'fixture-account',
+                             'service', 'fixture-service']
+        assert options['stdin'] == subprocess.DEVNULL
+        return SimpleNamespace(returncode=rc, stdout=output)
+
+    assert reader.ref_is_locked(REF, runner=run) is expected
+
+
 def test_static_check_does_not_lookup_and_rejects_missing_tool(prepared, monkeypatch):
     monkeypatch.setattr(reader.subprocess, 'run', lambda *a, **k: pytest.fail('static check read a key'))
     reader.validate_ref(REF)

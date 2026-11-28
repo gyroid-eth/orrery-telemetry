@@ -5,7 +5,8 @@ import subprocess
 
 class ExitTerminal:
     def __init__(self, monkeypatch, server, name, *, editor="codex", pane_command=None,
-                 screen=None, after_paste=None, after_interrupt=None, created=17, pid=19):
+                 screen=None, after_paste=None, after_interrupt=None, created=17, pid=19,
+                 legacy_metadata=False, fail_capture=False):
         self.name = name
         self.editor = editor
         self.pane_command = pane_command or editor
@@ -15,6 +16,8 @@ class ExitTerminal:
         self.after_interrupt = after_interrupt
         self.created = created
         self.pid = pid
+        self.legacy_metadata = legacy_metadata
+        self.fail_capture = fail_capture
         self.mutations = []
         self.loaded = None
         tmux = server._MODE_API["runtime_tmux_api"]()
@@ -42,9 +45,20 @@ class ExitTerminal:
     def command(self, args, **kwargs):
         stdout = ""
         if args[0] == "display-message":
-            if self.metadata in args:
+            if len(args) > 4 and args[4].startswith(self.metadata):
+                if self.fail_capture:
+                    return subprocess.CompletedProcess(args, 1, "", "")
                 screen, row, col = self.render()
-                stdout = f"/tmp/synthetic-tmux\t{self.pid}\t%41\t400\t{row}\t0\t{col}\t1\t{self.pane_command}\n{screen}"
+                values = {
+                    "socket_path": "/tmp/synthetic-tmux", "pid": self.pid, "pane_id": "%41", "pane_pid": 400,
+                    "cursor_y": row, "pane_in_mode": 0, "cursor_x": col, "bracket_paste_flag": 1,
+                    "pane_current_command": self.pane_command, "@orrery-agy-mcp-preparing": "",
+                    "pane_width": 80, "pane_height": 24,
+                }
+                keys = [field.removeprefix("#{").removesuffix("}") for field in args[4].split("\t")]
+                if self.legacy_metadata:
+                    keys.remove("@orrery-agy-mcp-preparing")
+                stdout = "\t".join(str(values[key]) for key in keys) + "\n" + screen
             elif args[-1] == "#{pane_current_command}":
                 stdout = self.pane_command
             elif args[-1] == "#{pane_pid}":

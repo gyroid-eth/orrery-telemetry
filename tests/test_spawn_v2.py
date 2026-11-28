@@ -685,6 +685,22 @@ def test_suggest_name_refuses_exhausted_candidates(monkeypatch, tmp_path):
     assert server.suggest_spawn_name("Boltzmann") is None
 
 
+@pytest.mark.parametrize("requested", [False, True])
+def test_delegated_antigravity_explains_the_forced_worktree(requested, monkeypatch, tmp_path):
+    launcher = tmp_path / "launcher"
+    launcher.touch()
+    monkeypatch.setattr(server, "_project_key", lambda: "/fixture")
+    spec = server.SpawnLaunchSpec(provider="gemini", program="antigravity", model="fixture",
+                                  script=str(launcher), worktree_required=True)
+    result = server.spawn_with_launch_spec({"parent": "FixtureParent", "task": "work", "dir": str(tmp_path),
+                                          "worktree": requested, "dry_run": True}, spec)
+    assert result["ok"] and result["worktree"] and "--worktree" in result["argv"]
+    if requested:
+        assert "worktree_notice" not in result
+    else:
+        assert "managed .agents settings" in result["worktree_notice"]
+
+
 def test_suggest_name_rejects_scientist_outside_roster(monkeypatch, tmp_path):
     script = tmp_path / "scientists.sh"
     script.write_text(
@@ -709,6 +725,20 @@ def test_suggest_name_endpoint_returns_409_when_exhausted(monkeypatch):
     finally:
         httpd.shutdown()
         thread.join()
+
+
+def test_available_adjectives_use_launch_occupancy_without_returning_registered_names(monkeypatch, tmp_path):
+    db = tmp_path / "mail.sqlite3"
+    with sqlite3.connect(db) as con:
+        con.execute("CREATE TABLE agents(name TEXT)")
+        con.executemany("INSERT INTO agents VALUES(?)", [("RainyCurie",), ("Windy-Curie",)])
+    monkeypatch.setattr(server, "DB_PATH", str(db))
+    monkeypatch.setattr(server, "_spawn_name_vocabulary", lambda: (["Curie"], ["Rainy", "Windy", "Quiet"]))
+    assert server._spawn_name_status("Rainy-Curie") == "occupied"
+    assert server._spawn_name_status("WindyCurie") == "occupied"
+    assert server.suggest_spawn_adjectives("Curie") == ["Quiet"]
+    db.unlink()
+    assert server.suggest_spawn_adjectives("Curie") is None
 
 
 def test_spawn_dirs_rejects_traversal_external_and_symlink_escape(monkeypatch, tmp_path):
@@ -1348,6 +1378,38 @@ def test_killed_cleanup_without_a_usable_copy_says_so(monkeypatch, tmp_path):
     assert list((runtime / "spawn-tokens").iterdir()) == []
 
 
+@pytest.mark.parametrize("failure_stage", [None, "checkout", "startup"])
+def test_worktree_checkout_does_not_consume_cli_readiness(monkeypatch, tmp_path, failure_stage):
+    import types
+
+    phase_file = tmp_path / "phase"
+    phase_file.write_text("checkout\n")
+    now = 0.0
+    phases = []
+    monkeypatch.setattr(server, "time", types.SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(server, "_SPAWN_READINESS_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(server, "_SPAWN_WORKTREE_TIMEOUT_SECONDS", 8)
+
+    class Launcher:
+        def wait(self, *, timeout):
+            nonlocal now
+            now += timeout
+            if now >= 5 and failure_stage != "checkout":
+                phase_file.write_text("startup\n")
+            if now >= 6 and failure_stage is None:
+                return 0
+            raise subprocess.TimeoutExpired("fixture", timeout)
+
+    if failure_stage is None:
+        assert server._wait_spawn_with_checkout(Launcher(), phase_file, phases.append) == 0
+        assert phases == ["checkout", "startup"] and now == 6
+    else:
+        with pytest.raises(subprocess.TimeoutExpired):
+            server._wait_spawn_with_checkout(Launcher(), phase_file, phases.append)
+        assert phases[-1] == failure_stage
+        assert now == (8 if failure_stage == "checkout" else 7)
+
+
 def test_async_killed_cleanup_reports_recovery_credential_via_spawn_status(monkeypatch, tmp_path):
     launcher, runtime = _prepare_real_spawn(monkeypatch, tmp_path, _KILLED_CLEANUP_LAUNCHER)
     spec = _killed_cleanup_spec(launcher, tmp_path, "before-copy")
@@ -1546,7 +1608,7 @@ def test_rendered_watcher_waits_for_the_server_verdict_deadline():
         pytest.skip("node is required to run the dashboard watcher")
     source = (pathlib.Path(server.__file__).parent / "index.html").read_bytes()
     rendered = server._render_dashboard_index(source).decode("utf-8")
-    assert "watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j),wslWarning);" in rendered
+    assert "watchSpawnLaunch(j.child_name,payload.dir,spawnWatchLimitMs(j),wslWarning,worktreeNotice);" in rendered
     parts = []
     for constant in ("SPAWN_WATCH_DEFAULT_MS", "SPAWN_WATCH_MAX_MS"):
         match = re.search(rf"\nconst {constant}=[^;]+;", rendered)
@@ -1619,7 +1681,7 @@ globalThis.setTimeout=()=>0;
   const out=[];
   for(const pending of [true,false]){
     notice=watch=null;
-    reply={ok:true,pending,child_name:'FixtureAgent',wsl_hold:{
+    reply={ok:true,pending,child_name:'FixtureAgent',worktree_notice:'Managed settings require a worktree',wsl_hold:{
       ok:false,state:'timeout',error:'PowerShell timed out',hint:'keep an Ubuntu window open'
     }};
     await submitSpawn();
@@ -1635,8 +1697,10 @@ globalThis.setTimeout=()=>0;
         title, message, warning, duration = outcome["notice"]
         assert "WSL NOT KEPT" in title
         assert "PowerShell timed out" in message and "keep an Ubuntu window open" in message
+        assert "Managed settings require a worktree" in message
         assert warning and duration >= 10000
-    assert pending["watch"][-1].endswith("keep an Ubuntu window open")
+    assert pending["watch"][3].endswith("keep an Ubuntu window open")
+    assert pending["watch"][4] == " · Managed settings require a worktree"
 
 
 def test_invalid_override_remains_a_visible_provider_in_the_api(monkeypatch, isolated_codex_catalog):
@@ -1931,6 +1995,53 @@ def test_all_failed_candidates_keep_windows_and_node_notes_in_order(tmp_path):
     log.write_text("\n".join([*notes, "Error: no usable Codex CLI found"]))
     assert server._spawn_log_tail_and_reason(log)[1] == "; ".join(
         [*notes, "Error: no usable Codex CLI found"])
+
+
+def test_overlapping_launches_report_only_their_own_details(monkeypatch, tmp_path):
+    launcher, _ = _prepare_real_spawn(monkeypatch, tmp_path)
+    spec = _cleanup_spec(launcher, tmp_path, cleanup_seconds=0)
+    first_waiting, second_finished = threading.Event(), threading.Event()
+    results = {}
+
+    def mcp(method, args, **kwargs):
+        data = dict(id=73, name=args["name"], registration_token="fixture-token") if method == "register_agent" else {}
+        return {"ok": True, "data": data}
+
+    def popen(argv, *, stdout, **kwargs):
+        name = argv[2]
+
+        class Process:
+            def wait(self, timeout):
+                if name == "QuietCurie":
+                    first_waiting.set()
+                    assert second_finished.wait(10)
+                stdout.write(f"Error: diagnostic for {name}\n".encode())
+                return 1
+
+        return Process()
+
+    def launch(name):
+        results[name] = server.spawn_with_launch_spec(
+            {"standalone": True, "name": name, "task": "work", "dir": str(tmp_path)}, spec)
+
+    monkeypatch.setattr(server, "_mcp_call", mcp)
+    monkeypatch.setattr(server.subprocess, "Popen", popen)
+    worker = threading.Thread(target=launch, args=("QuietCurie",))
+    worker.start()
+    try:
+        assert first_waiting.wait(10)
+        launch("CleverNewton")
+    finally:
+        second_finished.set()
+        worker.join(10)
+    assert not worker.is_alive()
+    for name, other in (("QuietCurie", "CleverNewton"), ("CleverNewton", "QuietCurie")):
+        result = results[name]
+        assert result["error"].startswith(f"Error: diagnostic for {name}")
+        assert f"diagnostic for {name}" in result["detail"]
+        assert other not in result["detail"]
+    history = (tmp_path / "logs/spawn.log").read_text()
+    assert all(f"diagnostic for {name}" in history for name in results)
 
 
 def test_all_failed_candidates_report_omitted_count_within_limit(tmp_path):

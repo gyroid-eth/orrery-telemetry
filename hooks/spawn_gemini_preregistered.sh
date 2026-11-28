@@ -430,7 +430,9 @@ if [[ "$USE_WORKTREE" == true ]]; then
     echo "$PROG: child branch already exists: $BRANCH_NAME" >&2
     exit 1
   fi
+  agentstack_record_spawn_phase checkout
   git -C "$SOURCE_REPO" worktree add -b "$BRANCH_NAME" "$WORKTREE_DIR" "$BASE_REV" >/dev/null
+  agentstack_record_spawn_phase startup
   WORKTREE_CREATED=true
   WORKSPACE_DIR="$WORKTREE_DIR"
   agentstack_apply_workspace_context "$WORKSPACE_DIR" "$PROJECT_KEY" || exit 1

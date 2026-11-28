@@ -1262,11 +1262,13 @@ maybe_create_worktree() {
     fi
 
     echo "[spawn_child] Creating git worktree: $worktree_dir (branch: $branch_name, base: $base_label)" >&2
+    agentstack_record_spawn_phase checkout
     # set -u 下で空配列展開を許容する慣用句: ${base_args[@]+"${base_args[@]}"}
     if ! git -C "$source_dir" worktree add "$worktree_dir" -b "$branch_name" ${base_args[@]+"${base_args[@]}"} >&2; then
         echo "Error: git worktree add failed" >&2
         return 1
     fi
+    agentstack_record_spawn_phase startup
 
     WORKTREE_DIR="$worktree_dir"
     WORKTREE_SOURCE="$source_dir"

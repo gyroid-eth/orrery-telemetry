@@ -37,7 +37,7 @@ class LegacyConsumer:
         selector={'pane':target} if re.fullmatch(r'%[0-9]+',target) else ({'window':target} if re.fullmatch(r'@[0-9]+',target) else {'session':target.split(':',1)[0]})
         return self.tmux['legacy_admission'](self.transport,self.home,operation=operation,api=self.api,proof_reader=self.proof_reader,**selector)
 
-    def submit_text(self,pane,text,*,on_wait=None,notice=None):
+    def submit_text(self,pane,text,*,on_wait=None,notice=None,prepare_mcp=False):
         if not re.fullmatch(r'%[0-9]+',pane):
             return 'refused'
         self.admission(pane,'input')
@@ -52,7 +52,8 @@ class LegacyConsumer:
 
         return self.tmux['module_api']('pane_submission')['submit'](
             command,admitted,pane,text,on_wait=on_wait,
-            claim_handoff=notice.claim if notice is not None else None)
+            claim_handoff=notice.claim if notice is not None else None,
+            **({'prepare_mcp': True} if prepare_mcp else {}))
 
     def admitted_argv(self,args,*,_creation=None):
         args=list(args)

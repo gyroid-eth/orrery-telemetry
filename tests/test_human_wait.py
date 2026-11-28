@@ -88,6 +88,16 @@ def test_working_waiting_and_drafts_do_not_send(case, tmp_path):
     assert not monitor.path.exists()
 
 
+def test_agy_browser_approval_survives_wrapped_choices_without_quoting_the_host():
+    capture = next(case["active"] for case in NATIVE_WAITS["cases"] if case["id"] == "agy-url-approval")
+    wrapped = capture.replace(" access to 'example.com'", "\n    access to 'example.com'")
+    screen = observed(wrapped, "agy")
+    assert screen == human_wait.Screen("approval", ("Allow access to this URL?", "↑/↓ Navigate · tab Amend"))
+    assert "example.com" not in screen.message("ChildCurie")[1]
+    incomplete = wrapped.replace("6. No, and always deny", "6. No, and never deny")
+    assert not isinstance(observed(incomplete, "agy"), human_wait.Screen)
+
+
 @pytest.mark.parametrize("program,transcript", [
     ("agy", "⎿  Interrupted · What should Antigravity CLI do instead?"),
     ("claude", "⎿  Interrupted · What should Claude do instead?"),

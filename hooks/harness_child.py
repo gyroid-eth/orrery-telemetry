@@ -18,7 +18,7 @@ import types
 import uuid
 
 if __package__:
-    from . import child_resume, child_tools, native_connections, native_server_models
+    from . import child_resume, child_tools, llm_secret_reader, native_connections, native_server_models
 else:
     # Isolated Python excludes the script directory from sys.path. Load only
     # product siblings through a private package, independent of cwd/PYTHONPATH.
@@ -27,6 +27,7 @@ else:
     sys.modules[package.__name__] = package
     child_resume = importlib.import_module(package.__name__ + '.child_resume')
     child_tools = importlib.import_module(package.__name__ + '.child_tools')
+    llm_secret_reader = importlib.import_module(package.__name__ + '.llm_secret_reader')
     native_connections = importlib.import_module(package.__name__ + '.native_connections')
     native_server_models = importlib.import_module(package.__name__ + '.native_server_models')
 
@@ -185,7 +186,8 @@ def selection(manifest, harness, backend, model, effort=None, url_index=None, se
             _VALIDATION_CACHE.pop(next(iter(_VALIDATION_CACHE)))
     if reason:
         raise ValueError(reason)
-    return {**runner, 'connection_kind': kind, **route}
+    return {**runner, 'connection_kind': kind, **route,
+            'credential_ref': backend_spec.get('credential_ref')}
 
 
 def write_instructions(state_dir, project_key):
@@ -418,6 +420,10 @@ def prepare(args):
             raise ValueError('url_selection_required')
         selection_args += (args.url_index, None, args.url_key)
     runner = selection(*selection_args)
+    if sys.platform == 'linux':
+        ref = runner.get('credential_ref')
+        if ref is not None and llm_secret_reader.ref_is_locked(ref):
+            raise ValueError('credential_keyring_locked')
     state_dir = child_file.parent / (args.agent_name + '.harness') / args.generation
     state_dir.mkdir(parents=True, mode=0o700)
     os.chmod(state_dir, 0o700)
@@ -528,6 +534,9 @@ def main():
             print(command(args.state, args.agent_name))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         reason = str(error) if re.fullmatch(r'[a-z_]+', str(error)) else type(error).__name__
+        if reason == 'credential_keyring_locked':
+            print('Error: ' + llm_secret_reader.LOCKED_MESSAGE, file=sys.stderr)
+            return 1
         if isinstance(error, child_tools.ToolsError):
             reason = 'unsupported_mcp_selection'
         message = 'Harness ' + args.action + ' failed: ' + reason

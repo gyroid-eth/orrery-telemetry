@@ -35,6 +35,7 @@ import asyncio
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -2626,6 +2627,7 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
            for rt in runtime_by_name.values()):
         codex_catalog = (*codex_models.DEFAULT_MODELS, *codex_models.discover_models())
     permission_browser_modes = None
+    permission_browser_unavailable = {}
     for row in rows:
         name = row["name"]
         row['annot'] = annotations.get(name)
@@ -2676,12 +2678,12 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                        permission_resume_reason=_resume_unavailable(row["resume_capability"])["error"])
         if row["permission_resume_supported"] and permission_browser_modes is None:
             try:
-                permission_browser_modes = _spawn_browser_modes()
+                permission_browser_modes = _spawn_browser_modes(unavailable=permission_browser_unavailable)
             except (OSError, RuntimeError, ValueError):
                 permission_browser_modes = {}
         browser_kind = "claude-code" if row.get("harness_kind") == "claude" else row.get("harness_kind")
         browser_options = (permission_browser_modes or {}).get(browser_kind, ("off",))
-        controls = agent_card.permission_controls(row, browser_options)
+        controls = agent_card.permission_controls(row, browser_options, browser_unavailable=permission_browser_unavailable)
         if controls is not None:
             row["permission_controls"] = controls
             if not any(control["can_change"] for control in controls.values()):
@@ -5781,7 +5783,7 @@ def _gemini_resume_material(session, *, live=None):
     runtime = Path(RUNTIME_DIR)
     helper = Path(HOOKS_DIR) / "gemini_interactive.py"
     registration = _resume_registration(session, {"antigravity"})
-    if sys.platform != "darwin" or not registration or not helper.is_file():
+    if not (sys.platform == "darwin" or _is_wsl()) or not registration or not helper.is_file():
         raise _ResumeCapabilityError("unsupported_provider", "Managed Antigravity resume is unavailable")
     try:
         state = module.inspect_retained(runtime, session, agent_id=registration["agent_id"],
@@ -5821,7 +5823,7 @@ def _gemini_resume_material(session, *, live=None):
     return registration, state, helper, cwd, sid
 
 
-def _await_gemini_permission_resume(session, registration, sid, identity, *, timeout=30):
+def _await_gemini_permission_resume(session, registration, sid, identity, generation, *, timeout=30):
     if not re.fullmatch(r"\$\d+\|[1-9]\d*\|[1-9]\d*", identity):
         return False
     target, created, pid = identity.split("|")
@@ -5832,11 +5834,14 @@ def _await_gemini_permission_resume(session, registration, sid, identity, *, tim
                           "#{session_name}|#{session_id}|#{session_created}|#{pid}"]).strip()
         if observed != f"{session}|{identity}":
             return False
-        history = agy_history.binding(RUNTIME_DIR, session, registration, launch)
-        status = _card_private_mapping(Path(RUNTIME_DIR) / "child-agents" / f"{session}.agy-status.json")
-        if (history.get("history_binding") == "bound" and history.get("history_session_id") == sid
-                and status.get("tmux") == observed and status.get("activity") == "wait"):
-            return True
+        ready = _card_private_mapping(Path(RUNTIME_DIR) / "child-agents" / f"{session}.agy-status.startup")
+        if (ready.get("tmux") == observed and ready.get("conversation") == sid
+                and ready.get("generation") == generation):
+            if ready.get("error"):
+                return False
+            if ready.get("ready") is True:
+                history = agy_history.binding(RUNTIME_DIR, session, registration, launch)
+                return history.get("history_binding") == "bound" and history.get("history_session_id") == sid
         time.sleep(0.25)
     return False
 
@@ -5879,7 +5884,8 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expect
             "AGENTSTACK_RESERVED_IDENTITY": "1", "AGENTSTACK_GEMINI_INTERACTIVE": "1",
             "AGENTSTACK_CHILD_SANDBOX": _child_sandbox_mode(),
         }
-        if generation := module.tools_change_generation():
+        generation = module.tools_change_generation()
+        if generation:
             environment["AGENTSTACK_TOOLS_CHANGE_GENERATION"] = generation
         if os.environ.get("AGENTSTACK_SCREEN_PYTHON"):
             environment["AGENTSTACK_SCREEN_PYTHON"] = os.environ["AGENTSTACK_SCREEN_PYTHON"]
@@ -5907,7 +5913,7 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expect
         if not launched.get("ok"):
             raise _ResumeCapabilityError("config_unrestorable", "Antigravity tmux resume could not be started")
         if verify_permission and not _await_gemini_permission_resume(
-                session, registration, sid, launched.get("tmux_identity", "")):
+                session, registration, sid, launched.get("tmux_identity", ""), generation):
             if _child_session_live(session, module.boot_time()) is not False:
                 return {"ok": False, "error": "Could not confirm the Antigravity conversation resumed; check its terminal",
                         "resume_confirmation_pending": True}
@@ -8498,8 +8504,8 @@ def _permission_resume_material(session, sid, *, live=None):
     directory = runtime / "child-agents"
     module = _child_resume_module()
     if program == "antigravity":
-        if sys.platform != "darwin":
-            raise ValueError("Managed Antigravity permissions require macOS")
+        if not (sys.platform == "darwin" or _is_wsl()):
+            raise ValueError("Managed Antigravity permissions require macOS or WSL")
         if not os.path.lexists(directory / f"{session}.json"):
             registration = _resume_registration(session, {"antigravity"})
             if registration is None or registration["program"] != program:
@@ -8627,20 +8633,33 @@ def do_jump(session: str, *, open_terminal: bool | None = None,
         if not _valid_permission_request(permission):
             return {"ok": False, "error": "permission requires a history_session_id and one valid computer_use, browser_mode or browser_use value"}
         requested = True
+    audit = {"tools_change": "not_started"}
+
+    def report(result):
+        if permission is not _TOOLS_UNSET and check_only is not True:
+            phase = audit["tools_change"]
+            event = {"operation": "permission-restart", "recipient": session,
+                     "status": ("warning" if result.get("warning") else "ok") if result.get("ok") else "error",
+                     "reason": result.get("error") or result.get("warning"),
+                     "tools_change": phase, "tools_change_cleared": audit.get("tools_change_cleared"),
+                     "tools_change_reason": audit.get("tools_change_reason")}
+            print("[orrery action] " + json.dumps(event), file=sys.stderr, flush=True)
+        return result
+
     if not requested and not os.path.lexists(os.path.join(RUNTIME_DIR, "child-agents", f"{session}.json")):
         return _do_jump(session, open_terminal=open_terminal)
     try:
         module = _child_resume_module()
         with module.tools_change_lock(pathlib.Path(RUNTIME_DIR), session):
             if requested:
-                return _jump_with_tools(session, module, base=base, tools=tools,
-                                        permission=None if permission is _TOOLS_UNSET else permission,
-                                        open_terminal=open_terminal, check_only=check_only is True)
+                return report(_jump_with_tools(session, module, base=base, tools=tools,
+                                               permission=None if permission is _TOOLS_UNSET else permission,
+                                               open_terminal=open_terminal, check_only=check_only is True, audit=audit))
             return _do_jump(session, open_terminal=open_terminal)
     except _ResumeCapabilityError as exc:
-        return _resume_unavailable(exc.code)
+        return report(_resume_unavailable(exc.code))
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        return {"ok": False, "error": str(exc), "resume_capability": "config_unrestorable"}
+        return report({"ok": False, "error": str(exc), "resume_capability": "config_unrestorable"})
 
 
 def _permission_stopped_terminal(session, sessions):
@@ -8665,7 +8684,7 @@ def _permission_stopped_terminal(session, sessions):
     return f"{live['session_id']}|{live['created']}|{live['server_pid']}"
 
 
-def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=None, check_only=False):
+def _jump_with_tools(session, module, *, base, tools, open_terminal, audit, permission=None, check_only=False):
     boot = module.boot_time()
     live = _child_session_live(session, boot)
     if live is None:
@@ -8680,6 +8699,7 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
             return {"ok": False, "error": "Exit the agent and confirm it has stopped before changing tools"}
     selection = _child_tools_module()
     runtime = pathlib.Path(RUNTIME_DIR)
+    browser_warning = ""
     if permission is not None:
         sid = permission["history_session_id"]
         current = sessions.get(session)
@@ -8777,6 +8797,13 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
                 raise ValueError(reason)
         spec = selection.normalize(old["base"], selection.change_permission(
             old["tools"], permission, servers, managed_screen=wsl_agy))
+        if (permission.get("browser_mode") == "personal"
+                and provider in {"codex", "dsh", "hermes", "antigravity"}):
+            status = _personal_browser_status({provider}, selection, config if provider == "codex" else {})
+            if provider in status:
+                browser_warning = status[provider]["reason"]
+                if browser_warning != chrome_readiness.APPROVAL_REASON:
+                    raise ValueError(browser_warning)
         if provider == "claude":
             selection.check_provider(spec, provider)
             if "browser_mode" in permission:
@@ -8835,9 +8862,25 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
             owner_parameters = _mcp_tool_parameters("register_agent")
             if owner_parameters is None or "existing_agent_id" not in owner_parameters:
                 return {"ok": False, "error": "ORRERY Mail could not confirm existing-owner resume support"}
-        return {"ok": True, "action": "validated"}
+        return {"ok": True, "action": "validated",
+                **({"warning": browser_warning} if browser_warning else {})}
     generation = module.begin_tools_change(runtime, session, state, record, candidate, profile,
                                            **({"adopt": True} if adopt else {}))
+    audit["tools_change"] = "pending"
+    audit["tools_change_cleared"] = False
+
+    def finish(commit):
+        try:
+            module.finish_tools_change(runtime, session, generation, commit=commit)
+        except Exception as exc:
+            audit["tools_change_reason"] = str(exc)
+            persisted = _card_private_mapping(runtime / "child-agents" / f"{session}.json")
+            if persisted:
+                audit["tools_change_cleared"] = "tools_change_generation" not in persisted
+            raise
+        audit["tools_change"] = "committed" if commit else "rolled_back"
+        audit["tools_change_cleared"] = True
+
     try:
         with module.owned_tools_change(generation):
             _invalidate_resume_capability_cache(session)
@@ -8855,18 +8898,20 @@ def _jump_with_tools(session, module, *, base, tools, open_terminal, permission=
             result = {"ok": False, "error": "The child became active before the tools-changing resume"}
     except Exception:
         # Only this generation may restore the previous selection/config.
-        module.finish_tools_change(runtime, session, generation, commit=False)
+        finish(False)
         raise
+    if result.get("ok") and browser_warning:
+        result["warning"] = " · ".join(filter(None, (result.get("warning"), browser_warning)))
     if result.get("ok"):
         try:
-            module.finish_tools_change(runtime, session, generation, commit=True)
+            finish(True)
         except Exception:
             # Launch has already been accepted. Do not undo a selection used
             # by a running child or report that accepted launch as a failure.
             result = {**result, "warning": "; ".join(filter(None, (
                 result.get("warning"), f"Tools change ({generation}) cleanup is pending; recover this generation before another resume")))}
     elif not result.get("resume_confirmation_pending"):
-        module.finish_tools_change(runtime, session, generation, commit=False)
+        finish(False)
     _invalidate_resume_capability_cache(session)
     if result.get("ok"):
         result = {**result, "tools_changed": True, "base": spec["base"], "tools": spec["tools"]}
@@ -9145,28 +9190,36 @@ def _agent_name_comparison_key(name: str) -> str:
     return (name or "").replace("-", "").casefold()
 
 
-def _spawn_name_status(name: str) -> str:
-    """Return available/occupied/unknown; database failures fail closed."""
+def _spawn_name_keys(name: str):
     if FRESH_MODE:
         from agentstack_mail.storage_origin_contract import name_keys
+        return name_keys(name)
+    return (_agent_name_comparison_key(name),)
+
+
+def _spawn_occupied_name_keys() -> set[str] | None:
+    if FRESH_MODE:
         roster = asyncio.run(_fresh_backend().roster())
-        return 'occupied' if any(set(name_keys(name)).intersection(name_keys(a['name'])) for a in roster['agents']) else 'available'
-    if not name or not os.path.exists(DB_PATH):
-        return "unknown"
-    comparison_key = _agent_name_comparison_key(name)
+        return {key for agent in roster["agents"] for key in _spawn_name_keys(agent["name"])}
+    if not os.path.exists(DB_PATH):
+        return None
     try:
         with _db() as con:
-            registered_names = (
-                row[0] for row in con.execute("SELECT name FROM agents")
-                if isinstance(row[0], str)
-            )
-            occupied = any(
-                _agent_name_comparison_key(registered) == comparison_key
-                for registered in registered_names
-            )
-        return "occupied" if occupied else "available"
+            return {key for (name,) in con.execute("SELECT name FROM agents")
+                    if isinstance(name, str) for key in _spawn_name_keys(name)}
     except sqlite3.Error:
+        return None
+
+
+def _spawn_name_status(name: str, occupied: set[str] | None = None) -> str:
+    """Return available/occupied/unknown; database failures fail closed."""
+    if not name:
         return "unknown"
+    if occupied is None:
+        occupied = _spawn_occupied_name_keys()
+    if occupied is None:
+        return "unknown"
+    return "occupied" if occupied.intersection(_spawn_name_keys(name)) else "available"
 
 
 def _spawn_name_vocabulary() -> tuple[list[str], list[str]]:
@@ -9213,6 +9266,20 @@ def suggest_spawn_name(scientist: str, attempts: int = 20) -> str | None:
         if _spawn_name_status(candidate) == "available":
             return candidate
     return None
+
+
+def suggest_spawn_adjectives(scientist: str) -> list[str] | None:
+    """Check all adjective suggestions against the same identities as Launch."""
+    if not re.fullmatch(r"[A-Za-z]{2,63}", scientist or ""):
+        return None
+    scientists, adjectives = _spawn_name_vocabulary()
+    if scientist not in scientists:
+        return None
+    occupied = _spawn_occupied_name_keys()
+    if occupied is None:
+        return None
+    return [adjective for adjective in adjectives
+            if _spawn_name_status(f"{adjective}-{scientist}", occupied) == "available"]
 
 
 def _suggest_any_spawn_name(attempts: int = 75) -> str | None:
@@ -9501,10 +9568,10 @@ def _native_browser_directories(dirs):
     return available
 
 
-def _spawn_browser_modes():
+def _spawn_browser_modes(*, unavailable=None):
     tools = _child_tools_module()
     config = tools.native_codex_config(resume=_child_resume_module())
-    return tools.launch_browser_modes(config)
+    return tools.launch_browser_modes(config, unavailable=unavailable)
 
 
 def _spawn_browser_catalog():
@@ -9512,22 +9579,26 @@ def _spawn_browser_catalog():
     config = tools.native_codex_config(resume=_child_resume_module())
     modes = tools.launch_browser_modes(config)
     catalog = {"browser_modes": modes}
-    wsl = _is_wsl()
     harnesses = {key for key in ("codex", "dsh", "hermes", "antigravity") if "personal" in modes.get(key, ())}
-    if harnesses and (sys.platform == "darwin" or wsl):
-        # Claude's personal mode uses Claude in Chrome. An explicit Codex
-        # channel can likewise connect to a different Chrome installation.
-        if "codex" in harnesses:
-            custom = tools._native_codex_browser(config, explicit=True)
-            if custom and any(arg.split("=", 1)[0] == "--channel" for arg in custom[1].get("args", ())):
-                harnesses.discard("codex")
-        if harnesses:
-            reason, unavailable = chrome_readiness.personal_browser_reason(wsl=wsl)
-            if reason:
-                catalog["personal_browser_status"] = {
-                    key: {"reason": reason, "unavailable": unavailable} for key in sorted(harnesses)
-                }
+    if status := _personal_browser_status(harnesses, tools, config):
+        catalog["personal_browser_status"] = status
     return catalog
+
+
+def _personal_browser_status(harnesses, tools, config):
+    wsl = _is_wsl()
+    if sys.platform != "darwin" and not wsl:
+        return {}
+    # Claude uses its extension. An explicit Codex channel may target a
+    # different Chrome installation than the default-profile probe.
+    if "codex" in harnesses:
+        custom = tools._native_codex_browser(config, explicit=True)
+        if custom and any(arg.split("=", 1)[0] == "--channel" for arg in custom[1].get("args", ())):
+            harnesses = harnesses - {"codex"}
+    if not harnesses:
+        return {}
+    reason, unavailable = chrome_readiness.personal_browser_reason(wsl=wsl)
+    return {key: {"reason": reason, "unavailable": unavailable} for key in sorted(harnesses)} if reason else {}
 
 
 def _spawn_computer_catalog():
@@ -9823,10 +9894,23 @@ def _spawn_launch_record(name: str, result: dict) -> None:
 
 
 _SPAWN_REASON_PREFIX = "[spawn_child] reason: "
+_SPAWN_LOG_LOCK = threading.Lock()
 
 
-def _spawn_log_tail_and_reason(log_path, start_offset: int = 0) -> tuple[str, str]:
-    """The current launch interval's tail and first applicable cause line.
+def _archive_spawn_log(log):
+    """Append one completed launch to the existing dashboard history."""
+    path = Path(log.name)
+    log.close()
+    try:
+        with _SPAWN_LOG_LOCK, path.open("rb") as source, (path.parent / "spawn.log").open("ab") as history:
+            shutil.copyfileobj(source, history)
+        path.unlink()
+    except OSError as exc:
+        logging.warning("Could not archive launcher output at %s: %s", path, exc)
+
+
+def _spawn_log_tail_and_reason(log_path) -> tuple[str, str]:
+    """The current launch's tail and first applicable cause line.
 
     spawn_child.sh writes "[spawn_child] reason: ..." when it stops on
     something only the user can resolve (Claude Code's first-run setup, its
@@ -9835,7 +9919,6 @@ def _spawn_log_tail_and_reason(log_path, start_offset: int = 0) -> tuple[str, st
     """
     try:
         with open(log_path, "rb") as f:
-            f.seek(start_offset)
             text = f.read().decode("utf-8", errors="replace")
     except OSError:
         return "", ""
@@ -9895,6 +9978,7 @@ def spawn_launch_status(name: str) -> dict:
         "error": result.get("error"),
         "detail": result.get("detail"),
         "result": result if entry["state"] != "launching" else None,
+        **({"phase": result["phase"]} if result.get("phase") else {}),
     }
 
 
@@ -9948,6 +10032,9 @@ class SpawnLaunchSpec:
 
 # How long a launcher may take to report readiness before it is signalled.
 _SPAWN_READINESS_TIMEOUT_SECONDS = 120
+# A checkout can spend minutes materializing a large tree before a CLI starts.
+_SPAWN_WORKTREE_TIMEOUT_SECONDS = 900
+_SPAWN_PHASE_POLL_SECONDS = 0.25
 # Canonical Claude/Codex launchers have no cleanup of their own: TERM, then
 # KILL shortly after.
 _SPAWN_TERMINATE_GRACE_SECONDS = 5.0
@@ -9977,7 +10064,7 @@ def _spawn_termination_grace(spec: SpawnLaunchSpec) -> float:
     return _SPAWN_TERMINATE_GRACE_SECONDS
 
 
-def _spawn_verdict_deadline_seconds(spec: SpawnLaunchSpec) -> int:
+def _spawn_verdict_deadline_seconds(spec: SpawnLaunchSpec, *, worktree: bool = False) -> int:
     """Seconds the page should wait for an asynchronous launch verdict.
 
     Derived only from server constants and the trusted spec: readiness timeout,
@@ -9987,7 +10074,41 @@ def _spawn_verdict_deadline_seconds(spec: SpawnLaunchSpec) -> int:
     worst = (_SPAWN_READINESS_TIMEOUT_SECONDS + _spawn_termination_grace(spec)
              + _SPAWN_KILL_REAP_SECONDS + _SPAWN_FAILURE_CLEANUP_SECONDS
              + _SPAWN_WATCH_MARGIN_SECONDS)
+    if worktree:
+        worst += _SPAWN_WORKTREE_TIMEOUT_SECONDS + _SPAWN_READINESS_TIMEOUT_SECONDS
     return max(_SPAWN_DEFAULT_WATCH_SECONDS, math.ceil(worst))
+
+
+def _wait_spawn_with_checkout(proc, phase_file: Path, set_phase):
+    """Pause CLI readiness while git is checking out the worktree."""
+    stage = None
+    deadline = time.monotonic() + _SPAWN_READINESS_TIMEOUT_SECONDS
+
+    def observe():
+        nonlocal stage, deadline
+        try:
+            observed = phase_file.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            return
+        if ((observed == "checkout" and stage is None)
+                or (observed == "startup" and stage != "startup")):
+            stage = observed
+            seconds = (_SPAWN_WORKTREE_TIMEOUT_SECONDS if stage == "checkout"
+                       else _SPAWN_READINESS_TIMEOUT_SECONDS)
+            deadline = time.monotonic() + seconds
+            set_phase(stage)
+
+    while True:
+        observe()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("spawn launcher", 0)
+        try:
+            code = proc.wait(timeout=min(remaining, _SPAWN_PHASE_POLL_SECONDS))
+        except subprocess.TimeoutExpired:
+            continue
+        observe()
+        return code
 
 
 # Credential states that are a copy interrupted midway (or never started) and
@@ -10450,7 +10571,7 @@ def spawn_with_launch_spec(payload: dict, spec: SpawnLaunchSpec) -> dict:
     def discard_handoff() -> None:
         if payload.get("dry_run") is True or handoff.get('cleanup_unknown'):
             return
-        for path in spec.handoff_paths:
+        for path in (*spec.handoff_paths, *handoff.get("phase_paths", ())):
             try:
                 os.unlink(path)
             except FileNotFoundError:
@@ -10547,7 +10668,11 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     program = spec.program
     model_str = spec.model
     effort = spec.effort
-    model_notice = {"model_note": spec.model_note} if spec.model_note else {}
+    launch_notices = {"model_note": spec.model_note} if spec.model_note else {}
+    if spec.worktree_required and not request["worktree"]:
+        launch_notices["worktree_notice"] = (
+            "Delegated Antigravity agents use a worktree to store their managed .agents settings."
+        )
 
     if standalone and not spec.standalone_supported:
         return {"ok": False,
@@ -10573,7 +10698,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     if request["dry_run"]:
         return {
             "ok": True, "dry_run": True, "provider": provider,
-            **model_notice,
+            **launch_notices,
             "model": model_str, "effort": effort, "dir": work_dir,
             "standalone": standalone, "worktree": worktree,
             "argv": _spawn_argv(request, spec, requested_name or "<child-name>",
@@ -10641,7 +10766,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         registration_status = "may remain" if registration_may_remain else "remains"
         result = {
             "ok": False,
-            **model_notice,
+            **launch_notices,
             "error": (
                 f"{error}; child registration '{child_name}' {registration_status} because "
                 "the dashboard server has no permission to delete it"
@@ -10729,7 +10854,6 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     token_created = False
     log_fh = None
     log_path = None
-    log_start_offset = 0
 
     token_key = re.sub(r"[^A-Za-z0-9_.-]", "_", child_name)
     owner_credential = os.path.join(RUNTIME_DIR, f"agent_token_{token_key}")
@@ -10820,7 +10944,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         if log_path is None:
             # Logging failed before the launcher started: no session ownership.
             return False
-        tail, _ = _spawn_log_tail_and_reason(log_path, log_start_offset)
+        tail, _ = _spawn_log_tail_and_reason(log_path)
         if any(marker in tail for marker in (
                 "Harness start/stop unconfirmed; recovery state retained",
                 "[spawn_child] creation unconfirmed; recovery state and worktree retained")):
@@ -10945,12 +11069,22 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
     current_path = env.get("PATH", "")
     if home_local not in current_path.split(":"):
         env["PATH"] = f"{home_local}:{current_path}" if current_path else home_local
+    env.pop("AGENTSTACK_SPAWN_PHASE_FILE", None)
+    phase_file = None
+    phase = None
+    pending = None
     try:
+        if worktree:
+            fd, phase_path = tempfile.mkstemp(prefix="checkout-", dir=token_dir)
+            os.close(fd)
+            phase_file = Path(phase_path)
+            handoff["phase_paths"] = [phase_path]
+            env["AGENTSTACK_SPAWN_PHASE_FILE"] = phase_path
         log_dir = os.path.join(HERE, "logs")
         os.makedirs(log_dir, exist_ok=True)
-        log_fh = open(os.path.join(log_dir, "spawn.log"), "ab", buffering=0)
+        log_fh = tempfile.NamedTemporaryFile(
+            dir=log_dir, prefix=f"spawn-{child_name}-", suffix=".log", mode="w+b", buffering=0, delete=False)
         log_path = log_fh.name
-        log_start_offset = log_fh.tell()
         ts = datetime.now(timezone.utc).isoformat()
         log_fh.write(
             f"\n=== {ts} spawn child={child_name} parent={parent} "
@@ -10958,14 +11092,16 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             f"standalone={standalone} worktree={worktree} ===\n".encode())
         if spec.model_note:
             log_fh.write(f"note: {spec.model_note}\n".encode())
+        if "worktree_notice" in launch_notices:
+            log_fh.write(f"note: {launch_notices['worktree_notice']}\n".encode())
         proc = subprocess.Popen(args, stdout=log_fh, stderr=log_fh, env=env,
                                 start_new_session=True)
 
         # The launcher performs readiness/death detection and consumes the
         # one-shot token before returning.  Wait for that verdict instead of
         # treating a briefly-created tmux session as success.
-        def signal_launcher(signum: int) -> None:
-            if spec.signal_process_group:
+        def signal_launcher(signum: int, *, process_group: bool) -> None:
+            if process_group:
                 # start_new_session made the launcher its group leader, so the
                 # group also reaches whichever helper it is waiting on.
                 os.killpg(proc.pid, signum)
@@ -10976,16 +11112,16 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
 
         grace = _spawn_termination_grace(spec)
 
-        def stop_launcher() -> bool:
+        def stop_launcher(*, process_group: bool) -> bool:
             """TERM the launcher; True when it exited within its grace."""
             try:
-                signal_launcher(signal.SIGTERM)
+                signal_launcher(signal.SIGTERM, process_group=process_group)
                 proc.wait(timeout=grace)
                 return True
             except Exception:  # noqa: BLE001
                 pass
             try:
-                signal_launcher(signal.SIGKILL)
+                signal_launcher(signal.SIGKILL, process_group=process_group)
             except Exception:  # noqa: BLE001
                 pass
             try:
@@ -10994,18 +11130,29 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                 pass
             return False
 
+        def set_phase(value):
+            nonlocal phase
+            phase = value
+            if pending is not None:
+                _spawn_launch_record(child_name, {**pending, "phase": value})
+
         def settle() -> dict:
             if hasattr(proc, "wait"):
                 try:
-                    returncode = proc.wait(timeout=_SPAWN_READINESS_TIMEOUT_SECONDS)
+                    returncode = (_wait_spawn_with_checkout(proc, phase_file, set_phase) if phase_file
+                                  else proc.wait(timeout=_SPAWN_READINESS_TIMEOUT_SECONDS))
                 except subprocess.TimeoutExpired:
-                    stopped = stop_launcher()
+                    process_group = spec.signal_process_group or phase == "checkout"
+                    stopped = stop_launcher(process_group=process_group)
                     kill_spawn_session()
-                    error = ("spawn launcher did not finish readiness checks "
-                             f"within {_SPAWN_READINESS_TIMEOUT_SECONDS:g}s")
-                    if stopped or not spec.signal_process_group:
+                    if phase == "checkout":
+                        error = f"worktree checkout did not finish within {_SPAWN_WORKTREE_TIMEOUT_SECONDS:g}s"
+                    else:
+                        error = ("spawn launcher did not finish readiness checks "
+                                 f"within {_SPAWN_READINESS_TIMEOUT_SECONDS:g}s")
+                    if stopped or not process_group:
                         return failed_spawn_result(
-                            error, registration_may_remain=spec.signal_process_group)
+                            error, registration_may_remain=process_group)
                     # The launcher's own cleanup was killed midway, so nothing
                     # it created is known to be gone.  Say so, and keep a
                     # credential that can still release and retire it.
@@ -11018,8 +11165,9 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                         cleanup_incomplete=True, **fields)
                 if returncode != 0:
                     kill_spawn_session()
-                    tail, reason = _spawn_log_tail_and_reason(log_path, log_start_offset)
-                    error = f"spawn launcher exited with status {returncode}"
+                    tail, reason = _spawn_log_tail_and_reason(log_path)
+                    action = "worktree checkout" if phase == "checkout" else "spawn launcher"
+                    error = f"{action} exited with status {returncode}"
                     return failed_spawn_result(
                         f"{reason} ({error})" if reason else error,
                         detail=tail)
@@ -11027,14 +11175,14 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             probe = _tmux_run(['has-session', '-t', f'={child_name}'], capture_output=True, text=True)
             if probe.returncode:
                 kill_spawn_session()
-                tail, reason = _spawn_log_tail_and_reason(log_path, log_start_offset)
+                tail, reason = _spawn_log_tail_and_reason(log_path)
                 error = "spawn launcher exited before a live tmux session was created"
                 return failed_spawn_result(
                     f"{reason} ({error})" if reason else error,
                     detail=tail)
             return {
                 "ok": True,
-                **model_notice,
+                **launch_notices,
                 "child_name": child_name,
                 "requested_name": requested_name,
                 "name_substituted": name_substituted,
@@ -11054,7 +11202,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
             # rest of the UI. The thread owns the log handle from here.
             pending = {
                 "ok": True,
-                **model_notice,
+                **launch_notices,
                 "pending": True,
                 "child_name": child_name,
                 "requested_name": requested_name,
@@ -11068,11 +11216,10 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                 "effort": effort or None,
                 # How long the page waits for the verdict; from the spec and
                 # server constants only, never from the payload.
-                "verdict_deadline_seconds": _spawn_verdict_deadline_seconds(spec),
+                "verdict_deadline_seconds": _spawn_verdict_deadline_seconds(spec, worktree=worktree),
             }
             _spawn_launch_record(child_name, pending)
             owned_log = log_fh
-            log_fh = None
 
             def runner() -> None:
                 try:
@@ -11081,11 +11228,12 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
                     kill_spawn_session()
                     verdict = failed_spawn_result(f"spawn launch failed: {e}")
                 finally:
-                    owned_log.close()
+                    _archive_spawn_log(owned_log)
                     discard_handoff()
                 _spawn_launch_record(child_name, verdict)
 
             threading.Thread(target=runner, name=f"spawn-{child_name}", daemon=True).start()
+            log_fh = None
             handoff["transferred"] = True
             return pending
 
@@ -11095,7 +11243,7 @@ def _spawn_launch(payload: dict, request: dict, spec: SpawnLaunchSpec,
         return failed_spawn_result(f"spawn launch failed: {e}")
     finally:
         if log_fh is not None:
-            log_fh.close()
+            _archive_spawn_log(log_fh)
 
     return result
 
@@ -11212,6 +11360,42 @@ def do_exit(session: str, *, history_session_id=_TOOLS_UNSET) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+_EXIT_REFUSAL_LOCK = threading.Lock()
+_EXIT_REFUSAL_HISTORY = 3
+_EXIT_REFUSAL_FRAME_BYTES = 512 * 1024
+
+
+def _write_exit_refusal_frame(session, reason, frame):
+    """Retain only local, private diagnostic frames beside the child state."""
+    if frame is None:
+        logging.warning("Exit refused session=%s reason=%s frame unavailable", session, reason)
+        return
+    children = Path(RUNTIME_DIR) / "child-agents"
+    directory = children / f"{session}.exit-refusals"
+    try:
+        with _EXIT_REFUSAL_LOCK:
+            for path in (children, directory):
+                path.mkdir(mode=0o700, parents=path == children, exist_ok=True)
+                info = path.lstat()
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    raise OSError("Exit diagnostic directory is not private")
+            captured = frame["ansi"].encode("utf-8", "replace")
+            metadata = {key: value for key, value in frame.items() if key != "ansi"}
+            metadata.update(reason=reason, truncated=len(captured) > _EXIT_REFUSAL_FRAME_BYTES)
+            with tempfile.NamedTemporaryFile(dir=directory, prefix=f"{time.time_ns():020d}-",
+                                             suffix=".ansi", delete=False) as evidence:
+                evidence.write(json.dumps(metadata).encode("utf-8") + b"\n")
+                evidence.write(captured[:_EXIT_REFUSAL_FRAME_BYTES])
+                path = Path(evidence.name)
+            previous = sorted(directory.glob("*.ansi"), reverse=True)
+            for expired in previous[_EXIT_REFUSAL_HISTORY:]:
+                expired.unlink(missing_ok=True)
+    except OSError as exc:
+        logging.warning("Exit refused session=%s reason=%s frame unavailable: %s", session, reason, exc)
+    else:
+        logging.warning("Exit refused session=%s reason=%s frame=%s", session, reason, path)
+
+
 def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
     """running/finished エージェントに `/exit` を送り、Claude を graceful exit させる。
 
@@ -11321,7 +11505,8 @@ def _do_exit(session: str, *, sessions=None, verified_program=None) -> dict:
     error, interrupted = _MODE_API['runtime_tmux_api']()['submit_terminal_exit'](
         lambda *args, **kwargs: _tmux_run(list(args), timeout=3, capture_output=True, text=True, **kwargs),
         lambda: observed_target() == observed, pane, interrupt_key=interrupt_key,
-        activity=lambda screen: harness_activity.parse_activity(screen, program))
+        activity=lambda screen: harness_activity.parse_activity(screen, program),
+        on_refusal=lambda reason, frame: _write_exit_refusal_frame(session, reason, frame))
     if error:
         return {"ok": False, "error": error}
     if interrupted:
@@ -11659,8 +11844,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path=='/api/name-status':
                 payload=dict(name=query.get('name',[''])[0],status=_spawn_name_status(query.get('name',[''])[0]))
             elif path=='/api/suggest-name':
-                payload=dict(name=suggest_spawn_name(query.get('scientist',[''])[0]))
-                if not payload['name']:raise ValueError('name_unavailable')
+                scientist = query.get('scientist', [''])[0]
+                if query.get('choices') == ['1']:
+                    choices = suggest_spawn_adjectives(scientist)
+                    if choices is None:raise ValueError('name_unavailable')
+                    payload = dict(adjectives=choices)
+                else:
+                    payload = dict(name=suggest_spawn_name(scientist))
+                    if not payload['name']:raise ValueError('name_unavailable')
             elif path=='/api/spawn-status':
                 if set(query)-{'name','mail_instance_id','mail_agent_id'}:raise ValueError('invalid_query')
                 ref=None
@@ -11947,9 +12138,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/suggest-name":
             query = parse_qs(urlparse(self.path).query)
             scientist = (query.get("scientist") or [""])[0]
-            name = suggest_spawn_name(scientist)
-            payload = {"name": name} if name else {"error": "no available name found"}
-            self._send(200 if name else 409, json.dumps(payload).encode(), "application/json; charset=utf-8")
+            if query.get("choices") == ["1"]:
+                choices = suggest_spawn_adjectives(scientist)
+                ok = choices is not None
+                payload = {"adjectives": choices} if ok else {"error": "name availability could not be verified"}
+            else:
+                name = suggest_spawn_name(scientist)
+                ok = bool(name)
+                payload = {"name": name} if ok else {"error": "no available name found"}
+            self._send(200 if ok else 409, json.dumps(payload).encode(), "application/json; charset=utf-8")
         elif path == "/api/fs/dirs":
             query = parse_qs(urlparse(self.path).query)
             payload = spawn_directory_suggestions((query.get("path") or [""])[0])

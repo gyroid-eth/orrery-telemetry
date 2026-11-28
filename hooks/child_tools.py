@@ -852,6 +852,10 @@ def _windows_browser_npx():
     raise ToolsError("My Chrome requires Windows Node.js with npm when running in WSL")
 
 
+WSL_TEMPORARY_BROWSER_MISSING = "Temporary Chrome needs Chrome or Chromium installed inside WSL."
+WSL_TEMPORARY_BROWSER_INSTALL = "sudo apt install ./google-chrome-stable_current_amd64.deb"
+
+
 def _temporary_browser_runtime(home=None):
     runtime = _browser_npx(home)
     if sys.platform != "linux" or not running_in_wsl():
@@ -862,7 +866,7 @@ def _temporary_browser_runtime(home=None):
         command = shutil.which(name)
         if command and Path(command).resolve().suffix.lower() != ".exe":
             return runtime, ["--executablePath", command]
-    raise ToolsError("Install Google Chrome or Chromium inside WSL to use Temporary Chrome")
+    raise ToolsError(WSL_TEMPORARY_BROWSER_MISSING)
 
 
 def _browser_mcp(mode, codex_config=None):
@@ -882,12 +886,20 @@ def _browser_mcp(mode, codex_config=None):
     return "chrome-devtools", {**runtime, "args": args}
 
 
-def launch_browser_modes(codex_config, *, home=None):
+def launch_browser_modes(codex_config, *, home=None, unavailable=None):
     choices = {key: ["off"] for key in ("claude-code", "codex", "dsh", "hermes")}
     try:
         _temporary_browser_runtime(home)
-    except ToolsError:
+    except ToolsError as error:
         have_temporary = False
+        if unavailable is not None and sys.platform == "linux" and running_in_wsl():
+            detail = {"reason": str(error)}
+            if str(error) == WSL_TEMPORARY_BROWSER_MISSING:
+                detail.update(
+                    instruction="On x86-64 Ubuntu, download the official Chrome .deb and run this in its folder.",
+                    command=WSL_TEMPORARY_BROWSER_INSTALL,
+                )
+            unavailable["temporary"] = detail
     else:
         have_temporary = True
         for modes in choices.values():
@@ -1474,6 +1486,9 @@ def prompt_text(spec: dict, provider: str, standalone: bool = False) -> str:
         head += " The browser integration is off for this launch."
     elif mode:
         head += " The Browser setting is " + ("Temporary Chrome." if mode == "temporary" else "My Chrome.")
+        if mode == "personal" and provider != "claude":
+            head += (' If Chrome shows “Allow remote debugging?”, wait for the operator to allow '
+                     'the connection. If the browser tool times out connecting, report that to ' + report_to + '.')
     screen = spec["tools"].get("screen")
     if screen_mode(spec) is not None:
         head += " The operator can change the orrery-screen permission while this child is running."

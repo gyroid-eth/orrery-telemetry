@@ -18,6 +18,14 @@ esac
 _AGS_PROJECT_CONTEXT_DIR="$(CDPATH= cd -- "$_AGS_PROJECT_CONTEXT_DIR" && pwd -P)"
 unset _ags_project_context_src
 
+# The dashboard owns this per-launch marker. Direct launcher calls have none.
+agentstack_record_spawn_phase() {
+    local marker="${AGENTSTACK_SPAWN_PHASE_FILE:-}"
+    if [[ -n "$marker" && -f "$marker" && ! -L "$marker" ]]; then
+        printf '%s\n' "$1" > "$marker" || true
+    fi
+}
+
 # Read one literal `export NAME=value` assignment without sourcing env.sh.
 # The installer writes values with Python shlex.quote; shlex reverses that
 # quoting without expanding variables, command substitutions, or shell code.

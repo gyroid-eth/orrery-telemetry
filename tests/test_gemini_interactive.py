@@ -1,4 +1,4 @@
-"""Managed macOS Antigravity child handoff, permissions, roster and resume."""
+"""Managed Antigravity child handoff, permissions, roster and resume."""
 
 import json
 import subprocess
@@ -184,6 +184,57 @@ def test_session_settings_allow_only_the_selected_screen_tools(managed, monkeypa
     assert json.loads(settings.read_text()) == original
 
 
+@pytest.mark.parametrize("mode", ["off", "temporary", "personal"])
+@pytest.mark.parametrize("resume", [False, True])
+def test_browser_approval_tracks_current_choice_and_preserves_explicit_rules(
+        managed, monkeypatch, tmp_path, mode, resume):
+    _, cwd, state = managed
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    paths = tmp_path / ".gemini/antigravity-cli"
+    paths.mkdir(parents=True)
+    settings = paths / "settings.json"
+    deny = ["mcp(chrome-devtools/new_page)", "execute_url(example.com)"]
+    ask = ["mcp(chrome-devtools/take_screenshot)"]
+    original = {"permissions": {"deny": deny, "ask": ask, "allow": ["read_file(.)"]}}
+    settings.write_text(json.dumps(original))
+    definition = {"command": "/fixture/npx", "args": ["-y", "chrome-devtools-mcp@latest", "--isolated"]}
+    browser = "chrome-devtools"
+    monkeypatch.setattr(agy.child_tools, "_browser_mcp", lambda _: (browser, definition))
+    child_resume._atomic_json(cwd / ".agents/mcp_config.json", {
+        "mcpServers": {browser: definition} if mode != "off" else {},
+    })
+    previous = ("temporary" if mode == "off" else "off") if resume else mode
+    plan = {**state["gemini_launch"], "tools": [f"browser-mode:{previous}"]}
+    selection = agy.child_tools.normalize(tools={"browser_mode": mode})
+    entry = {"conversation": SID, "screen_mode": "off", "selection": selection} if resume else {"prompt": "First task"}
+    args = agy.command(plan, cwd, **entry)
+    permissions = json.loads(args[args.index("--settings") + 1])["permissions"]
+    browser_rules = [rule for rule in permissions["allow"] if rule.startswith("mcp(chrome-devtools/")]
+    assert ("mcp(chrome-devtools/list_pages)" in browser_rules) == (mode != "off")
+    if mode == "off":
+        assert not browser_rules
+    assert "mcp(chrome-devtools/*)" not in browser_rules
+    assert deny[0] not in browser_rules and ask[0] not in browser_rules
+    assert not any(rule.startswith("execute_url(") for rule in permissions["allow"])
+    assert permissions["deny"] == deny and permissions["ask"] == ask
+    assert json.loads(settings.read_text()) == original
+
+
+def test_foreign_chrome_server_is_not_approved_when_browser_is_on(managed, monkeypatch, tmp_path):
+    _, cwd, state = managed
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(agy.child_tools, "_browser_mcp", lambda _: ("chrome-devtools", {
+        "command": "/fixture/npx", "args": ["-y", "chrome-devtools-mcp@latest"],
+    }))
+    child_resume._atomic_json(cwd / ".agents/mcp_config.json", {
+        "mcpServers": {"chrome-devtools": {"command": "/fixture/foreign"}},
+    })
+    plan = {**state["gemini_launch"], "tools": ["browser-mode:temporary"]}
+    args = agy.command(plan, cwd, prompt="First task")
+    approvals = json.loads(args[args.index("--settings") + 1])["permissions"]["allow"]
+    assert not any(rule.startswith("mcp(chrome-devtools/") for rule in approvals)
+
+
 def test_edit_uses_shared_reservation_and_shell_stays_in_the_worktree(managed, monkeypatch):
     runtime, cwd, _ = managed
     calls = []
@@ -339,7 +390,7 @@ def test_delegated_first_task_names_the_configured_mcp_tools(managed, monkeypatc
     monkeypatch.setattr(agy.child_tools, "sys", SimpleNamespace(platform=platform))
     monkeypatch.setattr(agy.child_tools, "running_in_wsl", lambda: platform == "linux")
     monkeypatch.setattr(agy.child_tools, "_browser_mcp", lambda mode: (
-        "chrome-devtools", {"command": "/fixture/chrome", "args": [mode]}))
+        "chrome-devtools", {"command": "/fixture/npx", "args": ["-y", "chrome-devtools-mcp@latest", mode]}))
     monkeypatch.setenv("AGENTSTACK_PROJECT_KEY", PROJECT)
     monkeypatch.setenv("TMUX_PANE", "%4")
     monkeypatch.chdir(cwd)
@@ -353,10 +404,12 @@ def test_delegated_first_task_names_the_configured_mcp_tools(managed, monkeypatc
         assert env["PARENT_AGENT"] == "FixtureParent"
         config = json.loads((cwd / ".agents/mcp_config.json").read_text())
         assert ("chrome-devtools" in config["mcpServers"]) == (browser_mode != "off")
-        assert config["mcpServers"]["orrery-mail"] == agy._mail_server()
+        assert config["mcpServers"]["orrery-mail"] == agy._eager_tools(agy._mail_server(), agy.MAIL_TOOLS)
         rules = json.loads(argv[argv.index("--settings") + 1])["permissions"]["allow"]
         assert "mcp(orrery-mail/send_message)" in rules
-        assert all("chrome-devtools" not in rule for rule in rules)
+        assert ("mcp(chrome-devtools/list_pages)" in rules) == (browser_mode != "off")
+        if browser_mode != "off":
+            assert config["mcpServers"]["chrome-devtools"]["tools"]["list_pages"] == {"eager": True}
         launches.append(argv[-2:])
         return SimpleNamespace(returncode=0)
 
@@ -368,11 +421,11 @@ def test_delegated_first_task_names_the_configured_mcp_tools(managed, monkeypatc
     assert agy.run(runtime, NAME, task_file=task) == 0
     [(flag, prompt)] = launches
     assert flag == "-i" and prompt.endswith("\n\n" + original)
-    assert "`call_mcp_tool` with `ServerName: orrery-mail`" in prompt
-    assert "`ToolName: send_message`" in prompt
-    assert 'Arguments: {"to": ["FixtureParent"], "subject": "<subject>", "body_md": "<message>"}' in prompt
-    assert ("`ServerName: chrome-devtools`" in prompt) == (browser_mode != "off")
-    assert ("`ToolName: new_page`" in prompt) == (browser_mode != "off")
+    assert "`orrery-mail` MCP tool `send_message`" in prompt
+    assert "call_mcp_tool" not in prompt
+    assert 'arguments {"to": ["FixtureParent"], "subject": "<subject>", "body_md": "<message>"}' in prompt
+    assert ("`chrome-devtools` MCP tools" in prompt) == (browser_mode != "off")
+    assert ("`new_page`" in prompt) == (browser_mode != "off")
 
 
 @pytest.mark.parametrize(("browser_ready", "acknowledged"), [(True, True), (True, False), (False, False)])
@@ -440,6 +493,37 @@ def test_startup_marker_applies_only_to_current_launch(managed):
     assert agy._startup_state(runtime, NAME, IDENTITY + "-old") == {}
 
 
+@pytest.mark.parametrize("server_name", ["orrery-screen", "chrome-devtools"])
+def test_resumed_cli_waits_for_its_managed_servers_without_submitting_a_task(
+        tmp_path, monkeypatch, server_name):
+    menu = tmp_path / "menu"
+    menu.write_text("/mcp")
+    footer = "Keyboard: ↑/↓ Navigate  enter Actions  esc Exit"
+    rows = iter(["restored editor", f"MCP Servers\n◌ {server_name}\n{footer}",
+                 f"MCP Servers\n✓ orrery-mail Tools: send_message\n✓ {server_name} Tools: test\n{footer}",
+                 "restored editor"])
+    actions = []
+
+    def tmux(argv, **kwargs):
+        match argv[1] if argv[0] == "tmux" else argv[2]:
+            case "display-message":
+                return SimpleNamespace(returncode=0, stdout=IDENTITY)
+            case "capture-pane":
+                return SimpleNamespace(returncode=0, stdout=next(rows))
+            case _:
+                actions.append(argv[2:])
+                return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", tmux)
+    monkeypatch.setattr(agy.time, "sleep", lambda _: None)
+    agy._deliver_first_task(SimpleNamespace(poll=lambda: None), "%4", IDENTITY, None, menu, None,
+                            {"orrery-mail", server_name}, agy.time.monotonic() + 1)
+    assert actions == [
+        ["submit-input", "%4", str(menu), "--prepare-agy-mcp"],
+        ["send-keys", "-t", "%4", "Escape"],
+    ]
+
+
 def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_folder(tmp_path, monkeypatch):
     cwd = tmp_path / "vault"
     own_hooks = cwd / ".agents" / "hooks.json"
@@ -499,6 +583,9 @@ def test_standalone_runs_and_rebuilds_configuration_without_touching_selected_fo
     monkeypatch.setattr(agy.subprocess, "check_output", check_output)
     monkeypatch.setattr(agy.subprocess, "run", launch)
     monkeypatch.setattr(agy, "_run_first_task", lambda argv, *, env, **kwargs: launch(argv, env=env).returncode)
+    history = {**agy._history(), "binding": lambda *_: {"history_session_id": SID}}
+    monkeypatch.setattr(agy, "_history", lambda: history)
+    monkeypatch.setattr(agy, "_run_managed_resume", lambda argv, *, env, **kw: launch(argv, env=env).returncode)
     task = tmp_path / "handoff"
     child_resume._atomic_json(task, {"message": {"content": "One initial task."}})
     assert agy.run(runtime, NAME, task_file=task) == 0
@@ -550,13 +637,20 @@ def test_standalone_resume_rotates_the_screen_binding_and_keeps_a_lower_operator
         config_dir = Path(argv[argv.index("--add-dir") + 1])
         config = json.loads((config_dir / ".agents/mcp_config.json").read_text())
         bind_path = Path(config["mcpServers"]["orrery-screen"]["env"]["AGENTSTACK_SCREEN_BINDING_FILE"])
+        assert config["mcpServers"]["orrery-mail"]["tools"]["send_message"] == {"eager": True}
         settings = json.loads(argv[argv.index("--settings") + 1])
         rules = [rule for rule in settings["permissions"]["allow"] if rule.startswith("mcp(orrery-screen/")]
+        eager = config["mcpServers"]["orrery-screen"].get("tools", {})
+        assert set(eager) == {rule.split("/")[1][:-1] for rule in rules}
+        assert all(tool == {"eager": True} for tool in eager.values())
         launches.append((bind_path, json.loads(bind_path.read_text())["origin"], rules))
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(agy.subprocess, "run", launch)
     monkeypatch.setattr(agy, "_run_first_task", lambda argv, **kwargs: launch(argv).returncode)
+    history = {**agy._history(), "binding": lambda *_: {"history_session_id": SID}}
+    monkeypatch.setattr(agy, "_history", lambda: history)
+    monkeypatch.setattr(agy, "_run_managed_resume", lambda argv, **kw: launch(argv).returncode)
     task = tmp_path / "handoff"
     child_resume._atomic_json(task, {"message": {"content": "Fixture task"}})
     assert agy.run(runtime, NAME, task_file=task) == 0
@@ -781,9 +875,14 @@ def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch, standalone):
 
 
 @pytest.mark.parametrize("standalone", [True, False], ids=["standalone", "delegated"])
-@pytest.mark.parametrize("change", [{"computer_use": "view"}, {"browser_mode": "temporary"}])
+@pytest.mark.parametrize("host,change", [
+    pytest.param("mac", {"computer_use": "view"}, id="mac-view"),
+    pytest.param("mac", {"browser_mode": "temporary"}, id="mac-temp"),
+    pytest.param("wsl", {"computer_use": "view"}, id="wsl-view"),
+    pytest.param("wsl", {"browser_mode": "personal"}, id="wsl-personal"),
+])
 def test_permission_restart_uses_bound_conversation_and_projects_only_selected_tools(
-        managed, monkeypatch, standalone, change):
+        managed, monkeypatch, capsys, standalone, host, change):
     runtime, cwd, state = managed
     state_path = child_resume._paths(runtime, NAME)[0]
     mcp_path = cwd / ".agents/mcp_config.json"
@@ -814,6 +913,17 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     monkeypatch.setattr(server, "_persistent_profiles", lambda: {})
     monkeypatch.setattr(server, "_mcp_tool_parameters", lambda _: {"existing_agent_id"})
     monkeypatch.setattr(agy, "saved_conversation", lambda *args: SID)
+    monkeypatch.setattr(server.chrome_readiness, "personal_browser_reason", lambda **_: ("", False))
+    if host == "wsl":
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(server, "_is_wsl", lambda: True)
+        monkeypatch.setattr(server, "_spawn_computer_catalog", lambda: {"computer_use": True})
+        monkeypatch.setattr(server, "_screen_http", lambda: SimpleNamespace(
+            wsl_launch_interop=lambda: "/run/WSL/fixture"))
+        monkeypatch.setattr(agy.child_tools, "_windows_browser_npx", lambda: {
+            "command": "/mnt/c/fixture/node.exe", "args": [r"C:\fixture\npx-cli.js"]})
+        monkeypatch.setenv("WSL_DISTRO_NAME", "FixtureWSL")
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/fixture")
     live = {"session_id": "$8", "created": 1000, "server_pid": 123, "tmux_pid": 123}
     monkeypatch.setattr(server, "tmux_state", lambda: {NAME: live})
     monkeypatch.setattr(server, "_child_session_live", lambda *args: True)
@@ -824,6 +934,8 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
         return {"history_binding": "bound", "history_session_id": SID}
 
     monkeypatch.setattr(server.agy_history, "binding", bound)
+    history = {**agy._history(), "binding": lambda *_: {"history_session_id": SID}}
+    monkeypatch.setattr(agy, "_history", lambda: history)
     permission = {"history_session_id": SID, **change}
     assert server.do_jump(NAME, permission=permission, check_only=True) == {"ok": True, "action": "validated"}
     assert not child_resume.tools_record_path(runtime, NAME).exists()
@@ -860,9 +972,15 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
         if "computer_use" in change:
             assert set(servers) == {"orrery-mail", "orrery-screen"}
             assert grants == [f"mcp(orrery-screen/{tool})" for tool in screen_state.VIEW_TOOLS]
+            if host == "wsl":
+                assert servers["orrery-screen"]["env"]["WSL_INTEROP"] == "/run/WSL/fixture"
         else:
             assert set(servers) == {"orrery-mail", "chrome-devtools"}
-            assert "--isolated" in servers["chrome-devtools"]["args"]
+            browser = servers["chrome-devtools"]
+            if host == "wsl":
+                assert browser["command"] == "/mnt/c/fixture/node.exe" and "--autoConnect" in browser["args"]
+            else:
+                assert "--isolated" in browser["args"]
             assert grants == []
         observed.append(argv[-1])
         return SimpleNamespace(returncode=0)
@@ -870,17 +988,31 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     def launch(argv, **kwargs):
         assert kwargs["include_identity"] and f"--conversation {SID}" in argv[-1]
         assert any(arg.startswith("AGENTSTACK_TOOLS_CHANGE_GENERATION=") for arg in argv)
+        if host == "wsl":
+            assert "WSL_INTEROP=/run/WSL/fixture" in argv
         assert agy.run(runtime, NAME, conversation=SID) == 0
-        child_resume._atomic_json(runtime / "child-agents" / f"{NAME}.agy-status.json",
-                                  {"tmux": IDENTITY, "activity": "wait"})
         return {"ok": True, "adapter": "detached", "tmux_identity": IDENTITY.split("|", 1)[1]}
 
+    def prepared(argv, *, env, identity, servers, **kwargs):
+        assert set(servers) == {"orrery-mail", "orrery-screen" if "computer_use" in change else "chrome-devtools"}
+        result = run(argv, env=env)
+        child_resume._atomic_json(agy._startup_path(runtime, NAME), {
+            "tmux": identity, "conversation": SID, "ready": True,
+            "generation": child_resume.tools_change_generation(),
+        })
+        return result.returncode
+
+    monkeypatch.setattr(agy, "_run_managed_resume", prepared)
     fixture_subprocess = SimpleNamespace(run=run, check_output=agy.subprocess.check_output)
     monkeypatch.setattr(agy, "subprocess", fixture_subprocess)
     monkeypatch.setattr(server, "_launch_claude_resume_tmux", launch)
     monkeypatch.setattr(server, "_tmux", lambda *args: IDENTITY)
     result = server.do_jump(NAME, open_terminal=False, permission=permission)
     assert result["ok"] and result["tools_changed"], result
+    reports = [json.loads(line.removeprefix("[orrery action] "))
+               for line in capsys.readouterr().err.splitlines() if line.startswith("[orrery action] ")]
+    assert reports == [dict(operation="permission-restart", recipient=NAME, status="ok", reason=None,
+                           tools_change="committed", tools_change_cleared=True, tools_change_reason=None)]
     assert observed == [SID]
     assert (mcp_path.read_bytes() if mcp_path.exists() else None) == original
     assert not child_resume._tools_journal(state_path).exists()

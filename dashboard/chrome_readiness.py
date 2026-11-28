@@ -1,12 +1,16 @@
 """Read-only readiness check for Chrome DevTools MCP's default profile."""
 
-from pathlib import Path
+import http.client
+import json
 import logging
 import os
-import socket
+from pathlib import Path
+import re
 import subprocess
 
 LOG = logging.getLogger(__name__)
+APPROVAL_REASON = ('Chrome requires approval for this debugging connection. '
+                   'In Chrome, choose Allow when “Allow remote debugging?” appears.')
 
 
 _WINDOWS_CHECK = r"""
@@ -20,19 +24,38 @@ if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
     'debugging'
     return
 }
-$line = Get-Content -LiteralPath $marker -TotalCount 1
+$markerLines = @(Get-Content -LiteralPath $marker -TotalCount 2)
 [int]$port = 0
-if (-not [int]::TryParse($line, [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
+if ($markerLines.Count -lt 1 -or -not [int]::TryParse($markerLines[0], [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
     'debugging'
     return
 }
-$client = [Net.Sockets.TcpClient]::new()
+$request = [Net.HttpWebRequest]::Create("http://127.0.0.1:$port/json/version")
+$request.Proxy = $null
+$request.AllowAutoRedirect = $false
+$request.Timeout = 700
+$request.ReadWriteTimeout = 700
+$reply = $null
 try {
-    $connection = $client.ConnectAsync('127.0.0.1', $port)
-    try {
-        if ($connection.Wait(250) -and $client.Connected) { 'ready' } else { 'debugging' }
-    } catch { 'debugging' }
-} finally { $client.Dispose() }
+    $reply = $request.GetResponse()
+    $reader = [IO.StreamReader]::new($reply.GetResponseStream())
+    $buffer = [char[]]::new(16385)
+    $n = $reader.ReadBlock($buffer, 0, $buffer.Length)
+    if ($n -le 0 -or $n -ge $buffer.Length) { 'unknown'; return }
+    $version = ConvertFrom-Json (-join $buffer[0..($n - 1)])
+    if ($version.Browser -is [string] -and $version.Browser -and
+        $version.'Protocol-Version' -is [string] -and $version.'Protocol-Version') { 'ready' }
+    else { 'unknown' }
+} catch [Net.WebException] {
+    $reply = $_.Exception.Response
+    if ($_.Exception.Status -eq 'Timeout') { 'reply_timeout' }
+    elseif ($_.Exception.Status -eq 'ConnectFailure') { 'debugging' }
+    elseif ($reply -and [int]$reply.StatusCode -eq 404 -and
+            $markerLines.Count -ge 2 -and $markerLines[1] -match '^/devtools/browser(?:/[^/\s]+)?$') { 'approval' }
+    else { 'unknown' }
+} catch {
+    'unknown'
+} finally { if ($reply) { $reply.Close() } }
 """
 
 
@@ -87,7 +110,35 @@ def _windows_chrome_state(powershell, env):
     except (OSError, subprocess.SubprocessError, ValueError):
         return _windows_failure("powershell_start_failed", env)
     answer = result.stdout.strip()
-    return answer if answer in {"stopped", "debugging", "ready"} else "unknown"
+    return answer if answer in {"stopped", "debugging", "ready", "approval", "reply_timeout"} else "unknown"
+
+
+def _devtools_state(port, endpoint):
+    # This HTTP endpoint does not request a debugging session. In Chromium's
+    # approval-only mode it returns 404, even when Chrome's socket is open.
+    probe = http.client.HTTPConnection("127.0.0.1", port, timeout=0.7)
+    try:
+        probe.request("GET", "/json/version")
+        reply = probe.getresponse()
+        if reply.status == 404 and re.fullmatch(rb"/devtools/browser(?:/[^/\s]+)?", endpoint):
+            return "approval"
+        if reply.status == 200:
+            data = reply.read(16385)
+            if len(data) <= 16384:
+                version = json.loads(data)
+                if isinstance(version, dict) and all(
+                        isinstance(version.get(key), str) and version[key]
+                        for key in ("Browser", "Protocol-Version")):
+                    return "ready"
+        return "unknown"
+    except TimeoutError:
+        return "reply_timeout"
+    except ConnectionRefusedError:
+        return "debugging"
+    except (OSError, http.client.HTTPException, ValueError):
+        return "unknown"
+    finally:
+        probe.close()
 
 
 def _mac_state():
@@ -106,6 +157,7 @@ def _mac_state():
     try:
         with marker.open("rb") as source:
             raw_port = source.readline(16).strip()
+            endpoint = source.readline(256).strip()
     except FileNotFoundError:
         return "debugging"
     except PermissionError:
@@ -114,11 +166,7 @@ def _mac_state():
         return "unknown"
     if not raw_port.isdigit() or not 1 <= (port := int(raw_port)) <= 65535:
         return "debugging"
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.25):
-            return "ready"
-    except OSError:
-        return "debugging"
+    return _devtools_state(port, endpoint)
 
 
 def personal_browser_reason(*, wsl):
@@ -128,7 +176,9 @@ def personal_browser_reason(*, wsl):
     return {
         "stopped": f"Chrome is not running on {host}. Start Google Chrome, then enable remote debugging in chrome://inspect/#remote-debugging.",
         "debugging": f"Chrome's remote debugging is unavailable on {host}. {setup}",
+        "approval": APPROVAL_REASON,
+        "reply_timeout": f"Chrome's DevTools did not respond in time on {host}. Try again with Chrome open.",
         "permission": "ORRERY cannot read Chrome's debugging status. Allow access to Chrome's data in macOS Privacy & Security.",
         "interop": f"ORRERY cannot check Windows Chrome from WSL. Check Windows interop. {setup}",
         "unknown": f"ORRERY could not check Chrome on {host}. {setup}",
-    }.get(state, ""), state in {"stopped", "debugging"}
+    }.get(state, ""), state in {"stopped", "debugging", "reply_timeout"}

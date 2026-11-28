@@ -11,11 +11,16 @@ import subprocess
 import sys
 
 SECRET_TOOL = '/usr/bin/secret-tool'
+BUSCTL = '/usr/bin/busctl'
 CONTEXT_KEYS = ('DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR')
 CONNECTIONS = runpy.run_path(str(Path(__file__).with_name('native_connections.py')))
 REASONS = {'invalid_credential_ref', 'credential_reference_conflict',
            'unsupported_credential_store', 'credential_reader_unavailable',
            'credential_unavailable', 'credential_timeout'}
+LOCKED_MESSAGE = (
+    'The ORRERY keyring is locked. In the Ubuntu terminal, '
+    'run python3 ~/orrery-unlock-keyring.py.'
+)
 
 
 def validate_ref(ref):
@@ -53,6 +58,32 @@ def command(product_root, manifest_file, backend, python):
 def context(environ=None):
     environ = os.environ if environ is None else environ
     return {key: environ[key] for key in CONTEXT_KEYS if environ.get(key)}
+
+
+def ref_is_locked(ref, *, runner=None):
+    """Search configured item attributes without reading or unlocking a key."""
+    if sys.platform != 'linux':
+        return False
+    attributes = validate_ref(ref)['attributes']
+    env = {'PATH': '/usr/bin:/bin', 'HOME': os.path.expanduser('~'),
+           'LANG': 'C.UTF-8', **context()}
+    bus = (['--address=' + env['DBUS_SESSION_BUS_ADDRESS']]
+           if 'DBUS_SESSION_BUS_ADDRESS' in env else ['--user'])
+    argv = [BUSCTL, *bus, '--timeout=2s', 'call', 'org.freedesktop.secrets',
+            '/org/freedesktop/secrets', 'org.freedesktop.Secret.Service',
+            'SearchItems', 'a{ss}', str(len(attributes))]
+    for key, value in sorted(attributes.items()):
+        argv.extend([key, value])
+    try:
+        result = (runner or subprocess.run)(argv, env=env, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    # busctl prints the two object-path arrays as a count followed by paths.
+    # A lock matters only when all matching items are locked.
+    return result.returncode == 0 and re.fullmatch(
+        r'aoao\s+0\s+[1-9]\d*(?:\s+"?/[^"\s]+"?)+\s*', result.stdout
+    ) is not None
 
 
 def read_ref(ref, *, runner=None):

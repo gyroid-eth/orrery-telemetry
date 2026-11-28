@@ -594,20 +594,37 @@ EXIT_COMMAND_UNCONFIRMED = (
     "Cannot confirm /exit in the agent input. Check the terminal before trying Exit again.")
 
 
-def submit_terminal_exit(command, admit, pane, *, interrupt_key=None, activity=None):
+def submit_terminal_exit(command, admit, pane, *, interrupt_key=None, activity=None, on_refusal=None):
     """Send Enter only when the shared input protocol confirms /exit."""
     submission = module_api('pane_submission')
     modal_activity = module_api('terminal_state')['current_modal_activity']
     entered = interrupted = prepared = running = False
     reason = 'input_not_found'
+    last_capture = refused_capture = None
 
     def guarded_command(*args, **kwargs):
-        nonlocal entered, running
+        nonlocal entered, running, last_capture
+        if on_refusal and args[0] == 'display-message':
+            last_capture = None
+            diagnostic_format = args[4] + '\t#{pane_width}\t#{pane_height}'
+            diagnostic_columns = len(diagnostic_format.split('\t'))
+            args = (*args[:4], diagnostic_format, *args[5:])
         result = command(*args, **kwargs)
         if args[0] == 'send-keys' and args[-1] == 'C-m' and not result.returncode:
             entered = True
         if args[0] == 'display-message' and not result.returncode:
-            metadata, _, screen = result.stdout.partition('\n')
+            metadata, separator, screen = result.stdout.partition('\n')
+            fields = metadata.split('\t')
+            # The shared parser accepts capture metadata from before and after
+            # the final MCP preparation column was added.
+            if on_refusal and separator and len(fields) in (diagnostic_columns - 1, diagnostic_columns):
+                width, height = fields[-2:]
+                fields = fields[:-2]
+                metadata = '\t'.join(fields)
+                result = subprocess.CompletedProcess(result.args, 0, metadata + '\n' + screen, result.stderr)
+                if fields[2] == pane and all(value.isdigit() for value in (width, height, fields[4], fields[6])):
+                    last_capture = dict(pane=pane, width=int(width), height=int(height),
+                                        cursor_x=int(fields[6]), cursor_y=int(fields[4]), ansi=screen)
             lines = screen.splitlines()
             view = submission['frame'](metadata, lines, pane)
             plain = [submission['SGR'].sub('', line) for line in lines]
@@ -642,12 +659,16 @@ def submit_terminal_exit(command, admit, pane, *, interrupt_key=None, activity=N
         return True
 
     def on_wait(value):
-        nonlocal reason
+        nonlocal reason, refused_capture
         reason = value
+        refused_capture = last_capture
 
-    status = submission['submit'](guarded_command, admitted, pane, '/exit', on_wait=on_wait)
+    status = submission['submit'](guarded_command, admitted, pane, '/exit', on_wait=on_wait,
+                                  discard_unsubmitted=True)
     if entered:
         return None, interrupted
+    if on_refusal:
+        on_refusal(reason, refused_capture)
     if status == 'unknown':
         return EXIT_COMMAND_UNCONFIRMED, interrupted
     if reason == 'pane_locked':

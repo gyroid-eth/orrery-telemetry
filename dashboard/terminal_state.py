@@ -60,9 +60,10 @@ _CLAUDE_CHROME_CHOICE_RE = re.compile(
 )
 _AGY_COMMAND_APPROVAL_CONTROLS = "↑/↓ Navigate · tab Amend · ctrl+g edit/expand command"
 AGY_MCP_APPROVAL_CONTROLS = "↑/↓ Navigate · tab Amend"
+AGY_URL_APPROVAL_TITLE = "Allow access to this URL?"
 _AGY_APPROVAL_FOOTER_RE = re.compile(r"esc to cancel(?:\s{2,}[a-z-]+ · [^·]+ · [a-z]+)?")
 _AGY_MCP_STATUS = re.compile(r"(?:auto|plan|accept-edits) · [^·]+ · (?:low|medium|high|xhigh|max)")
-_AGY_COMMAND_OPTION_BREAK_RE = re.compile(r"\n(?=>? ?[1-9]\d*\. )")
+_AGY_APPROVAL_OPTION_BREAK_RE = re.compile(r"\n(?=>? ?[1-9]\d*\. )")
 _AGY_COMMAND_ALWAYS_RE = re.compile(
     r"[1-9]\d*\. Yes, and always allow(?: in this conversation)? "
     r"for commands that start with '.+'(?: \(Persist to settings\.json\))?"
@@ -196,6 +197,31 @@ def claude_chrome_question(current):
     return bool(match and bool(match["no"]) != bool(match["yes"]))
 
 
+def agy_url_approval(rows):
+    """Match Antigravity's current browser consent menu, including wrapped choices."""
+    if (len(rows) < 12 or rows[-2] != AGY_MCP_APPROVAL_CONTROLS
+            or not _AGY_MCP_STATUS.fullmatch(rows[-1])):
+        return False
+    for index in range(len(rows) - 9, 2, -1):
+        if rows[index] != AGY_URL_APPROVAL_TITLE:
+            continue
+        title, border, host = rows[index - 3:index]
+        if (title != "Browser action" or not re.fullmatch(r"─{8,}", border)
+                or not re.fullmatch(r"[^\s']+", host)):
+            return False
+        options = _AGY_APPROVAL_OPTION_BREAK_RE.split("\n".join(rows[index + 1:-2]))
+        return (sum(option.startswith("> ") for option in options) == 1
+                and [" ".join(option.removeprefix("> ").split()) for option in options] == [
+                    "1. Yes, allow access",
+                    f"2. Yes, and always allow access to '{host}' in this conversation",
+                    f"3. Yes, and always allow access to '{host}' (Persist to settings.json)",
+                    "4. No, deny access",
+                    f"5. No, and always deny access to '{host}' in this conversation",
+                    f"6. No, and always deny access to '{host}' (Persist to settings.json)",
+                ])
+    return False
+
+
 def current_modal_activity(current):
     """Classify a modal that ends the current screen, excluding any composer."""
     screen = '\n'.join(current[-96:])
@@ -216,6 +242,9 @@ def current_modal_activity(current):
     # These footer controls must still be current. Looking at the last control
     # rather than reversing work/ask priority also preserves new work after an
     # answered modal that remains in the scrollback.
+    rows = [row.strip() for row in current[-40:] if row.strip()]
+    if agy_url_approval(rows):
+        return "ask"
     rows = [row.strip() for row in current[-16:] if row.strip()]
     if not rows:
         return None
@@ -241,7 +270,7 @@ def current_modal_activity(current):
         for index, row in enumerate(rows[:-4]):
             if row != "Run this command?":
                 continue
-            options = _AGY_COMMAND_OPTION_BREAK_RE.split("\n".join(rows[index + 1:-2]))
+            options = _AGY_APPROVAL_OPTION_BREAK_RE.split("\n".join(rows[index + 1:-2]))
             # The persistent allowances wrap at narrower terminal widths.
             choices = [" ".join(option.removeprefix(">").split()) for option in options]
             if (len(choices) >= 2 and choices[0] == "1. Yes, run command"

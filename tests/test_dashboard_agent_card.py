@@ -182,6 +182,17 @@ def test_separately_configured_browser_leaves_computer_permission_actionable():
     assert controls["browser_use"]["change_reason"] == row["browser_change_reason"]
 
 
+def test_permission_controls_explain_a_missing_browser_even_without_another_mode():
+    row = dict(harness_kind="antigravity", running=True, category="agent", parent_state="top",
+               history_binding="bound", history_session_id="session",
+               permission_resume_supported=True, browser_use=False)
+    unavailable = {"temporary": {"reason": "Missing Chrome", "command": "Install Chrome"}}
+    missing = agent_card.permission_controls(row, ("off",), browser_unavailable=unavailable)["browser_use"]
+    available = agent_card.permission_controls(row, ("off", "temporary"), browser_unavailable=unavailable)["browser_use"]
+    assert not missing["can_change"] and missing["unavailable"] == unavailable
+    assert available["can_change"] and "unavailable" not in available
+
+
 @pytest.mark.parametrize(("mode", "enabled"), [("off", False), ("temporary", True), ("personal", True)])
 def test_explicit_browser_mode_takes_precedence_over_inference(mode, enabled):
     spec = {"base": "default", "tools": {"browser_mode": mode}}

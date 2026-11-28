@@ -66,15 +66,17 @@ def main(argv):
         if argv and argv[0]=='stop-group':consumer.stop_group(argv[1]);return 0
         if argv and argv[0]=='submit-input':
             notice = None
+            prepare_mcp = (len(argv) == 4 and argv[3] == '--prepare-agy-mcp'
+                           and argv[1] == os.environ.get('TMUX_PANE'))
             if len(argv) == 7 and argv[3] == '--notice':
                 notice = _NotificationHandoff(*argv[4:])
-            elif len(argv) != 3:
+            elif len(argv) != 3 and not prepare_mcp:
                 return 2
             with Path(argv[2]).open(encoding='utf-8') as handle:
                 text=handle.read(262145)
             if not text.strip() or len(text.encode('utf-8'))>262144:return 2
             result = consumer.submit_text(argv[1], text, on_wait=lambda reason: print(reason, file=sys.stderr),
-                                          notice=notice)
+                                          notice=notice, **({'prepare_mcp': True} if prepare_mcp else {}))
             return {'accepted':0,'refused':3,'unknown':4}[result]
         if argv and (argv[0] in ('attach','attach-session') or (argv[0]=='new-session' and '-A' in argv)):
             if argv[0]=='new-session' and consumer.transport.identity is None:
