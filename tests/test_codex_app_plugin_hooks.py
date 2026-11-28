@@ -39,7 +39,7 @@ def test_plugin_hooks_wire_every_p1_telemetry_event():
 
 def test_plugin_shell_hook_is_synchronous_and_uses_the_core_key_guard():
     group = json.loads(HOOKS.read_text())["hooks"]["PreToolUse"][1]
-    assert group["matcher"] == "^(exec_command|shell_command|shell)$"
+    assert group["matcher"] == "*"
     assert group["hooks"] == [{"type": "command", "command": '\"$PLUGIN_ROOT/scripts/run-key-read-guard.sh\"',
                                "async": False, "timeoutSec": 5, "timeout": 5}]
     assert (PLUGIN / "scripts/run-key-read-guard.sh").stat().st_mode & 0o111
@@ -83,3 +83,47 @@ def test_plugin_manifest_wires_relative_stdio_mcp_server():
         path = PLUGIN / "scripts" / runner
         assert path.is_file()
         assert path.stat().st_mode & 0o111
+
+
+def test_shell_hook_fast_path_only_trusts_an_unambiguous_mcp_header(tmp_path):
+    import os
+    import subprocess
+
+    core = tmp_path / "core"
+    hooks = core / "hooks"
+    hooks.mkdir(parents=True)
+    expected = tmp_path / "shell-handler-input"
+    guard = hooks / "deny-llm-key-read.sh"
+    guard.write_text('cat > "$CAPTURE"\nexit 2\n')
+    env = {
+        **os.environ,
+        "AGENTSTACK_HOME": str(core),
+        "AGENTSTACK_LABEL_PREFIX": "org.agentstack.test-codex-shell-hook",
+        "CAPTURE": str(expected),
+    }
+    runner = PLUGIN / "scripts/run-key-read-guard.sh"
+
+    def run(payload):
+        return subprocess.run(["/bin/bash", str(runner)], input=payload,
+                              text=True, env=env, capture_output=True, timeout=5)
+
+    canonical = json.dumps({
+        "session_id": "fixture",
+        "cwd": '/tmp/path with "quotes"',
+        "hook_event_name": "PreToolUse",
+        "tool_name": "mcp__orrery_fixture__fetch_inbox",
+        "tool_input": {"cmd": "credential-looking sample"},
+    })
+    assert run(canonical).returncode == 0
+    assert not expected.exists()
+
+    samples = [
+        '{"tool_name":"renamed_shell","tool_input":{"cmd":"printf harmless"}}',
+        '{"nested":{"tool_name":"mcp__fixture__read"},"tool_name":"Bash","tool_input":{}}',
+        '{"tool_name":"mcp__fixture__read","tool_name":"Bash","tool_input":{}}',
+        json.dumps({"tool_name": "Bash", "tool_input": {"command": 'printf \'"tool_name":"mcp__fake"\''}}),
+        '{"tool_name":"mcp__","tool_input":{}}',
+    ]
+    for sample in samples:
+        assert run(sample).returncode == 2
+        assert expected.read_text().rstrip("\n") == sample

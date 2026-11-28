@@ -34518,6 +34518,10 @@ function bay(a,i){
     chips.push(`<span class="chip cat">${esc(a.category)}</span>`);
   // 状態 LED（カード右上）— work=黄色点滅+経過時間 / wait=last X 微弱 / ask=赤+APPROVAL / question=シアン+?
   let stind='';
+  if(a.shell_guard_status==='missing'||a.shell_guard_status==='unverified'){
+    const label=a.shell_guard_status==='missing'?'SHELL GUARD PROOF MISSING':'SHELL GUARD UNVERIFIED';
+    chips.push(`<span class="chip imp">${label}</span>`);
+  }
   if(a.provider_stall){
     const stop=a.provider_stall;
     chips.push(`<span class="chip imp" title="${esc(stop.error||'')} · ${esc(stop.notification_status||'')}">MODEL CAPACITY${stop.notification_status==='delivery_unknown'?' · MAIL UNCONFIRMED':''}</span>`);

@@ -16,6 +16,7 @@ import stat
 import sys
 
 SHELL_TOOLS = {'bash', 'exec_command', 'shell_command', 'shell', 'terminal'}
+READ_TOOLS = {'read', 'read_file', 'view', 'file_read'}
 MESSAGE = 'LOCAL_MODEL_KEY_READ_DENIED: do not read model credentials in the agent shell; use the managed launcher/auth runner.'
 
 
@@ -211,13 +212,28 @@ def same_key(candidate, reference):
     return all(not attrs.get(k) or '$' in attrs[k] or '`' in attrs[k] or not v or attrs[k] == v for k, v in wanted.items())
 
 
-def command_text(payload):
-    name = payload.get('tool_name', '').rsplit('.', 1)[-1].lower()
-    if name not in SHELL_TOOLS:
-        return None
+def tool_input(payload):
     args = payload.get('tool_input') or {}
     if isinstance(args, str):
         args = json.loads(args)
+    return args if isinstance(args, dict) else {}
+
+
+def command_text(payload):
+    full_name = payload.get('tool_name', '').lower()
+    if full_name.startswith(('mcp__', 'mcp.')):
+        return None
+    name = full_name.rsplit('.', 1)[-1]
+    args = tool_input(payload)
+    if name not in SHELL_TOOLS:
+        # Codex can rename a native shell tool while retaining its wire shape.
+        # MCP, patch and other known non-shell inputs must not be guessed.
+        shell_shape = isinstance(args.get('cmd'), str) or (
+            isinstance(args.get('command'), str) and
+            any(key in args for key in ('login', 'sandbox_permissions', 'yield_time_ms', 'max_output_tokens'))
+        )
+        if not shell_shape:
+            return None
     value = args.get('command', args.get('cmd'))
     if isinstance(value, list):
         return shlex.join(value)
@@ -243,7 +259,7 @@ def protected_file_read(payload, text):
     if isinstance(args, str):
         args = json.loads(args)
     name = payload.get('tool_name', '').rsplit('.', 1)[-1].lower()
-    if name in {'read', 'read_file', 'view', 'file_read'}:
+    if name in READ_TOOLS:
         path = args.get('file_path', args.get('path'))
         if not isinstance(path, str):
             raise ValueError('missing read path')
@@ -297,31 +313,57 @@ def decide(payload):
         return bool(forms) if forms is not None else bool(shape)
 
 
+def extraction_shape(raw):
+    return (
+        ('find-generic-password' in raw and ('-w' in raw or '-g' in raw)) or
+        ('secret-tool' in raw and any(verb in raw for verb in ('lookup', 'search')))
+    )
+
+
 def main():
     raw = sys.stdin.read()
     try:
         payload = json.loads(raw)
-        if sys.platform == 'darwin' and os.environ.get('TMUX'):
-            try:
-                from macos_consent_guard import check
-                cwd = Path(payload.get('cwd') or os.getcwd())
-                name = payload.get('tool_name', '').rsplit('.', 1)[-1].lower()
-                if name in {'exec_command', 'shell_command', 'shell'}:
-                    inputs = payload.get('tool_input') or {}
-                    if isinstance(inputs, str):
-                        inputs = json.loads(inputs)
-                    cwd /= inputs.get('workdir') or ''
-                reason = check(command_text(payload), cwd)
-            except (ImportError, AttributeError, TypeError, ValueError):
-                reason = None
-            if reason:
-                print(reason, file=sys.stderr)
-                return 2
-        denied = decide(payload)
+    except (ValueError, TypeError):
+        if extraction_shape(raw):
+            print(MESSAGE, file=sys.stderr)
+            return 2
+        return 0
+    if not isinstance(payload, dict) or not isinstance(payload.get('tool_name'), str):
+        return 0
+    full_name = payload['tool_name'].lower()
+    name = full_name.rsplit('.', 1)[-1]
+    # The trusted Codex command receives all PreToolUse events. Ignore MCP,
+    # patch and other tools before any shell fallback can see their arguments.
+    if full_name.startswith(('mcp__', 'mcp.')):
+        return 0
+
+    denied = False
+    consent = None
+    command = None
+    try:
+        command = command_text(payload)
+        if command is None and name not in READ_TOOLS:
+            return 0
+        if command is not None and sys.platform == 'darwin' and os.environ.get('TMUX'):
+            from macos_consent_guard import check
+            cwd = Path(payload.get('cwd') or os.getcwd())
+            if name not in {'bash', 'terminal'}:
+                cwd /= tool_input(payload).get('workdir') or ''
+            consent = check(command, cwd)
+        denied = not consent and decide(payload)
     except Exception:
-        denied = ('find-generic-password' in raw and ('-w' in raw or '-g' in raw)) or ('secret-tool' in raw and any(verb in raw for verb in ('lookup', 'search')))
-    if denied:
-        print(MESSAGE, file=sys.stderr)
+        denied = (name in SHELL_TOOLS or command is not None) and extraction_shape(raw)
+    else:
+        if command is not None:
+            try:
+                from shell_guard_marks import record
+            except ImportError:
+                pass
+            else:
+                record(command, payload)
+    if consent or denied:
+        print(consent or MESSAGE, file=sys.stderr)
         return 2
     return 0
 

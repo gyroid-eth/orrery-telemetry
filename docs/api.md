@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":58}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":59}
 ```
 
 version の解決順は [インストール](https://github.com/gyroid-eth/orrery/blob/master/docs/telemetry-install.md#version)を参照してください。
@@ -215,6 +215,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 ## GET `/api/spawn-names`
 
 API 49 は `GET /api/spawn-names` にハーネス別の `browser_modes` を追加します。起動時に `tools.browser_mode` へ `off`、`temporary`、`personal` のいずれかを指定します。従来の Browser 指定との併用はできません。
+
+API 59 は、legacy の稼働中の子を返す `GET /api/agents` に `shell_guard_status` を追加します。`pending` は未観測または証跡待ち、`observed` は照合済み、`missing` は帰属を確認した shell 呼び出しに対応する記録が期限を過ぎても無い状態、`unverified` は履歴の帰属や読める証跡を確認できない状態です。観測対象外では値がありません。バックグラウンドの監視が起動ごとに一度、確認済みの親へ Mail を試みます。名簿の取得は送信を行いません。
 
 API 58 は、Mac と WSL で Chrome DevTools MCP の My Chrome を使うハーネスに応じて、`personal_browser_status` に `{reason, unavailable}` を返します。理由がある間、起動画面の自動選択は一時ブラウザー、利用できなければ Off になります。`unavailable: true` は接続先の Chrome が停止中か、リモートデバッグに接続できないことを示し、その場合だけ My Chrome を無効にします。確認の結果が更新されても、利用者が選んだ方式は保持します。
 

@@ -7,5 +7,6 @@ Start with the ORRERY cockpit in your browser. [Quick start and guides](https://
 
 - [Install and use Telemetry on its own](https://github.com/gyroid-eth/orrery/blob/master/docs/en/getting-started.md)
 - [Developer documentation](docs/README.en.md) · [Dashboard API](docs/api.en.md)
+- The [read-only MCP adapter](integrations/chatgpt_mcp/README.en.md) supports Dashboard API 59 in legacy and fresh modes.
 - [Build, test, and contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 - [License](LICENSE) · [Third-party components and bundled Mail provenance](docs/third-party.md)

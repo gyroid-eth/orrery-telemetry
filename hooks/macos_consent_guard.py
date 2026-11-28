@@ -228,7 +228,10 @@ def main():
         reason = None
         if tool.get("name") == "run_command":
             cwd = inputs.get("Cwd") or os.getcwd()
-            reason = check(inputs.get("CommandLine"), cwd)
+            command = inputs.get("CommandLine")
+            reason = check(command, cwd)
+            from shell_guard_marks import record
+            record(command, event)
         print(json.dumps({"decision": "deny", "reason": reason} if reason else {"decision": "allow"}))
         return 0
 
@@ -237,7 +240,10 @@ def main():
         return 0
     inputs = event.get("tool_input") or {}
     cwd = Path(event.get("cwd") or os.getcwd()) / (inputs.get("workdir") or "")
-    reason = check(inputs.get("command"), cwd)
+    command = inputs.get("command")
+    reason = check(command, cwd)
+    from shell_guard_marks import record
+    record(command, event)
     if reason:
         print(reason, file=sys.stderr)
         return 2

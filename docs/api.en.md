@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8770/api/version
 ```
 
 ```json
-{"name":"orrery-telemetry","version":"2026.09.16.1","api":58}
+{"name":"orrery-telemetry","version":"2026.09.16.1","api":59}
 ```
 
 See [Installation](https://github.com/gyroid-eth/orrery/blob/master/docs/en/telemetry-install.md#version) for version resolution order.
@@ -216,6 +216,8 @@ dsh opt-inが有効な時だけ `providers` に `provider: "dsh"` を加える�
 ## GET `/api/spawn-names`
 
 API 49 adds per-harness `browser_modes` to `GET /api/spawn-names`. Set `tools.browser_mode` to `off`, `temporary`, or `personal` when launching. This selection is exclusive with legacy browser options.
+
+API 59 adds nullable `shell_guard_status` to running legacy children in `GET /api/agents`. The values are `pending` (no eligible call or awaiting evidence), `observed` (calls matched), `missing` (a bound call has no matching guard evidence after the grace period), and `unverified` (history ownership or readable evidence is unavailable). The background worker makes one Mail attempt per missing-proof launch, to the verified parent. The roster request sends no messages.
 
 API 58 can return a `personal_browser_status` entry `{reason, unavailable}` per harness that uses Chrome DevTools MCP for My Chrome on macOS or WSL. When the entry carries a reason, the launch form defaults to Temporary Chrome if offered, or Off otherwise. The form only disables My Chrome when `unavailable: true` confirms that Chrome is stopped or its debugging endpoint is unreachable. A new check preserves any mode the user has selected.
 
