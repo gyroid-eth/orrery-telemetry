@@ -20,7 +20,7 @@ fi
 #   spawn_gemini_child.sh --model gemini-3.8-flash-high --effort high \
 #     --resources "docs/**" "<task>" [WORKDIR]
 #
-# Delegated Gemini children always use a worktree. This keeps the child-specific
+# Delegated Gemini children default to a worktree. This keeps the child-specific
 # .agents/mcp_config.json out of the source checkout and matches ORRERY's
 # one-agent/one-worktree isolation discipline.
 set -euo pipefail
@@ -54,6 +54,7 @@ PRINT_TIMEOUT="${AGENTSTACK_GEMINI_PRINT_TIMEOUT:-30m}"
 RESOURCE_TTL="${AGENTSTACK_GEMINI_RESOURCE_TTL:-14400}"
 WORKTREE_ROOT="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/worktrees}"
 WORKTREE_BASE_REV=""
+USE_WORKTREE=true
 RESOURCES=""
 UNSAFE_NO_RESOURCES=false
 
@@ -75,6 +76,7 @@ Options:
   --resources CSV         resources to reserve before launch (required)
   --resource-ttl SEC      reservation TTL (default 14400)
   --worktree-base REV     worktree base revision (default current HEAD)
+  --no-worktree           use the selected working folder directly (macOS/Linux)
   --unsafe-no-resources   explicit opt-out from reservations
 EOF
 }
@@ -99,6 +101,8 @@ while [[ "${1:-}" == --* ]]; do
     --worktree-base)
       [[ $# -ge 2 ]] || { usage; exit 2; }
       WORKTREE_BASE_REV="$2"; shift 2 ;;
+    --no-worktree)
+      USE_WORKTREE=false; shift ;;
     --unsafe-no-resources)
       UNSAFE_NO_RESOURCES=true; shift ;;
     -h|--help)
@@ -119,6 +123,17 @@ WORK_DIR="${2:-$PWD}"
 if [[ -z "$RESOURCES" && "$UNSAFE_NO_RESOURCES" != true ]]; then
   echo "$PROG: --resources or --unsafe-no-resources is required" >&2
   exit 2
+fi
+platform="$(uname -s)"
+if [[ "$USE_WORKTREE" == false ]]; then
+  case "$platform" in
+    Darwin|Linux) ;;
+    *) echo "$PROG: Antigravity without a worktree requires macOS or Linux" >&2; exit 2 ;;
+  esac
+  if [[ -n "$WORKTREE_BASE_REV" ]]; then
+    echo "$PROG: --worktree-base requires a worktree" >&2
+    exit 2
+  fi
 fi
 case "$EFFORT" in
   low|medium|high) ;;
@@ -151,16 +166,19 @@ fi
 
 agentstack_apply_workspace_context "$WORK_DIR" "$PROJECT_KEY" || exit 1
 WORK_DIR="$AGENTSTACK_PROJECT_WORK_DIR"
-SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
-[[ -n "$SOURCE_REPO" ]] || { echo "$PROG: delegated Gemini children require a git repository" >&2; exit 1; }
-if [[ -n "$WORKTREE_BASE_REV" ]]; then
-  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify "$WORKTREE_BASE_REV^{commit}" 2>/dev/null || true)"
-else
-  BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify HEAD 2>/dev/null || true)"
+if [[ "$USE_WORKTREE" == true ]]; then
+  SOURCE_REPO="$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -n "$SOURCE_REPO" ]] || { echo "$PROG: delegated Gemini children require a git repository" >&2; exit 1; }
+  if [[ -n "$WORKTREE_BASE_REV" ]]; then
+    BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify "$WORKTREE_BASE_REV^{commit}" 2>/dev/null || true)"
+  else
+    BASE_REV="$(git -C "$SOURCE_REPO" rev-parse --verify HEAD 2>/dev/null || true)"
+  fi
+  [[ -n "$BASE_REV" ]] || { echo "$PROG: could not resolve worktree base" >&2; exit 1; }
+  mkdir -p "$WORKTREE_ROOT"
 fi
-[[ -n "$BASE_REV" ]] || { echo "$PROG: could not resolve worktree base" >&2; exit 1; }
 
-mkdir -p "$RUNTIME_DIR" "$WORKTREE_ROOT"
+mkdir -p "$RUNTIME_DIR"
 chmod 700 "$RUNTIME_DIR" 2>/dev/null || true
 TOKEN_FILE="$RUNTIME_DIR/gemini-preregister-$$.token"
 TASK_RAW_FILE="$RUNTIME_DIR/gemini-task-$$.txt"
@@ -253,7 +271,7 @@ CHILD_NAME="$(
 [[ -n "$CHILD_NAME" ]] || { echo "$PROG: child preregistration returned no name" >&2; exit 1; }
 PREREGISTERED=true
 
-case "$(uname -s)" in Darwin|Linux)
+case "$platform" in Darwin|Linux)
   if [[ -z "$RESOURCES" ]]; then
     echo "$PROG: interactive Antigravity children require declared resources" >&2
     exit 2
@@ -261,6 +279,9 @@ case "$(uname -s)" in Darwin|Linux)
   ( umask 077 && printf '%s' "$TASK" > "$TASK_RAW_FILE" )
   adapter_args=(--pre-registered "$CHILD_NAME" --child-token-file "$TOKEN_FILE" --model "$MODEL")
   adapter_args+=(${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"})
+  if [[ "$USE_WORKTREE" == false ]]; then
+    adapter_args+=(--no-worktree)
+  fi
   if [[ -n "$WORKTREE_BASE_REV" ]]; then
     adapter_args+=(--worktree-base "$WORKTREE_BASE_REV")
   fi

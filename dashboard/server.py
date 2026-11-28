@@ -5809,12 +5809,12 @@ def _gemini_resume_material(session, *, live=None):
         raise
     except (OSError, ValueError, KeyError, TypeError):
         raise _ResumeCapabilityError("config_unrestorable", "Antigravity launch settings are unavailable") from None
-    if state["gemini_launch"].get("standalone"):
+    if interactive["uses_launch_config"](state["gemini_launch"]):
         try:
             if changed:
                 interactive["validate_permission_selection"](runtime, state, changed["selection"])
             else:
-                interactive["validate_standalone_config"](state["gemini_launch"])
+                interactive["validate_launch_config"](state["gemini_launch"])
         except ValueError as exc:
             raise _ResumeCapabilityError("config_unrestorable", str(exc)) from None
     if not isinstance(sid, str) or not re.fullmatch(
@@ -5877,6 +5877,7 @@ def _do_resume_gemini(session, *, open_terminal=None, replace_husk=False, expect
             "AGENTSTACK_WORKTREE_ROOT": _worktree_root(),
             "AGENTSTACK_RUNTIME_DIR": RUNTIME_DIR, "AGENTSTACK_PROJECT_KEY": project,
             **({"AGENTSTACK_PORT": str(PORT)} if (state["gemini_launch"].get("standalone") is True
+                or state["gemini_launch"].get("worktree") is False
                 or expected_history_session_id is not None or module.tools_record_path(runtime, session).is_file()) else {}),
             "AGENTSTACK_MCP_URL": _env_text("AGENTSTACK_MCP_URL", "http://127.0.0.1:18765/mcp"),
             "AGENTSTACK_MAIL_ENV": MAIL_ENV_PATH, "AGENTSTACK_MAIL_HTTP_BEARER_MODE": MAIL_HTTP_BEARER_MODE,

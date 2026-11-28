@@ -129,10 +129,12 @@ def test_child_mail_treats_missing_final_result_as_unknown(tmp_path) -> None:
 def test_child_prompts_anchor_resources_to_the_worktree() -> None:
     for path in (CHILD, PREREGISTERED):
         text = path.read_text(encoding="utf-8")
-        assert 'workspace_root = Path(worktree).resolve(strict=False)' in text
-        assert "Declared resources (worktree-anchored):" in text
+        workspace = "worktree" if path == CHILD else "workspace"
+        assert f'workspace_root = Path({workspace}).resolve(strict=False)' in text
+        location = "worktree" if path == CHILD else "{location}"
+        assert f"Declared resources ({location}-anchored):" in text
         assert "Do not search the source checkout, $HOME, or parent directories" in text
-        assert "If a declared resource is absent from this worktree" in text
+        assert f"If a declared resource is absent from this {location}" in text
 
 
 def test_child_runners_propagate_stream_validation_failure_to_parent_report() -> None:

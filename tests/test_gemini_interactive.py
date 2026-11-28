@@ -874,7 +874,8 @@ def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch, standalone):
     assert calls[1] == ("retired", {"retired": False})
 
 
-@pytest.mark.parametrize("standalone", [True, False], ids=["standalone", "delegated"])
+@pytest.mark.parametrize("standalone,shared", [(True, False), (False, False), (False, True)],
+                         ids=["standalone", "delegated", "shared"])
 @pytest.mark.parametrize("host,change", [
     pytest.param("mac", {"computer_use": "view"}, id="mac-view"),
     pytest.param("mac", {"browser_mode": "temporary"}, id="mac-temp"),
@@ -882,7 +883,7 @@ def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch, standalone):
     pytest.param("wsl", {"browser_mode": "personal"}, id="wsl-personal"),
 ])
 def test_permission_restart_uses_bound_conversation_and_projects_only_selected_tools(
-        managed, monkeypatch, capsys, standalone, host, change):
+        managed, monkeypatch, capsys, standalone, shared, host, change):
     runtime, cwd, state = managed
     state_path = child_resume._paths(runtime, NAME)[0]
     mcp_path = cwd / ".agents/mcp_config.json"
@@ -891,6 +892,8 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     if standalone:
         plan["standalone"] = True
         state.pop("parent_agent")
+    elif shared:
+        plan["worktree"] = False
     else:
         child_resume._atomic_json(mcp_path, {"mcpServers": {"orrery-mail": agy._mail_server()}})
     original = mcp_path.read_bytes() if mcp_path.exists() else None
@@ -942,7 +945,7 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     assert (mcp_path.read_bytes() if mcp_path.exists() else None) == original
     assert not server.do_jump(NAME, permission={**permission, "history_session_id": "foreign"},
                               check_only=True)["ok"]
-    if not standalone:
+    if not (standalone or shared):
         child_resume._atomic_json(mcp_path, {"mcpServers": {"custom": {"command": "/fixture/custom"}}})
         rejected = server.do_jump(NAME, permission=permission, check_only=True)
         assert not rejected["ok"] and "workspace MCP configuration changed" in rejected["error"]
@@ -963,11 +966,14 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
             return SimpleNamespace(returncode=0)
         assert argv[-2:] == ["--conversation", SID]
         actual_path = (Path(argv[argv.index("--add-dir") + 1]) / ".agents/mcp_config.json"
-                       if standalone else mcp_path)
+                       if standalone or shared else mcp_path)
         servers = json.loads(actual_path.read_bytes())["mcpServers"]
         assert "orrery-mail" in servers
         assert env.get("PARENT_AGENT") == (None if standalone else "FixtureParent")
         settings = json.loads(argv[argv.index("--settings") + 1])
+        if shared:
+            assert "--sandbox" not in argv
+            assert "mcp(orrery-mail/send_message)" in settings["permissions"]["allow"]
         grants = [item for item in settings["permissions"]["allow"] if item.startswith("mcp(orrery-screen/")]
         if "computer_use" in change:
             assert set(servers) == {"orrery-mail", "orrery-screen"}
