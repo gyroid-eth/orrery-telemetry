@@ -116,6 +116,17 @@ def _guard_config(cwd):
     return path
 
 
+def write_headless_consent_hook(cwd):
+    if sys.platform != "darwin":
+        return
+    path = _guard_config(cwd)
+    if path.exists() or path.is_symlink():
+        raise ValueError("The worktree already has .agents/hooks.json")
+    script = Path(__file__).resolve().with_name("macos_consent_guard.py")
+    declaration = runpy.run_path(str(script))["antigravity_settings"]
+    child_resume._atomic_json(path, declaration(sys.executable, script))
+
+
 def write_tool_refusal_rule(cwd):
     _guard_config(cwd)
     path = cwd / TOOL_REFUSAL_RULE
@@ -798,6 +809,9 @@ def guard(event, cwd, *, runtime):
         result = subprocess.run([interpreter, str(_home() / "hooks" / hook)],
                                 input=payload, text=True, capture_output=True, cwd=cwd, timeout=3)
         if result.returncode:
+            reason = getattr(result, "stderr", "").strip()
+            if hook == "deny-llm-key-read.py" and reason.startswith("MACOS_CONSENT_DENIED:"):
+                return {"decision": "deny", "reason": reason}
             return {"decision": "deny", "reason": f"ORRERY blocked this action ({hook})"}
     return {"decision": "allow", **({"overwrite": overwrite} if overwrite else {})}
 
@@ -823,6 +837,8 @@ def main():
     headless = actions.add_parser("exec-headless")
     headless.add_argument("binary")
     headless.add_argument("arguments", nargs=argparse.REMAINDER)
+    consent = actions.add_parser("consent-hook")
+    consent.add_argument("cwd", type=Path)
     rule = actions.add_parser("tool-refusal-rule")
     rule.add_argument("cwd", type=Path)
     for action in ("ready", "wake-ready"):
@@ -830,6 +846,9 @@ def main():
         ready.add_argument("name")
         ready.add_argument("identity")
     args = parser.parse_args()
+    if args.action == "consent-hook":
+        write_headless_consent_hook(args.cwd.resolve(strict=True))
+        return 0
     if args.action == "tool-refusal-rule":
         write_tool_refusal_rule(args.cwd.resolve(strict=True))
         return 0

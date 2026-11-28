@@ -229,9 +229,19 @@ For new isolated-global launches, SessionEnd does not prove provider exit. The w
 
 ## Keep model credential reads out of the agent shell
 
-Claude Bash and the Codex plugin's exec_command / shell_command / shell use the
-same `deny-llm-key-read.py` decision. After updating the Codex plugin, a person
-must review/approve `/hooks` and start a new process; installation does not approve hooks.
+Claude Bash, dsh, and Hermes use the shared `deny-llm-key-read.py` decision.
+Codex CLI exposes shell hooks as `Bash`, while the current ORRERY plugin matcher
+contains the older tool names. The generated exec policy below covers the
+listed command prefixes independently of that plugin.
+
+On macOS and WSL, ORRERY writes `rules/orrery-child-shell-guard.rules` into the
+generated Codex home on launch and resume. macOS rules forbid direct
+`screencapture` and `osascript` calls and `security find-generic-password`.
+WSL rules forbid direct `secret-tool lookup` and `secret-tool search`. The
+policy keeps the existing user rules and applies only within that Codex
+runtime. The managed launcher, ORRERY unlock, and other harnesses' key commands
+run outside it. Codex loads these rules at startup without hook approval.
+Quartz calls and operations inside other scripts are outside prefix matching.
 
 The guard reads references, never credential values. It defaults to
 `$AGENTSTACK_HOME/integrations/dsh/backend.json` (`backends.*.keychain`). For an

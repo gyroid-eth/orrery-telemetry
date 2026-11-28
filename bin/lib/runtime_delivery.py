@@ -623,6 +623,16 @@ class RuntimeDelivery(RuntimeFiles):
             self.fail('CODEX_HOOK_CONFIGURE_REQUIRED')
         return plan
 
+    def codex_child_rules(self, home):
+        helper = Path(self.client.config['wrapper_root']) / 'hooks/child_resume.py'
+        try:
+            api = runpy.run_path(str(helper))
+            rules = api['codex_child_exec_rules']()
+            if rules is not None:
+                api['install_codex_child_exec_rules'](home, rules)
+        except (OSError, ValueError):
+            self.fail('CODEX_CHILD_RULES_UNAVAILABLE')
+
     def configure_codex(self, action, approval=None):
         c=self.client
         home=self.directory(c.runtime_dir/'provider-home/codex')
@@ -648,6 +658,7 @@ class RuntimeDelivery(RuntimeFiles):
                 self.fail('CODEX_HOOK_CONFIGURE_REQUIRED')
             builder['build'](Path(c.config['wrapper_root'])/'integrations/codex_app',market,'agentstack-global')
             market.chmod(0o700)
+            self.codex_child_rules(home)
             env=dict(os.environ,CODEX_HOME=str(home))
             for args in ([binary,'plugin','marketplace','add',str(market),'--json'],
                          [binary,'plugin','add','agentstack-codex-app@agentstack-global','--json']):
@@ -672,6 +683,7 @@ class RuntimeDelivery(RuntimeFiles):
             self.fail('OPERATOR_CONFIRMATION_REQUIRED')
         if approval.get('shared_codex_home')!=str(home) or approval.get('cwd')!=str(c.isolation):
             self.fail('CODEX_HOOK_CONFIGURE_REQUIRED')
+        self.codex_child_rules(home)
         trust['apply_trust'](approval)
         self.api['atomic_json'](path,approval,before_replace=lambda:self.fail('CODEX_HOOK_CONFIGURE_REQUIRED') if self.read(path)!=current else None)
         self.codex_trust()
@@ -682,7 +694,7 @@ class RuntimeDelivery(RuntimeFiles):
         helper = Path(helper) / 'hooks/prepare-codex-session-binding.py'
         return runpy.run_path(str(helper))['_transcript_header_session_id'](Path(transcript))
 
-    def generated_config(self, path, value, *, preserve_native=False):
+    def generated_config(self, path, value, *, preserve_native=False, preserve_groups=False):
         # Recompute owned output under C. Gemini has one native config: merge
         # only our entry, preserving provider/user fields in that same file.
         with self.client.operation_mutex():
@@ -694,6 +706,14 @@ class RuntimeDelivery(RuntimeFiles):
                     if not isinstance(native,dict) or not isinstance(native.get('mcpServers',{}),dict):raise ValueError()
                 except (ValueError,UnicodeError):self.fail('GENERATED_CONFIG_JSON_INVALID')
                 value={**native,'mcpServers':{**native.get('mcpServers',{}),**value['mcpServers']}}
+            if preserve_groups and previous is not None:
+                try:
+                    native = json.loads(previous)
+                    if not isinstance(native, dict):
+                        raise ValueError()
+                except (ValueError, UnicodeError):
+                    self.fail('GENERATED_CONFIG_JSON_INVALID')
+                value = {**native, **value}
             def unchanged():
                 current=self.api['read_private'](path) if path.exists() or path.is_symlink() else None
                 if current!=previous:self.fail('GENERATED_CONFIG_CHANGED')
@@ -826,6 +846,8 @@ class RuntimeDelivery(RuntimeFiles):
             except (OSError,Refused):self.fail('INSTRUCTION_PROVIDER_CONFIG_REQUIRED')
         extra_servers, tool_flags, tool_prompt = self.child_tool_plan(provider,home,row['cwd'],row['launch_id'])
         proxy=[sys.executable,str(Path(__file__).with_name('runtime_client.py')),'--context',str(c.path),'proxy']
+        if provider in ('claude', 'gemini') and sys.platform == 'darwin':
+            consent_guard = Path(c.config['wrapper_root'])/'hooks/macos_consent_guard.py'
         if provider=='claude':
             config=home/'mcp.json'
             self.generated_config(config,{'mcpServers':{**extra_servers,'orrery-mail':{'command':proxy[0],'args':proxy[1:]}}})
@@ -835,6 +857,7 @@ class RuntimeDelivery(RuntimeFiles):
                 args+=['--resume',provider_session_id]
         elif provider=='codex':
             plan=self.codex_trust()
+            self.codex_child_rules(home)
             args=[binary,'-C',row['cwd'],'-c','check_for_update_on_startup=false',
                   '-c','mcp_servers.orrery-mail.command='+json.dumps(proxy[0]),
                   '-c','mcp_servers.orrery-mail.args='+json.dumps(proxy[1:]),
@@ -845,6 +868,10 @@ class RuntimeDelivery(RuntimeFiles):
         elif provider=='gemini':
             config=self.directory(home/'.gemini/config')/'mcp_config.json'
             self.generated_config(config,{'mcpServers':{'orrery-mail':{'command':proxy[0],'args':proxy[1:]}}},preserve_native=True)
+            if sys.platform == 'darwin':
+                declaration = runpy.run_path(str(consent_guard))['antigravity_settings']
+                self.generated_config(config.with_name('hooks.json'),
+                    declaration(sys.executable, consent_guard), preserve_groups=True)
             args=[binary,'--input-format','stream-json','--output-format','stream-json']
             if row['launch_kind']=='resume':
                 if not provider_session_id:self.fail('PROVIDER_SESSION_REQUIRED')
@@ -864,6 +891,11 @@ class RuntimeDelivery(RuntimeFiles):
                 PostToolUse=[{'matcher':'Edit|Write|MultiEdit|NotebookEdit','hooks':[hook('post-edit')]},
                              {'hooks':[hook('notifications')]}],
                 SessionEnd=[{'hooks':[hook('end-session')]}])
+            if sys.platform == 'darwin':
+                hooks['PreToolUse'].append({'matcher': 'Bash', 'hooks': [
+                    {'type': 'command',
+                     'command': shlex.join([sys.executable, str(consent_guard)]), 'timeout': 5}
+                ]})
             settings = home / 'orrery-hooks.json'
             self.generated_config(settings,{'hooks':hooks})
             args += ['--settings',str(settings)]

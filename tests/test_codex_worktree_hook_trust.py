@@ -566,3 +566,23 @@ def test_worktree_resume_carries_the_childs_existing_source_repo_trust(parent_ca
     level = {"same": "trusted", "revoked": "untrusted"}.get(scenario)
     assert projects == ({str(root): {"trust_level": level}} if level else {})
     assert (source / "config.toml").read_bytes() == original
+
+
+def test_nested_codex_spawn_and_resume_regenerate_managed_rules(parent_case, monkeypatch):
+    runtime = parent_case["runtime"]
+    parent_home = parent_case["parent_home"]
+    filename = child_resume.CODEX_CHILD_RULES
+    inherited = parent_home / "rules"
+    inherited.mkdir(exist_ok=True)
+    parent_rules = inherited / filename
+    parent_rules.write_bytes(b'# Previous managed policy\n')
+    user_rules = inherited / "user.rules"
+    user_rules.write_bytes(b'# User policy\n')
+    generated = runtime / "child-agents" / f"{NAME}.codex-home" / "rules"
+    for index, expected in enumerate((b'# Current policy at spawn\n', b'# Current policy at resume\n')):
+        monkeypatch.setattr(child_resume, "codex_child_exec_rules", lambda: expected)
+        parent_case["build"](NAME, parent_home, PARENT, use_recorded_parent=bool(index))
+        assert (generated / filename).read_bytes() == expected
+        assert not (generated / filename).is_symlink()
+        assert (generated / "user.rules").read_bytes() == user_rules.read_bytes()
+        assert parent_rules.read_bytes() == b'# Previous managed policy\n'

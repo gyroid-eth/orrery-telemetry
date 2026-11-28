@@ -62,6 +62,14 @@ file と tool argument の境界を変えません。旧 Keychain service は既
 - **予約の取得:** managed `workspace-v1` の拒否文は、必要な物理絶対 path を示します。bound proxy の `reserve_files` にその path を渡し、更新・解放にも同じ path を使います。相対予約を自動で絶対化する機能はありません。[共通 proxy の path 契約と更新手順](https://github.com/gyroid-eth/orrery/blob/master/docs/codex-app.md#agent-の利用手順)を参照してください。dsh/Hermes の native adapter と Codex の承認済み hook も同じ guard を使います。
 - **deploy順:** strict identity版を既存sessionへ途中適用しません。cutover C5で全clientを`agent-start`経由でrestart/rebindし、exact identityを確認してからrepo版をliveへ同期し、予約あり/なしの両方向testを通します。
 
+### macOS の同意ダイアログ
+
+macOS の tmux 内では、Claude Code、Codex、dsh、Hermes、Antigravity CLI がシェル実行前に共通の [macOS consent guard](../hooks/macos_consent_guard.py) を参照します。直接の `screencapture`、`osascript` と、一般的な Python・Swift の Quartz 撮影を止めます。画面操作は Cua Driver、ブラウザは chrome MCP または CDP service を使います。対象はシェルの実行位置と明示的に起動するスクリプトで、Linux と tmux 外では判定しません。
+
+legacy の Claude 子はインストール済みの Bash hook を継承します。legacy の Antigravity は対話型と headless の両方で PreToolUse を設定します。headless の子 worktree に追跡済みの `.agents/hooks.json` がある場合は、プロジェクトの設定を保護するために起動を止めます。
+
+Codex は有効かつ人がレビュー済みの ORRERY shell hook を使います。既存の plugin 定義と同梱スクリプトはそのままで、更新内容は core の共通判定に入ります。
+
 ### `check-agent-registered.sh`
 
 - **発火:** `Edit` / `Write` / `Bash` の直前。
@@ -240,10 +248,18 @@ ORRERY に参加する Claude Code の SessionStart は、指示ファイルの�
 
 ## ローカルモデルの鍵をagentのshellから読まない
 
-ClaudeのBashと、Codex pluginのexec_command / shell_command / shellは、同じ
-`deny-llm-key-read.py`を呼びます。Codexでは更新したhookを人が`/hooks`で確認・承認し、
-新しいprocessから使ってください。installerは通常のhooks treeとpluginとして配布し、
-承認を自動化しません。
+Claude の Bash、dsh、Hermes は共通の `deny-llm-key-read.py` を使います。
+Codex CLI は shell hook に `Bash` という名前を使います。既存の ORRERY plugin の
+matcher は旧来のツール名で定義されているため、次の exec policy が指定のコマンドを止めます。
+
+macOS と WSL では、ORRERY が Codex の起動・再開用 HOME に
+`rules/orrery-child-shell-guard.rules` を生成します。Mac では
+`screencapture`・`osascript` の直接実行と `security find-generic-password`、
+WSL では `secret-tool lookup`・`secret-tool search` の直接実行を拒否します。
+既存のユーザー rules は併用できます。この policy は生成された Codex の中で働き、
+ORRERY 自身の unlock や他のハーネスの key_cmd はその外で動きます。
+Codex は起動時に rules を読み込み、hook の承認操作は不要です。
+Quartz の呼び出しや別のスクリプトの内部は接頭辞ルールの対象外です。
 
 鍵の値は読まず、既存の定義にある参照だけを読みます。既定は
 `$AGENTSTACK_HOME/integrations/dsh/backend.json`（`backends.*.keychain`）。別の既存定義を
