@@ -209,9 +209,17 @@ def test_identified_reservation_outage_follows_policy(sandbox, policy, expected)
         assert 'systemMessage' in json.loads(result.stdout)
 
 
-@pytest.mark.parametrize('state,phrase', [('untrusted', 'needs_review'), ('missing', 'missing'),
-                                        ('trusted', 'enabled and its current hook definition is trusted')])
-def test_diagnostic_reports_guard_without_approving_it(sandbox, tmp_path, state, phrase):
+@pytest.mark.parametrize('lifecycle_only', [False, True])
+@pytest.mark.parametrize('state,phrase,lifecycle,expected', [
+    ('untrusted', 'needs_review', 'untrusted', 'sessionStart (untrusted)'),
+    ('missing', 'missing', 'trusted', 'All 1 discovered ORRERY Codex hooks are trusted'),
+    ('trusted', 'enabled and its current hook definition is trusted', 'trusted',
+     'All 2 discovered ORRERY Codex hooks are trusted'),
+    ('trusted', 'enabled and its current hook definition is trusted', 'modified', 'sessionStart (modified)'),
+    ('unknown', 'unknown', 'unknown', 'Codex lifecycle hook approval is unknown'),
+])
+def test_diagnostic_reports_guard_without_approving_it(sandbox, tmp_path, state, phrase, lifecycle, expected,
+                                                    lifecycle_only):
     project, env = sandbox
     binary, log = tmp_path / 'codex-fixture', tmp_path / 'rpc.jsonl'
     binary.write_text('#!' + sys.executable + '\n' + '''import json,sys
@@ -227,18 +235,29 @@ for line in sys.stdin:
               'trustStatus':STATE,'source':'plugin','isManaged':False,
               'sourcePath':SOURCE,'handlerType':'command',
               'command':'"$PLUGIN_ROOT/scripts/run-reservation-guard.sh"','async':False}
-        result={'data':[{'cwd':CWD,'hooks':[] if STATE=='missing' else [hook],'errors':[]}]}
+        lifecycle=dict(pluginId=hook['pluginId'],eventName='sessionStart',source='plugin',
+                       enabled=LIFECYCLE=='trusted',trustStatus=LIFECYCLE)
+        unrelated=dict(lifecycle,pluginId='other@local',eventName='stop',trustStatus='modified')
+        hooks=[lifecycle,unrelated] if STATE=='missing' else [hook,lifecycle,unrelated]
+        result={'data':[{'cwd':CWD,'hooks':hooks,'errors':['probe failed'] if STATE=='unknown' else []}]}
     print(json.dumps({'id':request['id'],'result':result}),flush=True)
 '''.replace('LOG', repr(str(log))).replace('STATE', repr(state))
+       .replace('LIFECYCLE', repr(lifecycle))
        .replace('SOURCE', repr(str(tmp_path / 'plugin/hooks/hooks.json'))).replace('CWD', repr(str(project))))
     binary.chmod(0o755)
-    result = subprocess.run([sys.executable, str(ROOT / 'scripts/codex-reservation-status.py'),
-                             '--codex-binary', str(binary), '--codex-home', env['CODEX_HOME'],
-                             '--cwd', str(project), '--plugin-id', 'agentstack-codex-app@agentstack-local'],
-                            env=env, capture_output=True, text=True, timeout=10)
-    assert result.returncode == 0 and phrase in result.stdout, result.stderr + result.stdout
-    if state != 'trusted':
-        assert 'warn:' in result.stdout and '/hooks' in result.stdout and 'unguarded' in result.stdout
+    args = [sys.executable, str(ROOT / 'scripts/codex-reservation-status.py'),
+            '--codex-binary', str(binary), '--codex-home', env['CODEX_HOME'], '--cwd', str(project)]
+    args += ['--lifecycle-only'] if lifecycle_only else ['--plugin-id', 'agentstack-codex-app@agentstack-local']
+    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert expected in result.stdout
+    assert 'stop (modified)' not in result.stdout
+    if lifecycle_only:
+        assert 'reservation guard' not in result.stdout
+    else:
+        assert phrase in result.stdout
+        if state != 'trusted':
+            assert 'warn:' in result.stdout and '/hooks' in result.stdout and 'unguarded' in result.stdout
     calls = [json.loads(line)['method'] for line in log.read_text().splitlines()]
     assert calls == ['initialize', 'initialized', 'hooks/list']
 
