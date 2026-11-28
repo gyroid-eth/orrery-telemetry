@@ -87,7 +87,7 @@
         ]
       },
       {
-        "matcher": "^(exec_command|shell_command|shell)$",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",

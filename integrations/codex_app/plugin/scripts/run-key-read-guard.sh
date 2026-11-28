@@ -1,4 +1,12 @@
 #!/bin/bash
+IFS= read -r -d '' PAYLOAD || :
+# Codex emits a flat scalar header before tool_name. Parse only that prefix;
+# nested fields, duplicate names or a changed shape go to the core.
+_scalar='("([^"\\]|\\.)*"|null|true|false|-?[0-9]+)'
+_mcp_name='^[[:space:]]*\{[[:space:]]*("[A-Za-z_][A-Za-z_0-9]*"[[:space:]]*:[[:space:]]*'"$_scalar"'[[:space:]]*,[[:space:]]*)*"tool_name"[[:space:]]*:[[:space:]]*"mcp__[A-Za-z0-9_.-]+"[[:space:]]*[,}]'
+if [[ "$PAYLOAD" != *'"tool_name"'*'"tool_name"'* && "$PAYLOAD" =~ $_mcp_name ]]; then
+  exit 0
+fi
 if [[ "${AGENTSTACK_FRESH_PYTHON+x}" == x || -n "${AGENTSTACK_FRESH_LAUNCH_ID:-}" ]]; then
   _ags_env="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fresh-cli-env.sh"
   [[ -f "$_ags_env" ]] || { printf '%s\n' FRESH_CODEX_ENV_UNAVAILABLE >&2; exit 2; }
@@ -14,7 +22,7 @@ if [[ ( "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MOD
     printf '%s\n' FRESH_CODEX_GUARD_UNAVAILABLE >&2; exit 2
   fi
   # CLI fresh must not enter the legacy shell guard's fail-open fallback.
-  if "$AGENTSTACK_PYTHON" "$GUARD"; then
+  if "$AGENTSTACK_PYTHON" "$GUARD" <<< "$PAYLOAD"; then
     exit 0
   else
     _ags_guard_rc=$?
@@ -26,10 +34,9 @@ if [[ ( "${AGENTSTACK_FRESH_CLIENT_CONTEXT+x}" == x || "${AGENTSTACK_RUNTIME_MOD
 fi
 GUARD="$CORE_HOME/hooks/deny-llm-key-read.sh"
 if [[ -f "$GUARD" ]]; then
-  exec /bin/bash "$GUARD"
+  exec /bin/bash "$GUARD" <<< "$PAYLOAD"
 fi
 # No usable core guard: do not disable ordinary shell commands.
-PAYLOAD="$(cat)"
 case "$PAYLOAD" in
   *find-generic-password*-w*|*find-generic-password*-g*|*secret-tool*lookup*|*secret-tool*search*)
     echo 'LOCAL_MODEL_KEY_READ_UNAVAILABLE: refresh the core installation and review /hooks.' >&2
