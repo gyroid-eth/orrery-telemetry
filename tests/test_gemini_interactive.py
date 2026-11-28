@@ -1,6 +1,7 @@
 """Managed Antigravity child handoff, permissions, roster and resume."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -264,6 +265,69 @@ def test_edit_uses_shared_reservation_and_shell_stays_in_the_worktree(managed, m
     assert agy.guard(event, cwd, runtime=runtime)["decision"] == "allow"
     monkeypatch.setenv("AGENTSTACK_CHILD_SANDBOX", "on")
     assert agy.guard(event, cwd, runtime=runtime)["decision"] == "deny"
+
+
+@pytest.mark.parametrize(("name", "mode", "args"), [
+    ("write_file", "Write", {"Content": "fixture", "Overwrite": False}),
+    ("edit_file", "Edit", {"Target": "before", "Replacement": "after"}),
+])
+def test_native_file_changes_require_a_reservation(managed, monkeypatch, name, mode, args):
+    runtime, cwd, _ = managed
+    matcher = json.loads((cwd / ".agents/hooks.json").read_text())["orrery-child"]["PreToolUse"][0]["matcher"]
+    attempts = []
+
+    def hook(argv, **kwargs):
+        if Path(argv[-1]).name == "check-file-reservation.sh":
+            attempts.append(json.loads(kwargs["input"]))
+            return SimpleNamespace(returncode=2)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(agy.subprocess, "run", hook)
+    event = {"toolCall": {"name": name, "args": {**args, "Path": "notes.md"}}}
+    assert re.fullmatch(matcher, name)
+    assert agy.guard(event, cwd, runtime=runtime) == {
+        "decision": "deny", "reason": "ORRERY blocked this action (check-file-reservation.sh)",
+    }
+    assert [(call["tool_name"], call["tool_input"]) for call in attempts] == [
+        (mode, {"file_path": str(cwd / "notes.md")}),
+    ]
+
+
+def test_native_read_blocks_a_protected_key_file(managed, monkeypatch):
+    runtime, cwd, _ = managed
+    matcher = json.loads((cwd / ".agents/hooks.json").read_text())["orrery-child"]["PreToolUse"][0]["matcher"]
+    fixture = cwd / "fake-key"
+    fixture.write_text("synthetic data")
+    monkeypatch.setenv("AGENTSTACK_LLM_KEY_FILES", json.dumps([str(fixture)]))
+    event = {"toolCall": {"name": "read_file", "args": {"Path": "fake-key", "StartLine": 1, "EndLine": 1}}}
+    assert re.fullmatch(matcher, "read_file")
+    assert agy.guard(event, cwd, runtime=runtime) == {
+        "decision": "deny", "reason": "ORRERY blocked this action (deny-llm-key-read.py)",
+    }
+    event["toolCall"]["args"]["Path"] = "ordinary.txt"
+    assert agy.guard(event, cwd, runtime=runtime) == {"decision": "allow"}
+
+
+def test_managed_worktree_updates_only_the_previous_guard_config(managed):
+    _, cwd, state = managed
+    path = cwd / ".agents/hooks.json"
+    config = json.loads(path.read_text())
+    config["orrery-child"]["PreToolUse"][0]["matcher"] = (
+        "view_file|write_to_file|replace_file_content|multi_replace_file_content|run_command"
+    )
+    child_resume._atomic_json(path, config)
+    plan = state["gemini_launch"]
+
+    assert agy.validate_plan(plan) == cwd
+    assert json.loads(path.read_text()) == config
+    assert agy.validate_plan(plan, refresh_hooks=True) == cwd
+    assert json.loads(path.read_text()) == agy._configured_hooks(plan["python"])
+
+    config["orrery-child"]["PreToolUse"][0]["hooks"][0]["command"] = "/bin/true"
+    child_resume._atomic_json(path, config)
+    with pytest.raises(ValueError, match="reservation hook is unavailable"):
+        agy.validate_plan(plan, refresh_hooks=True)
+    assert json.loads(path.read_text()) == config
 
 
 @pytest.mark.parametrize("shared_inside", [False, True])
