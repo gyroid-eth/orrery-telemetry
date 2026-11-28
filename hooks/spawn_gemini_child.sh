@@ -295,8 +295,13 @@ agentstack_apply_workspace_context "$WORKTREE_DIR" "$PROJECT_KEY" || exit 1
 # this ignore rule in a child-owned file instead and inject it only into Git
 # processes descended from the Antigravity runner via GIT_CONFIG_COUNT.
 GIT_EXCLUDES_FILE="$RUNTIME_DIR/gemini-git-excludes-$CHILD_NAME"
-( umask 077 && printf '%s\n' '.agents/mcp_config.json' \
-  '.agents/rules/orrery-tool-refusals.md' > "$GIT_EXCLUDES_FILE" )
+(
+    umask 077
+    printf '%s\n' '.agents/mcp_config.json' '.agents/rules/orrery-tool-refusals.md'
+    if [[ "$(uname -s)" == Darwin ]]; then
+        printf '%s\n' '.agents/hooks.json'
+    fi
+) > "$GIT_EXCLUDES_FILE"
 
 if [[ -n "$RESOURCES" ]]; then
   mail_helper reserve --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
@@ -312,6 +317,11 @@ mkdir -p "$WORKTREE_DIR/.agents"
 "$PYTHON_BIN" "$INTERACTIVE_HELPER" tool-refusal-rule "$WORKTREE_DIR"
 MCP_CONFIG="$WORKTREE_DIR/.agents/mcp_config.json"
 if [[ "$(uname -s)" == Darwin ]]; then
+  if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/hooks.json >/dev/null 2>&1; then
+    echo "$PROG: tracked .agents/hooks.json exists; refusing to overwrite project-owned Antigravity hooks" >&2
+    exit 1
+  fi
+  "$PYTHON_BIN" "$INTERACTIVE_HELPER" consent-hook "$WORKTREE_DIR" || exit 1
   "$PYTHON_BIN" "$HOOKS_DIR/child_tools.py" agy-config \
     --out "$MCP_CONFIG" --runner "$MCP_WRAPPER" --child "$CHILD_NAME" \
     --project-key "$PROJECT_KEY" --runtime-dir "$RUNTIME_DIR" --mail-env "$MAIL_ENV" \

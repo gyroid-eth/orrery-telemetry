@@ -300,7 +300,24 @@ def decide(payload):
 def main():
     raw = sys.stdin.read()
     try:
-        denied = decide(json.loads(raw))
+        payload = json.loads(raw)
+        if sys.platform == 'darwin' and os.environ.get('TMUX'):
+            try:
+                from macos_consent_guard import check
+                cwd = Path(payload.get('cwd') or os.getcwd())
+                name = payload.get('tool_name', '').rsplit('.', 1)[-1].lower()
+                if name in {'exec_command', 'shell_command', 'shell'}:
+                    inputs = payload.get('tool_input') or {}
+                    if isinstance(inputs, str):
+                        inputs = json.loads(inputs)
+                    cwd /= inputs.get('workdir') or ''
+                reason = check(command_text(payload), cwd)
+            except (ImportError, AttributeError, TypeError, ValueError):
+                reason = None
+            if reason:
+                print(reason, file=sys.stderr)
+                return 2
+        denied = decide(payload)
     except Exception:
         denied = ('find-generic-password' in raw and ('-w' in raw or '-g' in raw)) or ('secret-tool' in raw and any(verb in raw for verb in ('lookup', 'search')))
     if denied:
