@@ -710,7 +710,7 @@ PYPLUGIN
   case "$plugin_state" in
     enabled)
       echo "ok: Codex history binding plugin installed and enabled ($plugin_id)"
-      echo "note: Codex lifecycle hook approval is unknown; open /hooks in Codex to review/approve the AgentStack hooks, then start a new Codex process before expecting BOUND history."
+      local lifecycle_unknown="note: Codex lifecycle hook approval is unknown; open /hooks in Codex to review/approve the AgentStack hooks, then start a new Codex process before expecting BOUND history."
       local reservation_diagnostic="${SCRIPT_DIR:-}/codex-reservation-status.py"
       [[ -f "$reservation_diagnostic" ]] || reservation_diagnostic="${INSTALL_DIR:-${AGENTSTACK_HOME:-$HOME/.agentstack}}/bin/lib/codex-reservation-status.py"
       if [[ -f "$reservation_diagnostic" ]]; then
@@ -723,10 +723,12 @@ PYPLUGIN
           set -- env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 AGENTSTACK_CODEX_BIN="$codex_bin" \
             "$CHILD_SHELL" -lc "${CODEX_CHILD_PATH_SETUP:-}"'; exec "$0" "$@"' "$@"
         fi
-        "$@" || echo "warn: Codex apply_patch reservation guard status is unknown; refresh core/plugin and review /hooks before relying on guarded edits."
-      else
-        echo "warn: Codex apply_patch reservation guard status is unknown; refresh core/plugin and review /hooks before relying on guarded edits."
+        if "$@"; then
+          return 0
+        fi
       fi
+      echo "$lifecycle_unknown"
+      echo "warn: Codex apply_patch reservation guard status is unknown; refresh core/plugin and review /hooks before relying on guarded edits."
       ;;
     disabled)
       echo "warn: Codex apply_patch reservation guard is disabled; edits may be unguarded. Enable the plugin and review /hooks."

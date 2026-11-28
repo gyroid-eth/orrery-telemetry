@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only diagnostic for the current Codex plugin's reservation hook trust."""
+"""Read-only diagnostic for the current ORRERY Codex plugin's hook trust."""
 from __future__ import annotations
 
 import argparse
@@ -8,14 +8,22 @@ from pathlib import Path
 from codex_plugin_trust import AppServer, TrustUnavailable
 
 
-def status(server, cwd: Path, plugin_id: str) -> str:
+def plugin_hooks(server, cwd: Path, plugin_id: str) -> list[dict] | None:
     result = server.request('hooks/list', {'cwds': [str(cwd)]})
     entries = [item for item in result.get('data', []) if item.get('cwd') == str(cwd)]
     if len(entries) != 1 or entries[0].get('errors'):
+        return None
+    hooks = entries[0].get('hooks')
+    if not isinstance(hooks, list) or any(not isinstance(h, dict) for h in hooks):
+        return None
+    return [h for h in hooks if h.get('pluginId') == plugin_id]
+
+
+def reservation_status(hooks: list[dict] | None) -> str:
+    if hooks is None:
         return 'unknown'
-    matches = [h for h in entries[0].get('hooks', [])
-               if h.get('pluginId') == plugin_id
-               and h.get('eventName') in ('preToolUse', 'PreToolUse', 'pre_tool_use')
+    matches = [h for h in hooks
+               if h.get('eventName') in ('preToolUse', 'PreToolUse', 'pre_tool_use')
                and h.get('matcher') == '^apply_patch$'
                and 'run-reservation-guard.sh' in str(h.get('command', h.get('handler', {}).get('command', '')))]
     if not matches:
@@ -39,6 +47,18 @@ def status(server, cwd: Path, plugin_id: str) -> str:
     return 'trusted' if hook.get('trustStatus') == 'trusted' else 'needs_review'
 
 
+def lifecycle_report(hooks: list[dict] | None) -> str:
+    states = [(h.get('eventName'), h.get('trustStatus')) for h in hooks or []
+              if h.get('source') == 'plugin']
+    review = [f'{event} ({state})' for event, state in states
+              if isinstance(event, str) and event.isidentifier() and state in ('modified', 'untrusted')]
+    if review:
+        return f'warn: {len(review)} ORRERY Codex hooks need review in /hooks — ' + ', '.join(review)
+    if hooks and len(states) == len(hooks) and all(state == 'trusted' for _, state in states):
+        return f'ok: All {len(hooks)} discovered ORRERY Codex hooks are trusted'
+    return 'note: Codex lifecycle hook approval is unknown. Inspect the ORRERY hooks in /hooks.'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex-binary', required=True)
@@ -48,9 +68,11 @@ def main():
     args = parser.parse_args()
     try:
         with AppServer(args.codex_binary, args.codex_home, args.cwd, timeout=5) as server:
-            state = status(server, args.cwd, args.plugin_id)
+            hooks = plugin_hooks(server, args.cwd, args.plugin_id)
     except (TrustUnavailable, OSError, ValueError, TypeError, AttributeError):
-        state = 'unknown'
+        hooks = None
+    print(lifecycle_report(hooks))
+    state = reservation_status(hooks)
     if state == 'trusted':
         print('ok: Codex apply_patch reservation guard is enabled and its current hook definition is trusted')
     else:
