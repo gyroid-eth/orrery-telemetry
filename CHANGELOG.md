@@ -10,6 +10,44 @@
 
 ---
 
+## 2026.11.28
+
+### スマホで provider の利用枠を確認
+
+- Mobile Reader のヘッダーに provider ごとの残量を表示します。帯をタップすると観測時刻、各期間の残量、リセットまでの時間を確認できます。取得できない値や古い値は状態を表示します。
+- macOS と WSL2 の relay で利用できます。Demo でも残量・残高を表示し、アカウント名やメールアドレスはスマホに送りません。
+
+### Codex 子の起動・再開で現在のフック承認を引き継ぐ
+
+現在の ORRERY プラグインを本人が承認したと Codex が確認できる場合、新規・再開時にその承認を引き継ぎます。古い親 HOME の承認で上書きされ、レビュー画面に戻ることを防ぎます。
+
+### macOS の同意ダイアログを要求する操作を事前に拒否
+
+tmux 内の Claude Code、dsh、Hermes、Antigravity CLI が、画面収録や Automation の同意を要求するコマンドを実行前に止めます。拒否時は Cua Driver とブラウザ用の経路を案内します。
+
+ORRERY が起動・再開する Codex では、macOS の撮影・Automation・Keychain と WSL の Secret Service を呼ぶ指定コマンドを exec policy で拒否します。このルールには hook の承認操作が要りません。
+
+### 親ありの Antigravity を worktree なしで起動・再開する
+
+- `worktree: false` で指定フォルダーを使い、管理設定は起動ごとの専用ディレクトリから渡します。同じ親・会話・フォルダーで権限を切り替えられます。
+
+### デスクトップ app で cockpit backend を自動更新する
+
+- checkout と稼働中の版が変わると、送信・Exit・権限再開が終わるまで待って backend を更新し、agent の tmux を維持します。成功や失敗を帯で表示し、失敗時は `Restart backend` から現時点の版を起動できます。
+- Windows app から WSL へ渡す起動スクリプトを LF に揃えます。([orrery #291](https://github.com/gyroid-eth/orrery/pull/291))
+
+### 狭い端末でも Hermes と dsh に Mail の通知を送る
+
+- Hermes の入力欄で先頭の記号が隠れても、見えている本文の末尾を照合して送信します。dsh が長文を行数と文字数だけの表示に縮めた場合も、通知係が貼った内容と確認できれば送信します。
+- 狭い Hermes で Exit のコマンド候補を読み取ります。Exit を確認できなかった場合は、今回貼り付けたコマンドが入力欄に残っていると確認できたときだけ消します。
+
+### URL・同時送信・Exit と権限再開の改善
+
+- URL を含む Codex の入力を照合し、幅の狭い端末や Codex の候補・入力記号の違いに対応します。送信と Exit の結果を宛先別に記録します。([orrery #290](https://github.com/gyroid-eth/orrery/pull/290))
+- 大きな worktree の checkout は起動確認と別に待ち、同時起動の失敗詳細を起動ごとに分けます。使用中の名を NEW AGENT の候補から外します。
+- Codex の権限再開では同じ作業フォルダーと元の Git リポジトリの Trust を引き継ぎます。Antigravity は WSL でも画面・ブラウザーの権限を切り替え、管理 MCP の準備を待ってから会話を再開できます。
+- My Chrome の接続可否は DevTools の応答で確かめます。WSL の鍵束ロックや Temporary Chrome に必要なブラウザーも案内します。
+
 ## 2026.11.27
 
 ### WSL から Windows に届く接続を選ぶ
