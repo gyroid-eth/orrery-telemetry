@@ -351,7 +351,9 @@ def codex_child_exec_rules() -> bytes | None:
     return None
 
 
-def install_codex_child_exec_rules(home: Path, rules: bytes, inherited: Path | None = None) -> None:
+def install_codex_child_exec_rules(
+    home: Path, rules: bytes, inherited: Path | None = None, *, inherited_managed: bool = False
+) -> None:
     directory = home / "rules"
     directory.mkdir(mode=0o700, exist_ok=True)
     info = directory.lstat()
@@ -360,6 +362,8 @@ def install_codex_child_exec_rules(home: Path, rules: bytes, inherited: Path | N
     if inherited is not None and inherited.exists():
         for entry in inherited.iterdir():
             if entry.name == CODEX_CHILD_RULES:
+                if inherited_managed:
+                    continue
                 raise ValueError("the source Codex home uses the reserved ORRERY child rule filename")
             (directory / entry.name).symlink_to(entry)
     target = directory / CODEX_CHILD_RULES
@@ -2267,7 +2271,10 @@ def _build_home_unlocked(
         rules = codex_child_exec_rules()
         if rules is not None:
             sandbox_metadata.add("rules")
-            install_codex_child_exec_rules(temporary, rules, inherited=source / "rules")
+            managed_source = (source.name.endswith(".codex-home") and
+                              source.resolve().parent == (runtime_dir / "child-agents").resolve())
+            install_codex_child_exec_rules(temporary, rules, inherited=source / "rules",
+                                           inherited_managed=managed_source)
         for entry in source.iterdir():
             if entry.name == "config.toml" or entry.name in sandbox_metadata:
                 continue
