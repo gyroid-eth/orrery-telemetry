@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import socket
 import threading
+import time
 
 import pytest
 
@@ -84,6 +85,84 @@ def request(port,path='/view/snapshot',method='GET',headers=None):
             'Host':'viewer.example.ts.net:9443','Tailscale-User-Login':'owner@example.test'})
         response=con.getresponse();return response.status,dict(response.getheaders()),response.read()
     finally:con.close()
+
+
+def test_usage_projects_only_public_readings_through_the_owner_route():
+    now = int(time.time())
+    private = 'account@example.test'
+    calls = []
+
+    def window(bucket_id, seconds, percent, **extra):
+        return dict(id=bucket_id, label=private, window_seconds=seconds,
+                    remaining_percent=percent, **extra)
+
+    upstream = {'providers': [
+        dict(provider='claude', status='ok', observed_at=now - 20, account=private, buckets=[
+            window('five_hour', 18000, 64, resets_at=now + 300),
+            window('seven_day', 604800, 83),
+            window(private, 604800, 4),
+        ]),
+        dict(provider='codex', status='stale', observed_at=now - 380, reason=private, buckets=[
+            window(private, 18000, 18, resets_at=now - 5),
+            window(private, 604800, 5, value_status='unknown'),
+        ]),
+        dict(provider='antigravity', status='unavailable', reason=private),
+        dict(provider='dsh', status='ok', observed_at=now - 25,
+             token=private, balance=dict(currency='USD', is_available=True,
+                                         total_balance='8.40', account=private)),
+        dict(provider=private, status='ok'),
+    ]}
+
+    class Quotas(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            calls.append((self.path, self.headers.get('Tailscale-User-Login')))
+            response = json.dumps(upstream).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+    with serving(ThreadingHTTPServer(('127.0.0.1', 0), Quotas)) as upstream_port:
+        config = relay.Config('owner@example.test', 'https://viewer.example.ts.net:9443',
+                              upstream_port=upstream_port)
+        with serving(relay.make_server(config, store=Store(), test_port=0)) as port:
+            assert request(port, '/view/quotas', headers={'Host': 'viewer.example.ts.net:9443'})[0] == 403
+            assert request(port, '/view/quotas?provider=claude')[0] == 400
+            assert request(port, '/view/quotas', method='POST')[0] == 405
+            assert request(port, '/view/quotas', method='HEAD')[0::2] == (200, b'')
+            assert calls == []
+
+            status, headers, body = request(port, '/view/quotas')
+            assert status == 200 and headers['Cache-Control'] == 'no-store'
+            assert private.encode() not in body
+            payload = json.loads(body)
+            assert payload['fresh_seconds'] == 300
+            claude, codex, antigravity, dsh = payload['providers']
+            assert claude['windows'] == [
+                dict(window_seconds=18000, status='available', observed_at=now - 20,
+                     resets_at=now + 300, remaining_percent=64),
+                dict(window_seconds=604800, status='available', observed_at=now - 20,
+                     resets_at=None, remaining_percent=83),
+            ]
+            assert codex['status'] == codex['windows'][0]['status'] == 'stale'
+            assert codex['windows'][0]['observed_at'] == now - 380
+            assert codex['windows'][1]['remaining_percent'] is None
+            assert antigravity == dict(provider='antigravity', windows=[], status='unavailable')
+            assert dsh == dict(provider='dsh', status='available', windows=[],
+                               balance_usd='8.40', balance_available=True, observed_at=now - 25)
+            assert calls == [('/api/quotas', None)]
+
+            upstream['providers'][3]['balance'].update(total_balance='-0.021', is_available=False)
+            balance = json.loads(request(port, '/view/quotas')[2])['providers'][-1]
+            assert balance['balance_usd'] == '-0.03' and balance['balance_available'] is False
+
+            upstream.clear()
+            status, _, body = request(port, '/view/quotas')
+            assert status == 503 and json.loads(body) == {'error': 'usage_unavailable'}
 
 
 def test_owner_and_outer_authority_accept_originless_get_and_assets(reader):
