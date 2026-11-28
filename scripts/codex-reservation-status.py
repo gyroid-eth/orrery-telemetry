@@ -8,7 +8,7 @@ from pathlib import Path
 from codex_plugin_trust import AppServer, TrustUnavailable
 
 
-def plugin_hooks(server, cwd: Path, plugin_id: str) -> list[dict] | None:
+def plugin_hooks(server, cwd: Path, plugin_id: str | None) -> list[dict] | None:
     result = server.request('hooks/list', {'cwds': [str(cwd)]})
     entries = [item for item in result.get('data', []) if item.get('cwd') == str(cwd)]
     if len(entries) != 1 or entries[0].get('errors'):
@@ -16,6 +16,9 @@ def plugin_hooks(server, cwd: Path, plugin_id: str) -> list[dict] | None:
     hooks = entries[0].get('hooks')
     if not isinstance(hooks, list) or any(not isinstance(h, dict) for h in hooks):
         return None
+    if plugin_id is None:
+        return [h for h in hooks if isinstance(h.get('pluginId'), str)
+                and h['pluginId'].startswith('agentstack-codex-app@')]
     return [h for h in hooks if h.get('pluginId') == plugin_id]
 
 
@@ -64,14 +67,21 @@ def main():
     parser.add_argument('--codex-binary', required=True)
     parser.add_argument('--codex-home', type=Path, required=True)
     parser.add_argument('--cwd', type=Path, required=True)
-    parser.add_argument('--plugin-id', required=True)
+    parser.add_argument('--plugin-id')
+    parser.add_argument('--lifecycle-only', action='store_true')
     args = parser.parse_args()
+    if args.plugin_id is None and not args.lifecycle_only:
+        parser.error('--plugin-id is required for the reservation guard diagnostic')
     try:
         with AppServer(args.codex_binary, args.codex_home, args.cwd, timeout=5) as server:
             hooks = plugin_hooks(server, args.cwd, args.plugin_id)
     except (TrustUnavailable, OSError, ValueError, TypeError, AttributeError):
         hooks = None
+    if args.lifecycle_only and hooks == []:
+        return
     print(lifecycle_report(hooks))
+    if args.lifecycle_only:
+        return
     state = reservation_status(hooks)
     if state == 'trusted':
         print('ok: Codex apply_patch reservation guard is enabled and its current hook definition is trusted')

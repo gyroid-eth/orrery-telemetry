@@ -17,6 +17,7 @@ import pathlib
 import re
 import shlex
 import subprocess
+import sys
 import time
 
 import pytest
@@ -50,6 +51,30 @@ def _dashboard_only_block() -> str:
 
 
 _PROBE_FN = "echo LOADED=$(declare -F codex_bin_problem >/dev/null 2>&1 && echo yes || echo no)\necho HELPER=$CODEX_HELPER\n"
+
+
+def test_install_reports_codex_hook_review_in_the_launcher_context(tmp_path):
+    source = INSTALL.read_text(encoding="utf-8")
+    probe = re.search(r"^report_codex_hook_review\(\) \{\n.*?^\}", source, re.M | re.S).group()
+    codex_home = tmp_path / "codex home"
+    codex_home.mkdir()
+    diagnostic = tmp_path / "codex-reservation-status.py"
+    diagnostic.write_text(
+        "import os, sys\n"
+        "assert os.environ['AGENTSTACK_CODEX_BIN'] == sys.argv[2]\n"
+        "assert os.environ['TEST_CODEX_LAUNCH_PATH'] == 'ready'\n"
+        "assert sys.argv[3:5] == ['--codex-home', " + repr(str(codex_home)) + "]\n"
+        "assert sys.argv[-1] == '--lifecycle-only'\n"
+        "print('warn: ORRERY Codex hook needs review in /hooks')\n",
+        encoding="utf-8",
+    )
+    env = dict(os.environ, CODEX_CONTEXT_AVAILABLE="1", CODEX_BIN_SETTING="/bin/bash",
+               CODEX_HOME=str(codex_home), CHILD_SHELL="/bin/bash", SCRIPT_DIR=str(tmp_path),
+               CODEX_CHILD_PATH_SETUP="export TEST_CODEX_LAUNCH_PATH=ready", PYTHON_BIN=sys.executable)
+    result = subprocess.run(["/bin/bash", "-c", probe + "\nreport_codex_hook_review"],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "ORRERY Codex hook needs review in /hooks" in result.stdout
 
 
 def test_codex_helper_loads_from_the_checkout(tmp_path):

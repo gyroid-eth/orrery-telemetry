@@ -5200,6 +5200,16 @@ restart_codex_app_bridge() {
   fi
 }
 
+report_codex_hook_review() {
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  [[ "${CODEX_CONTEXT_AVAILABLE:-0}" == 1 && -x "$CODEX_BIN_SETTING" && -d "$codex_home" ]] || return 0
+  env CLAUDECODE=1 AGENTSTACK_RESERVED_IDENTITY=1 AGENTSTACK_CODEX_BIN="$CODEX_BIN_SETTING" \
+    "$CHILD_SHELL" -lc "$CODEX_CHILD_PATH_SETUP"'; exec "$0" "$@"' \
+    "$PYTHON_BIN" -B "$SCRIPT_DIR/codex-reservation-status.py" \
+    --codex-binary "$CODEX_BIN_SETTING" --codex-home "$codex_home" --cwd "$PWD" --lifecycle-only \
+    || say "note: Codex lifecycle hook approval is unknown. Inspect the ORRERY hooks in /hooks."
+}
+
 start_service() {
   local kind="$1"
   local launchd_target=""
@@ -5871,6 +5881,7 @@ PY
     say "Install complete: $URL"
     say "Manifest: $MANIFEST"
     say "Dashboard log: $DASHBOARD_LOG"
+    report_codex_hook_review
     say "Run doctor: $BIN_DIR/agentstack-doctor"
     say "Verify operation: $BIN_DIR/agentstack-selftest"
     if [[ "$SERVICE_FALLBACK_USED" == true ]]; then
