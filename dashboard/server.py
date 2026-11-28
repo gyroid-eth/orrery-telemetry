@@ -50,7 +50,7 @@ from collections import deque
 from urllib.parse import urlparse, parse_qs
 
 # Public dashboard compatibility generation (docs/tests read this source).
-API_GENERATION = 58
+API_GENERATION = 59
 # Mode admission is shared with hooks and operator/service entry points.
 import runpy as _runtime_runpy
 _MODE_API = _runtime_runpy.run_path(str(Path(__file__).resolve().parents[1] / 'bin/lib/runtime_client.py'))
@@ -72,13 +72,14 @@ if __name__ == '__main__':
 # `server.py` is both an executable script and an importable dashboard module
 # in the tests.  Support both import roots without coupling callers to cwd.
 try:
-    from dashboard import chrome_readiness, codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history
+    from dashboard import chrome_readiness, codex_models, mail_signals, provider_stalls, human_wait, harness_runtime, harness_helpers, harness_context, harness_activity, dsh_history, hermes_history, shell_guard_watch
     from dashboard.local_model_makers import LOCAL_MAKER_ASSETS
 except ModuleNotFoundError:  # direct `python dashboard/server.py`
     import chrome_readiness
     import codex_models
     import mail_signals
     import provider_stalls
+    import shell_guard_watch
     import human_wait
     import harness_runtime
     import harness_helpers
@@ -2652,6 +2653,8 @@ def build_agents(history_days: float | None = HISTORY_DAYS_DEFAULT) -> list[dict
                 row["last_active_rel"] = _rel(transcript_at, int(observed_now))
         binding.pop("_transcript_activity", None)
         row.update(binding)
+        if live_tmux and _shell_guard_monitor is not None:
+            row["shell_guard_status"] = _shell_guard_monitor.view(name, _human_wait_generation(sessions[name]))
         registration = None
         if registrations is not None and project_key and row.get("project_key") == project_key:
             registered = registrations.by_project.get((project_key, name))
@@ -7909,6 +7912,7 @@ _rt_lock = threading.Lock()
 _provider_captures: dict[str, tuple[str, float, dict]] = {}
 _human_wait_captures: dict[str, tuple[str, float, dict]] = {}
 _provider_monitor = None
+_shell_guard_monitor = None
 _provider_thread = None
 _provider_stop = threading.Event()
 
@@ -7950,7 +7954,7 @@ def _stall_parent(name: str, generation: str) -> str:
 
 
 @_with_registration_batch
-def _provider_stall_samples(human_samples=None):
+def _provider_stall_samples(human_samples=None, shell_samples=None):
     samples = []
     sessions = tmux_state()
     agents, _ = agentmail_state()
@@ -7959,18 +7963,30 @@ def _provider_stall_samples(human_samples=None):
         agent = agents.get(name)
         program = agent.get("program") if agent else None
         native = human_wait.PROGRAMS.get(program)
-        if not native or (native != "codex" and human_samples is None):
+        if not native or (native != "codex" and human_samples is None and shell_samples is None):
             continue
         try:
             if not _tmux_row_state(name, session, agent, tree)[2]:
                 continue
             parent = _stall_parent(name, _provider_generation(session))
             human = human_samples is not None and parent and session.get("mail_disabled") != "1"
-            if not human and native != "codex":
+            if not human and native != "codex" and shell_samples is None:
                 continue
             registration = (_codex_registration(name) if native == "codex"
                             else _resume_registration(name, {program}))
             if not registration:
+                continue
+            if shell_samples is not None and _card_child_state(Path(RUNTIME_DIR) / "child-agents", name, registration):
+                created = session.get("created")
+                binding = _history_binding_fields(
+                    {"name": name, "program": program, "created": created, "running": True},
+                    now=time.time(), session_state=session,
+                )
+                shell_samples.append(dict(name=name, agent_id=registration["agent_id"],
+                                          project_key=registration["project_key"], parent=parent,
+                                          generation=_human_wait_generation(session), created=created,
+                                          program=program, binding=binding))
+            if not human and native != "codex":
                 continue
             args = (name, session.get("created"), session.get("session_id"))
             if program in harness_runtime.HARNESSES:
@@ -8046,18 +8062,29 @@ def _human_wait_send(row, screen):
     return _child_observation_mail(row, *screen.message(row["name"]), human=True)
 
 
+def _shell_guard_send(row):
+    subject = f"{row['name']} の shell guard を確認できません"
+    body = "shell tool の履歴はありますが、対応する ORRERY guard の記録が期限内に見つかりませんでした。"
+    return _child_observation_mail(row, subject, body, human=True)
+
+
 def _start_provider_stall_monitor():
-    global _provider_monitor, _provider_thread
+    global _provider_monitor, _provider_thread, _shell_guard_monitor
     if FRESH_MODE or GLOBAL_MODE or os.name == "nt" or _provider_monitor is not None:
         return
     _provider_stop.clear()
     _provider_monitor = provider_stalls.Monitor(Path(RUNTIME_DIR) / "provider-stalls.json",
         _provider_stall_send, session_names=mail_signals.session_names)
     waits = human_wait.Monitor(Path(RUNTIME_DIR) / "human-waits.json", _human_wait_send)
+    _shell_guard_monitor = shell_guard_watch.Monitor(RUNTIME_DIR, _shell_guard_send)
 
     def observe():
-        humans = []
-        capacity = _provider_stall_samples(humans)
+        humans, shells = [], []
+        capacity = _provider_stall_samples(humans, shells)
+        try:
+            _shell_guard_monitor.tick(shells, time.time())
+        except (OSError, ValueError):
+            logging.exception("Shell guard observation failed")
         try:
             waits.tick(humans)
         except (OSError, ValueError):

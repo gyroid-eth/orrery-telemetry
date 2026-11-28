@@ -6,6 +6,7 @@
 
 - [API reference](api.en.md)
 - [Hooks and operational helpers](hooks.en.md)
+- [Codex shell guard rollout and review (Japanese)](codex-shell-guard-review.md)
 - [ORRERY Mail extraction](agentstack-mail.en.md)
 - [Canonical bindings and notifications for deterministic daemons](daemon-agents.en.md)
 - [Shared boundary for tmux consumers](runtime-tmux.en.md)

@@ -6,6 +6,7 @@
 
 - [API reference](api.md)
 - [Hooks と運用 helper](hooks.md)
+- [Codex の shell guard を更新する日の操作](codex-shell-guard-review.md)
 - [ORRERY Mail extraction](agentstack-mail.md)
 - [決定的daemonの正規bindingと通知](daemon-agents.md)
 - [tmux consumer の共有境界](runtime-tmux.md)

@@ -229,10 +229,10 @@ For new isolated-global launches, SessionEnd does not prove provider exit. The w
 
 ## Keep model credential reads out of the agent shell
 
-Claude Bash, dsh, and Hermes use the shared `deny-llm-key-read.py` decision.
-Codex CLI exposes shell hooks as `Bash`, while the current ORRERY plugin matcher
-contains the older tool names. The generated exec policy below covers the
-listed command prefixes independently of that plugin.
+Claude Bash, Codex, dsh, and Hermes use the shared `deny-llm-key-read.py` decision.
+Codex's PreToolUse dispatches every tool to the same stable wrapper. The external core
+handles shell and credential checks while MCP calls pass through. An initial review
+of the new matcher is required. See [the rollout procedure](codex-shell-guard-review.md).
 
 On macOS and WSL, ORRERY writes `rules/orrery-child-shell-guard.rules` into the
 generated Codex home on launch and resume. macOS rules forbid direct

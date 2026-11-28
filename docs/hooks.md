@@ -248,9 +248,10 @@ ORRERY に参加する Claude Code の SessionStart は、指示ファイルの�
 
 ## ローカルモデルの鍵をagentのshellから読まない
 
-Claude の Bash、dsh、Hermes は共通の `deny-llm-key-read.py` を使います。
-Codex CLI は shell hook に `Bash` という名前を使います。既存の ORRERY plugin の
-matcher は旧来のツール名で定義されているため、次の exec policy が指定のコマンドを止めます。
+Claude の Bash、Codex、dsh、Hermes は共通の `deny-llm-key-read.py` を使います。
+Codex の PreToolUse は全ツールを同じ wrapper に渡し、外部 core が shell の判定を
+行います。MCP の呼び出しはそのまま通過します。今回の matcher を初めて導入する
+ときは、[更新日の操作](codex-shell-guard-review.md) に沿って確認・承認してください。
 
 macOS と WSL では、ORRERY が Codex の起動・再開用 HOME に
 `rules/orrery-child-shell-guard.rules` を生成します。Mac では
