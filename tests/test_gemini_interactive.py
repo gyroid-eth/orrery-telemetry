@@ -21,7 +21,11 @@ REGISTRATION = {"agent_id": 52, "agent_name": NAME, "project_key": PROJECT, "pro
 
 @pytest.fixture
 def managed(tmp_path, monkeypatch, request):
-    standalone = getattr(request, "param", False)
+    mode = getattr(request, "param", False)
+    standalone = mode is True
+    worktree = mode != "shared"
+    if standalone or not worktree:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
     cwd = (tmp_path / "test workspace").resolve()
     cwd.mkdir()
     history = cwd.parent / "history.py"
@@ -35,7 +39,8 @@ def managed(tmp_path, monkeypatch, request):
     source.chmod(0o600)
     child_resume._atomic_json(Path(str(source) + ".binding.json"), REGISTRATION)
     agy.prepare(runtime, NAME, PROJECT, "" if standalone else "FixtureParent", source=source, cwd=cwd,
-                binary=sys.executable, model="gemini-fixture", effort="high", standalone=standalone)
+                binary=sys.executable, model="gemini-fixture", effort="high",
+                standalone=standalone, worktree=worktree)
     state = child_resume._load_state(runtime / "child-agents" / f"{NAME}.json")
     return runtime, cwd, state
 
@@ -874,7 +879,7 @@ def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch, standalone):
     assert calls[1] == ("retired", {"retired": False})
 
 
-@pytest.mark.parametrize("standalone,shared", [(True, False), (False, False), (False, True)],
+@pytest.mark.parametrize("managed", [True, False, "shared"], indirect=True,
                          ids=["standalone", "delegated", "shared"])
 @pytest.mark.parametrize("host,change", [
     pytest.param("mac", {"computer_use": "view"}, id="mac-view"),
@@ -883,18 +888,15 @@ def test_dashboard_resumes_exact_id_and_owner(managed, monkeypatch, standalone):
     pytest.param("wsl", {"browser_mode": "personal"}, id="wsl-personal"),
 ])
 def test_permission_restart_uses_bound_conversation_and_projects_only_selected_tools(
-        managed, monkeypatch, capsys, standalone, shared, host, change):
+        managed, monkeypatch, capsys, host, change):
     runtime, cwd, state = managed
     state_path = child_resume._paths(runtime, NAME)[0]
     mcp_path = cwd / ".agents/mcp_config.json"
     plan = state["gemini_launch"]
+    standalone = plan.get("standalone") is True
+    shared = plan.get("worktree") is False
     plan["tools"] = ["browser-mode:off"]
-    if standalone:
-        plan["standalone"] = True
-        state.pop("parent_agent")
-    elif shared:
-        plan["worktree"] = False
-    else:
+    if not agy.uses_launch_config(plan):
         child_resume._atomic_json(mcp_path, {"mcpServers": {"orrery-mail": agy._mail_server()}})
     original = mcp_path.read_bytes() if mcp_path.exists() else None
     child_resume._atomic_json(state_path, state)
@@ -939,6 +941,17 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     monkeypatch.setattr(server.agy_history, "binding", bound)
     history = {**agy._history(), "binding": lambda *_: {"history_session_id": SID}}
     monkeypatch.setattr(agy, "_history", lambda: history)
+    row = {"name": NAME, "program": "antigravity", "running": True,
+           "history_binding": "bound", "history_session_id": SID}
+
+    def assert_card(computer):
+        card = server._agent_card_fields(row, live, {}, REGISTRATION, ())
+        assert card["permission_resume_supported"], card["permission_resume_reason"]
+        assert card["computer_use"] == computer
+        assert card["parent_agent"] == (None if standalone else "FixtureParent")
+        assert card["cwd"] == str(cwd)
+
+    assert_card("off")
     permission = {"history_session_id": SID, **change}
     assert server.do_jump(NAME, permission=permission, check_only=True) == {"ok": True, "action": "validated"}
     assert not child_resume.tools_record_path(runtime, NAME).exists()
@@ -961,10 +974,17 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
                         lambda argv, **_: IDENTITY if argv[0] == "tmux" else "history-fixture")
     observed = []
 
+    def expected_servers():
+        if change.get("computer_use") == "off":
+            # macOS retains a relay bound to Off, while WSL omits it.
+            return {"orrery-mail", "orrery-screen"} if host == "mac" else {"orrery-mail"}
+        return {"orrery-mail", "orrery-screen" if "computer_use" in change else "chrome-devtools"}
+
     def run(argv, *, env, **kwargs):
         if argv[0] == "/bin/bash":
             return SimpleNamespace(returncode=0)
         assert argv[-2:] == ["--conversation", SID]
+        assert Path.cwd() == cwd
         actual_path = (Path(argv[argv.index("--add-dir") + 1]) / ".agents/mcp_config.json"
                        if standalone or shared else mcp_path)
         servers = json.loads(actual_path.read_bytes())["mcpServers"]
@@ -975,19 +995,27 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
             assert "--sandbox" not in argv
             assert "mcp(orrery-mail/send_message)" in settings["permissions"]["allow"]
         grants = [item for item in settings["permissions"]["allow"] if item.startswith("mcp(orrery-screen/")]
-        if "computer_use" in change:
-            assert set(servers) == {"orrery-mail", "orrery-screen"}
+        assert set(servers) == expected_servers()
+        if change.get("computer_use") == "view":
             assert grants == [f"mcp(orrery-screen/{tool})" for tool in screen_state.VIEW_TOOLS]
             if host == "wsl":
                 assert servers["orrery-screen"]["env"]["WSL_INTEROP"] == "/run/WSL/fixture"
-        else:
-            assert set(servers) == {"orrery-mail", "chrome-devtools"}
+        elif "browser_mode" in change:
             browser = servers["chrome-devtools"]
             if host == "wsl":
                 assert browser["command"] == "/mnt/c/fixture/node.exe" and "--autoConnect" in browser["args"]
             else:
                 assert "--isolated" in browser["args"]
             assert grants == []
+        else:
+            assert not grants
+            if host == "mac":
+                relay = servers["orrery-screen"]
+                binding_path = Path(relay["env"]["AGENTSTACK_SCREEN_BINDING_FILE"])
+                binding = json.loads(binding_path.read_bytes())
+                target = {key: binding[key] for key in ("project", "runtime", "generation")}
+                assert screen_state.Store(runtime).get({**target, "agent": NAME})["computer_use"] == "off"
+                assert "tools" not in relay
         observed.append(argv[-1])
         return SimpleNamespace(returncode=0)
 
@@ -1000,7 +1028,7 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
         return {"ok": True, "adapter": "detached", "tmux_identity": IDENTITY.split("|", 1)[1]}
 
     def prepared(argv, *, env, identity, servers, **kwargs):
-        assert set(servers) == {"orrery-mail", "orrery-screen" if "computer_use" in change else "chrome-devtools"}
+        assert set(servers) == expected_servers()
         result = run(argv, env=env)
         child_resume._atomic_json(agy._startup_path(runtime, NAME), {
             "tmux": identity, "conversation": SID, "ready": True,
@@ -1022,3 +1050,17 @@ def test_permission_restart_uses_bound_conversation_and_projects_only_selected_t
     assert observed == [SID]
     assert (mcp_path.read_bytes() if mcp_path.exists() else None) == original
     assert not child_resume._tools_journal(state_path).exists()
+    if shared and change.get("computer_use") == "view":
+        assert_card("view")
+        change = {"computer_use": "off"}
+        permission = {"history_session_id": SID, **change}
+        monkeypatch.setattr(server, "_child_session_live", lambda *args: True)
+        assert server.do_jump(NAME, permission=permission, check_only=True) == {"ok": True, "action": "validated"}
+        child_resume.mark_retired(runtime, NAME, retention_days=30)
+        monkeypatch.setattr(server, "_child_session_live", lambda *args: False)
+        result = server.do_jump(NAME, open_terminal=False, permission=permission)
+        assert result["ok"] and result["tools_changed"], result
+        assert observed == [SID, SID]
+        assert_card("off")
+        assert not (cwd / ".agents").exists()
+        assert not child_resume._tools_journal(state_path).exists()

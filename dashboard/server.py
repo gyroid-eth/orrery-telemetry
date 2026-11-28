@@ -2240,7 +2240,7 @@ def _agent_card_fields(row, session, runtime, registration, codex_catalog, *, sc
                     helper = _gemini_interactive_module(str(Path(HOOKS_DIR) / "gemini_interactive.py"))
                     helper["launch_parent"](state)
                     cwd = helper["validate_plan"](plan)
-                    if not plan.get("standalone"):
+                    if not helper["uses_launch_config"](plan):
                         helper["_workspace_mcp_snapshot"](Path(RUNTIME_DIR), state, cwd)
                     changed = helper["permission_selection"](Path(RUNTIME_DIR), state, row["history_session_id"])
                     selection = changed["selection"] if changed else None
