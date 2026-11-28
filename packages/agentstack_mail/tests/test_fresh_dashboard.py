@@ -242,8 +242,9 @@ def test_handler_managed_selection_native_plugin_and_logical_parent(tmp_path,mon
                     assert payload['task'] in prompt
                     argv=shlex.split(transport.calls[0][-1]);env=dict(os.environ)
                     env.pop('TMUX',None);env.pop('TMUX_PANE',None)
+                    # Match the direct managed-harness fixture's subprocess budget.
                     done=await asyncio.to_thread(subprocess.run,argv,env=env,cwd=tmp_path,
-                        stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=60)
+                        stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=90)
                     assert done.returncode==0,done.stderr
                     trace=json.loads((tmp_path/'native-result.json').read_text())
                     assert trace['native_hook'] and trace['key_read_denied'] and trace['unreserved_denied']

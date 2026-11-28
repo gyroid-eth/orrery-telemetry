@@ -99,8 +99,13 @@ result = dict(provider=provider, args=args, session_id=session, session_hook_rc=
     old_identity_present=any(key in os.environ for key in ('PROJECT_KEY','AGENTSTACK_PROJECT_KEY','CHILD_REGISTRATION_TOKEN','MCP_AGENT_MAIL_TOKEN')))
 pathlib.Path(os.environ['TEST_TRACE']).write_text(json.dumps(result))
 if os.environ.get('TEST_BLOCK'):
-    pathlib.Path(os.environ['TEST_BLOCK']).write_text('ready')
-    time.sleep(8)
+    ready = pathlib.Path(os.environ['TEST_BLOCK'])
+    ready.write_text('ready')
+    deadline = time.monotonic() + 110
+    while not ready.with_suffix('.release').exists():
+        if time.monotonic() >= deadline:
+            sys.exit('fixture did not release the native process')
+        time.sleep(0.1)
 sys.exit(0 if recorded.returncode == 0 and guarded.returncode == 0 and proxied.returncode == 0 else 17)
 '''
 
@@ -147,7 +152,7 @@ def prepare(client, provider, tmp_path):
     return home, binary
 
 
-async def invoke(client, provider, binary, tmp_path, *, session=None, extra=None, wrapper_root=ROOT):
+async def invoke(client, provider, binary, tmp_path, *, session=None, extra=None, wrapper_root=ROOT, timeout=60):
     env = environment(client, AGENTSTACK_RUNTIME_MODE='fresh',
         **{'AGENTSTACK_' + provider.upper() + '_BIN': str(binary)},
         TEST_PROVIDER=provider, TEST_TRACE=str(tmp_path / 'native-trace.json'),
@@ -158,7 +163,7 @@ async def invoke(client, provider, binary, tmp_path, *, session=None, extra=None
     else:
         args = [sys.executable, str(wrapper_root / 'bin/agentstack-resume'), provider, str(tmp_path), '--session-id', session]
     return await asyncio.to_thread(subprocess.run, args, cwd=tmp_path, env=env,
-                                   capture_output=True, text=True, timeout=60)
+                                   capture_output=True, text=True, timeout=timeout)
 
 
 @pytest.mark.parametrize('provider', ['claude', 'codex'])
@@ -382,15 +387,23 @@ def test_one_context_cannot_start_two_native_processes(tmp_path):
             home, binary = prepare(client, 'claude', tmp_path)
             await grant(runtime, people, [tmp_path / 'note.py'])
             ready = tmp_path / 'provider-ready'
-            first = asyncio.create_task(invoke(client, 'claude', binary, tmp_path, extra={'TEST_BLOCK':str(ready)}))
+            first = asyncio.create_task(invoke(
+                client, 'claude', binary, tmp_path, extra={'TEST_BLOCK': str(ready)}, timeout=110,
+            ))
+            clock = asyncio.get_running_loop().time
+            deadline = clock() + 45
             try:
-                for _ in range(120):
-                    if ready.exists():break
+                while not ready.exists() and not first.done() and clock() < deadline:
                     await asyncio.sleep(0.1)
-                assert ready.exists()
+                if first.done():
+                    result = first.result()
+                    pytest.fail(f'First native process exited before the concurrent launch ({result.returncode}): {result.stderr}')
+                assert ready.exists(), 'The first native process did not report ready within 45 seconds'
                 second = await invoke(client, 'claude', binary, tmp_path)
                 assert second.returncode == 2 and 'FRESH_LAUNCH_BUSY' in second.stderr
             finally:
+                # Keep the owner alive until the competing launch has returned.
+                ready.with_suffix('.release').touch()
                 result = await first
             assert result.returncode == 0, result.stderr
     asyncio.run(run())
