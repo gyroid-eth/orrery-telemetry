@@ -2046,13 +2046,14 @@ def _checked_home_hook_state(
     if not isinstance(approvals, dict):
         return None
     result = {}
+    hash_fields = ("trusted_hash", "trusted_content_hash")
     for key, entry in approvals.items():
         if (not isinstance(entry, dict) or ("enabled" in entry and type(entry["enabled"]) is not bool)
-                or ("trusted_hash" in entry and (not isinstance(entry["trusted_hash"], str)
-                    or re.fullmatch(r"sha256:[0-9a-f]{64}", entry["trusted_hash"]) is None))):
+                or any(field in entry and (not isinstance(entry[field], str)
+                       or re.fullmatch(r"sha256:[0-9a-f]{64}", entry[field]) is None) for field in hash_fields)):
             return None
         if "trusted_hash" in entry or entry.get("enabled") is False:
-            result[key] = {k: entry[k] for k in ("trusted_hash", "enabled") if k in entry}
+            result[key] = {k: entry[k] for k in (*hash_fields, "enabled") if k in entry}
     return result
 
 
@@ -2151,6 +2152,71 @@ def _inherit_parent_hook_trust(
         if descriptor is not None:
             os.close(descriptor)
 
+
+
+def _observed_local_hook_trust(home: Path, cwd: Path) -> list[dict]:
+    api = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/codex_plugin_trust.py"))
+    binary = os.environ.get("AGENTSTACK_CODEX_BIN") or shutil.which("codex")
+    if not binary:
+        return []
+    with api["AppServer"](binary, home, cwd, timeout=5) as server:
+        reply = server.request("hooks/list", {"cwds": [str(cwd)]})
+    data = reply.get("data")
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0].get("hooks"), list):
+        return []
+    return data[0]["hooks"]
+
+
+def _prefer_current_user_plugin_trust(config: dict, source: Path, work_dir: Path | None) -> None:
+    """Use the operator's current ORRERY approval for this same plugin cache."""
+    home = Path.home() / ".codex"
+    local_plugins = home / "plugins"
+    try:
+        if (source / "plugins").resolve(strict=True) != local_plugins.resolve(strict=True):
+            return
+        local = _toml().loads(_read_private(home / "config.toml", "user hook approval", 1024 * 1024).decode())
+        declared = local.get("hooks", {}).get("state", {})
+        plugins = config.get("plugins", {})
+        current = config.get("hooks", {}).get("state", {})
+        if not isinstance(declared, dict) or not isinstance(current, dict) or not isinstance(plugins, dict):
+            return
+        hash_fields = ("trusted_hash", "trusted_content_hash")
+        candidates = {}
+        for key, approval in declared.items():
+            plugin = key.split(":", 1)[0]
+            existing = current.get(key, {})
+            if (not plugin.startswith("agentstack-codex-app@") or not plugins.get(plugin, {}).get("enabled")
+                    or not isinstance(existing, dict) or existing.get("enabled") is False
+                    or not isinstance(approval, dict) or approval.get("enabled") is False
+                    or "trusted_hash" not in approval):
+                continue
+            hashes = {field: approval[field] for field in hash_fields if field in approval}
+            if not all(isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+                       for value in hashes.values()):
+                continue
+            if all(existing.get(field) == approval.get(field) for field in hash_fields):
+                continue
+            candidates[key] = (plugin, hashes)
+        if not candidates:
+            return
+        for hook in _observed_local_hook_trust(home, (work_dir or source).resolve()):
+            key = hook.get("key")
+            if key not in candidates or hook.get("trustStatus") != "trusted" or hook.get("enabled") is not True:
+                continue
+            plugin, hashes = candidates[key]
+            observed = hook.get("currentHash")
+            if not isinstance(observed, str):
+                continue
+            definition, _, content = observed.partition("/")
+            path = hook.get("sourcePath")
+            if (hook.get("pluginId") == plugin and hashes["trusted_hash"] == definition
+                    and hashes.get("trusted_content_hash", content) == content and isinstance(path, str)
+                    and Path(path).resolve().is_relative_to(local_plugins.resolve())):
+                target = config.setdefault("hooks", {}).setdefault("state", {})
+                target[key] = {**hashes, "enabled": True}
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, RuntimeError):
+        # Let Codex assess its existing approval when no current proof is available.
+        return
 
 def _build_home_unlocked(
     *,
@@ -2345,6 +2411,10 @@ def _build_home_unlocked(
         # or giving the same checkout's hooks their worktree path.
         config_text = _inherit_parent_hook_trust(config_text, runtime_dir, parent_agent,
                                                  child, project_key, runner)
+        config = _toml().loads(config_text)
+        _prefer_current_user_plugin_trust(config, source, work_dir)
+        if config != _toml().loads(config_text):
+            config_text = _emit_toml(config)
         carried = _worktree_hook_trust(config_text, work_dir)
         if carried:
             config_text += "\n".join(carried) + "\n"

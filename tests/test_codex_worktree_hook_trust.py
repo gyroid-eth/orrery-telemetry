@@ -297,6 +297,41 @@ def parent_case(tmp_path):
             "parent_lock": runtime / "child-agents" / f".{PARENT}.resume.lock"}
 
 
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("trust_status", ["trusted", "modified"])
+def test_current_user_plugin_approval_wins_over_a_stale_parent(parent_case, tmp_path, monkeypatch,
+                                                                resume, trust_status):
+    operator_home = tmp_path / "operator"
+    codex_home = operator_home / ".codex"
+    plugin_root = codex_home / "plugins" / "cache" / "fixture"
+    hooks = plugin_root / "hooks"
+    hooks.mkdir(parents=True)
+    manifest = hooks / "hooks.json"
+    manifest.write_text("{}\n")
+    monkeypatch.setenv("HOME", str(operator_home))
+    (parent_case["source"] / "plugins").symlink_to(codex_home / "plugins")
+    fresh_entry = {"trusted_hash": OTHER, "trusted_content_hash": "sha256:" + "c" * 64, "enabled": True}
+    private(codex_home / "config.toml", child_resume._emit_toml({
+        "plugins": {PLUGIN: {"enabled": True}},
+        "hooks": {"state": {PARENT_HOOK: fresh_entry}},
+    }))
+    monkeypatch.setattr(child_resume, "_observed_local_hook_trust", lambda home, cwd: [{
+        "key": PARENT_HOOK, "pluginId": PLUGIN, "sourcePath": str(manifest), "enabled": True,
+        "currentHash": fresh_entry["trusted_hash"] + "/" + fresh_entry["trusted_content_hash"],
+        "trustStatus": trust_status,
+    }])
+    if resume:
+        _set_case_config(parent_case["source"] / "config.toml", lambda config: config.update(
+            hooks={"state": {PARENT_HOOK: {"trusted_hash": TRUSTED}}}))
+        parent_case["build"](NAME, parent_case["source"], PARENT)
+    result = parent_case["build"](NAME, parent_case["source"], PARENT, use_recorded_parent=resume)
+    expected = fresh_entry if trust_status == "trusted" else {"trusted_hash": TRUSTED}
+    assert result["hooks"]["state"][PARENT_HOOK] == expected
+    assert tomllib.loads((parent_case["parent_home"] / "config.toml").read_text())["hooks"]["state"][PARENT_HOOK] == {
+        "trusted_hash": TRUSTED}
+    assert tomllib.loads((codex_home / "config.toml").read_text())["hooks"]["state"][PARENT_HOOK] == fresh_entry
+
+
 def test_verified_parent_approval_reaches_child_without_changing_source_home(parent_case):
     case = parent_case
     watched = [case["source"] / "config.toml", case["parent_state"],
