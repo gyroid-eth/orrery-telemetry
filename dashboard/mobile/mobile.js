@@ -382,7 +382,7 @@ function render(data){
  window.OrreryMobileConversation?.refreshProfiles?.();
  window.OrreryMobileConversation?.refreshActivity?.();
  for(const box of document.querySelectorAll('.reader-permissions[data-agent]'))paintPermissions(box);
- $('#snapshot-note').textContent='Snapshot observed '+time(data.observed_at)+'. Account usage unavailable. Context arcs are separate.';
+ $('#snapshot-note').textContent='Snapshot observed '+time(data.observed_at)+'. Graph arcs show agent context remaining.';
 }
 function syncFilters(){
  document.querySelectorAll('[data-kind]').forEach(b=>{

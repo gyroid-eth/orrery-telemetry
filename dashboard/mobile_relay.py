@@ -27,6 +27,7 @@ try:
     from dashboard import mobile_history
     from dashboard import mobile_push
     from dashboard import mobile_spawn
+    from dashboard import mobile_usage
 except ModuleNotFoundError:
     import legacy_http_admission as admission
     from local_model_makers import LOCAL_MAKER_ASSETS
@@ -35,10 +36,12 @@ except ModuleNotFoundError:
     import mobile_history
     import mobile_push
     import mobile_spawn
+    import mobile_usage
 
 HERE = Path(__file__).resolve().parent
 MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
 UPSTREAM_TIMEOUT = 2
+USAGE_TIMEOUT = 30
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; "
        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
@@ -117,6 +120,13 @@ class Upstream:
     def cache_page(self,cursor):
         query='' if cursor is None else '?'+urlencode({'cursor':cursor})
         return json.loads(self._read('/api/mobile-cache-page'+query,'application/json',MAX_UPSTREAM_BYTES))
+
+    def usage(self):
+        # A cold quota read may wait for provider probes. Keep its deadline
+        # independent of the Reader's roster, graph and Mail requests.
+        data = self._read('/api/quotas', 'application/json', MAX_UPSTREAM_BYTES, timeout=USAGE_TIMEOUT)
+        raw = mobile_input.decode_json(data, max_bytes=MAX_UPSTREAM_BYTES)
+        return mobile_usage.project(raw, now=int(time.time()))
 
     def spawn_catalog(self):
         data=self._read('/telemetry/spawn-catalog','application/json',MAX_UPSTREAM_BYTES,timeout=23)
@@ -216,6 +226,7 @@ def static_assets(root=HERE):
         '/manifest.webmanifest': (root/'mobile/manifest.webmanifest', 'application/manifest+json; charset=utf-8'),
         '/mobile.css': (root/'mobile/mobile.css', 'text/css; charset=utf-8'),
         '/mobile.js': (root/'mobile/mobile.js', 'text/javascript; charset=utf-8'),
+        '/mobile-usage.js': (root/'mobile/usage.js', 'text/javascript; charset=utf-8'),
         '/mobile-workspace.js': (root/'mobile/workspace.js', 'text/javascript; charset=utf-8'),
         '/mobile-workspace.css': (root/'mobile/workspace.css', 'text/css; charset=utf-8'),
         '/mobile-spawn.js': (root/'mobile/spawn.js', 'text/javascript; charset=utf-8'),
@@ -375,6 +386,16 @@ class Handler(BaseHTTPRequestHandler):
             body={'enabled':cfg.history_enabled,'page_events':mobile_history.PAGE_EVENTS}
             if not cfg.history_enabled:body['reason']='disabled' if cfg.phone_policy_reviewed else 'policy_not_reviewed'
             self._send(200,body);return
+        if parts.path == '/view/quotas':
+            if parts.query:
+                self._send(400, {'error': 'invalid_usage_query'});return
+            if self.command == 'HEAD':
+                self._send(200, b'');return
+            try:
+                self._send(200, self.server.mobile_upstream.usage())
+            except (OSError, ValueError):
+                self._send(503, {'error': 'usage_unavailable'})
+            return
         if parts.path=='/view/conversation' and self.server.mobile_config.history_enabled:
             # The phone selects an agent from the published roster and may
             # return an issued page token. It never supplies a path or cursor.
@@ -613,22 +634,22 @@ def make_server(config:Config, *, store=None, mail_store=None, input_client=None
     server=ReaderServer(('127.0.0.1',config.listen_port if test_port is None else test_port),Handler)
     server.daemon_threads=True
     server.mobile_config=config
-    server.mobile_store=store if store is not None else SnapshotStore(Upstream(config.upstream_port))
-    server.mobile_mail=mail_store if mail_store is not None else MobileMailStore(Upstream(config.upstream_port))
+    upstream=server.mobile_upstream=Upstream(config.upstream_port)
+    server.mobile_store=store if store is not None else SnapshotStore(upstream)
+    server.mobile_mail=mail_store if mail_store is not None else MobileMailStore(upstream)
     server.mobile_root=Path(root)
     server.mobile_demo=demo_client if demo_client is not None else DemoClient(config.cockpit_port)
     server.mobile_assets=static_assets(Path(root))
     server.mobile_input=(input_client if input_client is not None else
                          mobile_input.InputClient(config.cockpit_port,config.owner_login) if config.input_enabled else None)
-    spawn_backend=Upstream(config.upstream_port)
     server.mobile_spawn=mobile_spawn.MobileSpawn(Upstream(config.cockpit_port).spawn_catalog,
-                                                spawn_backend.spawn_agent,spawn_backend.spawn_status)
+                                                upstream.spawn_agent,upstream.spawn_status)
     server.mobile_history=(history_client if history_client is not None else
                            mobile_history.HistoryClient(config.cockpit_port) if config.history_enabled else None)
     push_root=Path(os.environ.get('AGENTSTACK_HOME') or Path.home()/'.agentstack')/'runtime/mobile-push'
     server.mobile_push=push_service if push_service is not None else mobile_push.PushService(
         push_root,config.owner_login,config.public_origin,
-        lambda:mobile_push.project_roster(Upstream(config.upstream_port)('agents')),
+        lambda:mobile_push.project_roster(upstream('agents')),
         lambda name:server.mobile_history.page(name),server.mobile_demo.status,enabled=config.push_enabled)
     server.mobile_push.start()
     return server

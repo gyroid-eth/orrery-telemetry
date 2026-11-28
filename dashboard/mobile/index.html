@@ -35,6 +35,7 @@
 <script defer src="/mobile-spawn-controls.js"></script>
 <script defer src="/mobile-workspace.js"></script>
 <script defer src="/mobile.js"></script>
+<script defer src="/mobile-usage.js"></script>
 <script defer src="/mobile-spawn.js"></script>
 </head>
 <body class="mobile">
@@ -68,6 +69,7 @@
   <symbol id="icon-file" viewBox="0 0 24 24"><path d="M7 3.5h6.5l4 4V19a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5Z M13 4v4h4 M9 12h5m-5 4h5"/></symbol>
   <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M5 12h14m-7-7v14"/></symbol>
   <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12m0-12L6 18"/></symbol>
+  <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
   <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></symbol>
   <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.6 14.2A8.7 8.7 0 0 1 9.8 3.4a9 9 0 1 0 10.8 10.8Z"/></symbol>
   <symbol id="icon-new-agent" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v2M19 7v8m-4-4h8"/></symbol>
@@ -85,6 +87,10 @@
     <button id="mobile-theme" class="icon-button" type="button" title="Use light theme" aria-label="Use light theme"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-sun"/></svg></button>
   </div>
 </header>
+<button id="usage-strip" type="button" aria-label="Provider usage. Loading usage." aria-haspopup="dialog" aria-expanded="false" aria-controls="usage-sheet">
+  <span id="usage-strip-copy" aria-hidden="true"><span id="usage-readings">Loading usage…</span><span id="usage-read-time" hidden></span></span>
+  <svg class="mobile-icon" aria-hidden="true"><use href="#icon-chevron"/></svg>
+</button>
 <main id="mobile-main" data-mobile-view="graph">
   <section id="graph-panel" aria-label="Graph">
     <div class="graph-toolbar">
@@ -161,8 +167,15 @@
       <p id="mail-page-error" class="quiet" role="status"></p>
     </section>
   </aside>
-  <p id="snapshot-note" class="sr-only">Account usage unavailable. Context arcs are separate.</p>
+  <p id="snapshot-note" class="sr-only">Graph arcs show agent context remaining.</p>
 </main>
+<dialog id="usage-sheet" aria-labelledby="usage-title">
+  <div class="usage-sheet-head">
+    <h2 id="usage-title" tabindex="-1" autofocus>Provider usage</h2>
+    <button id="usage-close" class="icon-button" type="button" title="Close provider usage" aria-label="Close provider usage"><svg class="mobile-icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+  </div>
+  <div id="usage-details"><p>Loading usage…</p></div>
+</dialog>
 <aside id="settings" role="dialog" aria-labelledby="settings-title" aria-hidden="true" hidden>
   <div class="st-bar"><h2 id="settings-title">Network settings</h2><button id="settings-close" type="button" aria-label="Close settings">×</button></div>
   <div id="nctl-rows"></div>

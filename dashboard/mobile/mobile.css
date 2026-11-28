@@ -60,6 +60,73 @@ html[data-color-theme=light] .mobile #mobile-new-agent{
   background:color-mix(in srgb,var(--theme-accent-fill) 24%,var(--panel));
 }
 .mobile:has(#graph-panel[hidden]) #mobile-new-agent{display:none}
+.mobile #usage-strip {
+  display:flex;align-items:center;justify-content:space-between;flex:none;gap:8px;
+  min-height:44px;margin:0 max(12px,env(safe-area-inset-right)) 8px max(12px,env(safe-area-inset-left));
+  padding:7px 10px;border:1px solid var(--theme-border-control,var(--hair));border-radius:10px;
+  background:var(--panel);color:var(--ink-dim);text-align:left;touch-action:manipulation;
+}
+.mobile #usage-strip:active,.mobile #usage-strip[aria-expanded=true] {
+  border-color:var(--theme-accent-edge,var(--amber));background:var(--control-active);
+}
+#usage-strip-copy,#usage-readings {
+  display:flex;align-items:center;flex-wrap:wrap;column-gap:7px;row-gap:4px;min-width:0;
+}
+#usage-strip-copy { justify-content:space-between;flex:1;font:13px/1.2 system-ui,sans-serif; }
+#usage-read-time { font-size:11px; }
+#usage-strip>.mobile-icon { width:16px;height:16px; }
+.usage-compact { display:inline-flex;align-items:center;gap:4px;white-space:nowrap; }
+.usage-logo { width:15px;height:15px;object-fit:contain; }
+html[data-color-theme=light] .usage-logo { filter:brightness(.32); }
+.usage-compact b,.usage-window b,.usage-balance b {
+  color:var(--usage-value,var(--ink));font-weight:600;font-variant-numeric:tabular-nums;
+}
+.usage-compact b { font-size:12px; }
+.usage-compact[data-state=unavailable] b { font-size:11px;font-weight:400; }
+[data-usage-tier=good] { --usage-value:var(--ln-local); }
+html[data-color-theme=light] [data-usage-tier=good] { --usage-value:var(--accent-control); }
+[data-usage-tier=warn] { --usage-value:var(--amber); }
+[data-usage-tier=low] { --usage-value:var(--alert); }
+.usage-compact[data-state=stale],.usage-compact[data-state=unavailable],
+.usage-window[data-state=stale],.usage-window[data-state=unavailable],
+.usage-balance[data-state=stale] { --usage-value:var(--ink-dim); }
+#usage-read-time[data-state=stale] { font-weight:600; }
+.mobile #usage-sheet {
+  position:fixed;inset:auto 0 0;width:100%;max-width:520px;max-height:85dvh;margin:0 auto;
+  overflow:auto;overscroll-behavior:contain;padding:0 16px max(16px,env(safe-area-inset-bottom));
+  border:1px solid var(--theme-border-control,var(--hair));border-radius:20px 20px 0 0;
+  background:var(--panel);color:var(--ink);font:13px/1.4 system-ui,sans-serif;
+}
+#usage-sheet::backdrop { background:color-mix(in srgb,var(--shade) 38%,transparent); }
+.usage-sheet-head,.usage-provider-head { display:flex;justify-content:space-between;align-items:center;gap:8px; }
+.usage-sheet-head { position:sticky;top:0;z-index:1;padding:10px 0;background:var(--panel); }
+.mobile .usage-sheet-head h2 { font:500 23px/1.2 var(--serif); }
+.usage-sheet-head h2:focus { outline:none; }
+.usage-provider { padding:10px 0 12px;border-top:1px solid var(--hair); }
+.usage-provider-head h3 {
+  display:flex;align-items:center;gap:7px;margin:0;font:500 17px/1.2 var(--serif);
+}
+.usage-provider-head>span,.usage-window small { color:var(--ink-dim);font:12px/1.3 system-ui,sans-serif; }
+.usage-windows {
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr));gap:10px 16px;margin-top:8px;
+}
+.usage-window {
+  display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:3px 5px;color:var(--ink-dim);
+}
+.usage-window b { font-size:15px; }
+.usage-window progress {
+  appearance:none;width:100%;height:3px;grid-column:1/-1;border:0;border-radius:4px;
+  background:var(--theme-border-control,var(--hair));overflow:hidden;
+}
+.usage-window progress::-webkit-progress-bar { background:var(--theme-border-control,var(--hair)); }
+.usage-window progress::-webkit-progress-value { background:var(--usage-value,var(--ink)); }
+.usage-window progress::-moz-progress-bar { background:var(--usage-value,var(--ink)); }
+.usage-window small { grid-column:1/-1; }
+.mobile .usage-balance { margin:6px 0 0 22px;color:var(--ink-dim); }
+.usage-balance b { font-size:15px; }
+.usage-balance small { display:block;margin-top:3px;font:inherit; }
+#usage-details>p { color:var(--ink-dim); }
+html[data-reader-pane] .mobile #usage-strip,html.graph-fullscreen .mobile #usage-strip { display:none; }
 #mobile-main {
   flex:1;min-height:0;width:100%;max-width:none;margin:0;
   display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:10px;
