@@ -129,6 +129,11 @@ def write_tool_refusal_rule(cwd):
     child_resume._atomic_bytes(path, RULE_HEADER + renderer["tool_refusal_block"]())
 
 
+def uses_launch_config(plan):
+    # Older delegated plans have their managed files inside a worktree.
+    return plan.get("standalone") is True or plan.get("worktree") is False
+
+
 def validate_plan(plan):
     if not isinstance(plan, dict):
         raise ValueError("Antigravity child launch settings are missing")
@@ -136,8 +141,8 @@ def validate_plan(plan):
     info = cwd.stat()
     if (not cwd.is_absolute() or cwd.resolve() != cwd or not cwd.is_dir()
             or [info.st_dev, info.st_ino] != plan["workspace_file_id"]):
-        raise ValueError("Antigravity child worktree was replaced or moved")
-    if not plan.get("standalone"):
+        raise ValueError("Antigravity child workspace was replaced or moved")
+    if not uses_launch_config(plan):
         path = _guard_config(cwd)
         if (path.is_symlink() or child_resume._load_state(path) != _configured_hooks(plan["python"])):
             raise ValueError("Antigravity child reservation hook is unavailable")
@@ -158,24 +163,27 @@ def launch_parent(state):
 
 
 def prepare(runtime, name, project, parent, *, source, cwd, binary, model, effort,
-            standalone=False, tools=()):
+            standalone=False, worktree=True, tools=()):
     cwd = cwd.resolve(strict=True)
     binary = shutil.which(binary)
     if not binary or not history_helper().is_file():
         raise ValueError("Antigravity CLI and Reader are required for a managed interactive child")
     if standalone == bool(parent):
         raise ValueError("Antigravity launch requires exactly one of standalone or a parent")
-    path = None if standalone else _guard_config(cwd)
-    if path is not None and (path.exists() or path.is_symlink()):
-        raise ValueError("The worktree already has .agents/hooks.json")
     info = cwd.stat()
     plan = {"cwd": str(cwd), "workspace_file_id": [info.st_dev, info.st_ino],
             "binary": os.path.abspath(binary), "python": sys.executable,
             "model": model, "effort": effort, "tools": list(tools)}
     if standalone:
         plan["standalone"] = True
-        validate_standalone_config(plan)
+    elif not worktree:
+        plan["worktree"] = False
+    path = None if uses_launch_config(plan) else _guard_config(cwd)
+    if path is None:
+        validate_launch_config(plan)
     else:
+        if path.exists() or path.is_symlink():
+            raise ValueError("The worktree already has .agents/hooks.json")
         hooks = _configured_hooks(plan["python"])
     generation = uuid.uuid4().hex
     child_resume.stage_registration(runtime, name, project_key=project, program=PROGRAM,
@@ -205,16 +213,18 @@ def permission_selection(runtime, state, conversation):
         workspace=plan["cwd"], workspace_file_id=plan["workspace_file_id"])
 
 
-def validate_standalone_config(plan):
+def validate_launch_config(plan):
     child_tools.agy_validate_selection(_tool_selection(plan), cwd=plan["cwd"])
 
 
-def _configure_standalone(directory, plan, mcp):
+def _configure_launch_directory(directory, plan, mcp):
     directory.mkdir(mode=0o700)
     try:
         child_resume._atomic_json(directory / ".agents" / "mcp_config.json", mcp)
         hooks = _configured_hooks(plan["python"], suffix=f"-{uuid.uuid4().hex}")
         child_resume._atomic_json(directory / ".agents" / "hooks.json", hooks)
+        if not plan.get("standalone"):
+            write_tool_refusal_rule(directory)
     except BaseException:
         shutil.rmtree(directory)
         raise
@@ -274,11 +284,12 @@ def _workspace_mcp_snapshot(runtime, state, cwd):
 def validate_permission_selection(runtime, state, spec):
     plan = state["gemini_launch"]
     cwd = validate_plan(plan)
-    child_tools.agy_validate_selection(spec, cwd=cwd if plan.get("standalone") else None)
+    private_config = uses_launch_config(plan)
+    child_tools.agy_validate_selection(spec, cwd=cwd if private_config else None)
     mode = spec["tools"].get("browser_mode")
     if mode in ("temporary", "personal"):
         child_tools._browser_mcp(mode)
-    if not plan.get("standalone"):
+    if not private_config:
         _workspace_mcp_snapshot(runtime, state, cwd)
     child_tools.check_screen_relay(spec)
 
@@ -402,6 +413,8 @@ def command(plan, cwd, *, prompt=None, conversation=None, config_dir=None, scree
         screen_permissions = [f"mcp({child_tools.SCREEN_SERVER}/{tool})" for tool in screen_tools]
     mail_rules = ([f"mcp(orrery-mail/{tool})" for tool in MAIL_TOOLS]
                   if _matches_managed_mcp(home, cwd, config_dir, "orrery-mail", _mail_server(), MAIL_TOOLS) else [])
+    if plan.get("worktree") is False and not mail_rules:
+        raise ValueError("The shared Antigravity workspace has a conflicting orrery-mail MCP server")
     explicit = set(permissions.get("deny", ())) | set(permissions.get("ask", ()))
     browser_rules = [rule for rule in _managed_browser_approval_rules(home, cwd, config_dir, selection)
                      if rule not in explicit]
@@ -601,7 +614,8 @@ def run(runtime, name, task_file=None, conversation=None):
     else:
         env.pop("PARENT_AGENT", None)
         env.pop("AGENTSTACK_PROXY_PARENT_AGENT", None)
-    if conversation and not plan.get("standalone"):
+    private_config = uses_launch_config(plan)
+    if conversation and not private_config:
         excludes = runtime / f"gemini-git-excludes-{name}"
         child_resume._atomic_bytes(excludes, (f".agents/mcp_config.json\n.agents/hooks.json\n{TOOL_REFUSAL_RULE}\n").encode())
         count = env.get("GIT_CONFIG_COUNT", "0")
@@ -615,13 +629,12 @@ def run(runtime, name, task_file=None, conversation=None):
     status_path.unlink(missing_ok=True)
     config_dir = workspace_mcp = written_mcp = mcp = None
     try:
-        standalone = plan.get("standalone") is True
-        if not standalone:
+        if not private_config:
             write_tool_refusal_rule(cwd)
         changed = permission_selection(runtime, state, conversation) if conversation else None
         spec = changed["selection"] if changed else _tool_selection(plan)
         screen_mode = "off"
-        if conversation and not standalone:
+        if conversation and not private_config:
             if changed:
                 workspace_mcp = _workspace_mcp_snapshot(runtime, state, cwd)
             else:
@@ -629,21 +642,21 @@ def run(runtime, name, task_file=None, conversation=None):
                 # Only rebuild a configuration whose managed origin is verified.
                 with suppress(OSError, ValueError):
                     workspace_mcp = _workspace_mcp_snapshot(runtime, state, cwd)
-        if standalone or conversation is None or changed or workspace_mcp:
+        if private_config or conversation is None or changed or workspace_mcp:
             mcp_path = (workspace_mcp[0] if workspace_mcp else
-                        None if standalone else _delegated_mcp_path(cwd))
+                        None if private_config else _delegated_mcp_path(cwd))
             change_screen = changed and changed.get("computer_use_changed") and child_resume.tools_change_generation()
             generation = uuid.uuid4().hex
             mcp, screen_mode = child_tools.agy_launch_config(
                 _mail_server()["command"], spec, runtime=str(runtime), project=project, child=name,
                 mail_env=os.environ.get("AGENTSTACK_MAIL_ENV", str(_home() / "mail" / ".env")),
-                generation=generation, cwd=cwd if standalone else None,
+                generation=generation, cwd=cwd if private_config else None,
                 resume_from=(plan.get("screen_generation") or "") if conversation and not change_screen else None,
             )
             _eager_managed_servers(mcp, spec, screen_mode)
-            if standalone:
+            if private_config:
                 directory = path.with_suffix(".agy-config")
-                _configure_standalone(directory, plan, mcp)
+                _configure_launch_directory(directory, plan, mcp)
                 config_dir = directory
             else:
                 child_resume._atomic_json(mcp_path, mcp)
@@ -799,6 +812,7 @@ def main():
     setup.add_argument("model")
     setup.add_argument("effort")
     setup.add_argument("--standalone", action="store_true")
+    setup.add_argument("--no-worktree", action="store_true")
     setup.add_argument("--tools", action="append", default=[])
     launch = actions.add_parser("run")
     group = launch.add_mutually_exclusive_group(required=True)
@@ -838,7 +852,7 @@ def main():
     if args.action == "prepare":
         prepare(runtime, name, os.environ["AGENTSTACK_PROJECT_KEY"], os.environ.get("PARENT_AGENT", ""),
                 source=args.source, cwd=args.cwd, binary=args.binary, model=args.model, effort=args.effort,
-                standalone=args.standalone, tools=args.tools)
+                standalone=args.standalone, worktree=not args.no_worktree, tools=args.tools)
     elif args.action == "run":
         return run(runtime, name, args.task_file, args.conversation)
     elif args.action == "status":

@@ -39,7 +39,7 @@ PRINT_TIMEOUT="${AGENTSTACK_GEMINI_PRINT_TIMEOUT:-30m}"
 RESOURCE_TTL="${AGENTSTACK_GEMINI_RESOURCE_TTL:-14400}"
 WORKTREE_ROOT="${AGENTSTACK_WORKTREE_ROOT:-${AGENTSTACK_HOME_DIR:-$HOME/.agentstack}/worktrees}"
 WORKTREE_BASE_REV=""
-USE_WORKTREE=false
+USE_WORKTREE=""
 STANDALONE=false
 CHILD_NAME=""
 CHILD_TOKEN_FILE=""
@@ -58,7 +58,7 @@ INTERACTIVE_HELPER="$HOOKS_DIR/gemini_interactive.py"
 usage() {
   cat >&2 <<'EOF'
 Usage: spawn_gemini_preregistered.sh --pre-registered NAME --child-token-file FILE \
-  [--standalone] [--worktree] [--worktree-base REV] [--tools SPEC] --model MODEL [TASK_SHORT] [WORKDIR]
+  [--standalone] [--worktree|--no-worktree] [--worktree-base REV] [--tools SPEC] --model MODEL [TASK_SHORT] [WORKDIR]
 EOF
 }
 
@@ -71,6 +71,7 @@ while [[ "${1:-}" == --* ]]; do
       GEMINI_TOOLS+=(--tools "$2"); shift 2 ;;
     --model) MODEL="${2:-}"; shift 2 ;;
     --worktree) USE_WORKTREE=true; shift ;;
+    --no-worktree) USE_WORKTREE=false; shift ;;
     --worktree-base) WORKTREE_BASE_REV="${2:-}"; shift 2 ;;
     --standalone) STANDALONE=true; shift ;;
     *) echo "$PROG: unknown option: $1" >&2; usage; exit 2 ;;
@@ -86,10 +87,19 @@ if [[ "$STANDALONE" == true ]]; then
   [[ "$INTERACTIVE" == 1 ]] || { echo "$PROG: standalone Antigravity requires macOS or Linux" >&2; exit 2; }
   [[ -z "$RESOURCES" ]] || { echo "$PROG: declared resources require a parent" >&2; exit 2; }
   export PARENT_AGENT=""
+  USE_WORKTREE="${USE_WORKTREE:-false}"
 else
   [[ -n "${PARENT_AGENT:-}" ]] || { echo "$PROG: PARENT_AGENT is required" >&2; exit 2; }
   [[ -n "$RESOURCES" ]] || { echo "$PROG: Gemini dashboard launch requires declared resources" >&2; exit 2; }
-  USE_WORKTREE=true
+  USE_WORKTREE="${USE_WORKTREE:-true}"
+  if [[ "$USE_WORKTREE" == false && "$INTERACTIVE" != 1 ]]; then
+    echo "$PROG: Antigravity without a worktree requires macOS or Linux" >&2
+    exit 2
+  fi
+fi
+if [[ "$USE_WORKTREE" == false && -n "$WORKTREE_BASE_REV" ]]; then
+  echo "$PROG: --worktree-base requires a worktree" >&2
+  exit 2
 fi
 [[ -n "$TASK_FILE" && -s "$TASK_FILE" ]] || { echo "$PROG: full task handoff file is missing" >&2; exit 2; }
 [[ -d "$WORK_DIR" ]] || { echo "$PROG: workdir does not exist: $WORK_DIR" >&2; exit 2; }
@@ -113,9 +123,10 @@ command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || { echo "$P
 # reject any existing symlink component, at any depth of any path a resource
 # covers, that resolves outside ROOT.
 validate_resources() {
-  "$PYTHON_BIN" - "$RESOURCES" "${1:-}" <<'PY'
+  "$PYTHON_BIN" - "$RESOURCES" "${1:-}" "$USE_WORKTREE" <<'PY'
 import fnmatch, os, re, sys, unicodedata
-raw, root = sys.argv[1], sys.argv[2]
+raw, root, worktree = sys.argv[1:4]
+root_label = "worktree" if worktree == "true" else "workspace"
 def fail(message):
     sys.stderr.write("spawn_gemini_preregistered.sh: " + message + "\n")
     raise SystemExit(2)
@@ -315,7 +326,7 @@ if root:
             literal.append(part)
         for index in range(1, len(literal) + 1):
             if not inside(os.path.realpath(os.path.join(base, *literal[:index]))):
-                fail("resource escapes the worktree through a symlink: " + value)
+                fail(f"resource escapes the {root_label} through a symlink: " + value)
         for index in range(1, len(literal) + 1):
             if reaches_git(base, literal[:index]):
                 fail("resource must not cover git metadata: " + value + " ("
@@ -324,7 +335,7 @@ if root:
         if found_kind == "git":
             fail("resource must not cover git metadata: " + value + " (" + found_path + ")")
         if found_kind:
-            fail("resource escapes the worktree through a symlink: " + value + " (" + found_path + ")")
+            fail(f"resource escapes the {root_label} through a symlink: " + value + " (" + found_path + ")")
 print(",".join(canonical))
 PY
 }
@@ -362,7 +373,11 @@ INTERACTIVE_PREPARED=false
 RESERVATION_SCOPE=()
 RESERVATION_TOKEN="$DURABLE_TOKEN"
 if [[ "$INTERACTIVE" == 1 ]]; then
-  RESERVATION_SCOPE=(--worktree "$WORKTREE_DIR")
+  if [[ "$USE_WORKTREE" == true ]]; then
+    RESERVATION_SCOPE=(--worktree "$WORKTREE_DIR")
+  else
+    RESERVATION_SCOPE=(--worktree "$WORKSPACE_DIR")
+  fi
   RESERVATION_TOKEN="$CHILD_TOKEN_FILE"
 fi
 
@@ -399,7 +414,7 @@ cleanup_failure() {
     rm -f "$TASK_EVENT_FILE" "$RUNNER_FILE" "$MCP_CONFIG" "$DURABLE_TOKEN" "$GIT_EXCLUDES_FILE" "$TASK_FILE"
     if [[ "$INTERACTIVE_PREPARED" == true ]]; then
       rm -f "$RUNTIME_DIR/child-agents/$CHILD_NAME.json" "$RUNTIME_DIR/child-agents/$CHILD_NAME.agy-status.startup"
-      if [[ "$STANDALONE" == true ]]; then
+      if [[ "$STANDALONE" == true || "$USE_WORKTREE" == false ]]; then
         rm -rf "$RUNTIME_DIR/child-agents/$CHILD_NAME.agy-config"
       fi
     fi
@@ -436,28 +451,29 @@ if [[ "$USE_WORKTREE" == true ]]; then
   WORKTREE_CREATED=true
   WORKSPACE_DIR="$WORKTREE_DIR"
   agentstack_apply_workspace_context "$WORKSPACE_DIR" "$PROJECT_KEY" || exit 1
+  if [[ "$STANDALONE" != true ]]; then
+    # Linked worktrees share .git/info/exclude. Use a child-owned excludes file.
+    GIT_EXCLUDES_FILE="$RUNTIME_DIR/gemini-git-excludes-$CHILD_NAME"
+    ( umask 077 && printf '%s\n' '.agents/mcp_config.json' '.agents/hooks.json' \
+      '.agents/rules/orrery-tool-refusals.md' > "$GIT_EXCLUDES_FILE" )
+  fi
 fi
 
 if [[ "$STANDALONE" != true ]]; then
-# Linked worktrees share .git/info/exclude. Use a child-owned excludes file
-# injected only into the Antigravity runner instead of mutating shared repo
-# metadata, so overlapping delegated children cannot remove each other's rule.
-GIT_EXCLUDES_FILE="$RUNTIME_DIR/gemini-git-excludes-$CHILD_NAME"
-( umask 077 && printf '%s\n' '.agents/mcp_config.json' '.agents/hooks.json' \
-  '.agents/rules/orrery-tool-refusals.md' > "$GIT_EXCLUDES_FILE" )
-
-# The worktree is what the child sees; check it before reserving anything.
-RESOURCES="$(validate_resources "$WORKTREE_DIR")" || exit 2
+# Check the physical workspace that the child will use.
+RESOURCES="$(validate_resources "$WORKSPACE_DIR")" || exit 2
 
 mail_helper reserve --project-key "$PROJECT_KEY" --agent-name "$CHILD_NAME" \
   --token-file "$RESERVATION_TOKEN" --paths "$RESOURCES" --ttl "$RESOURCE_TTL" ${RESERVATION_SCOPE[@]+"${RESERVATION_SCOPE[@]}"}
 RESERVED=true
 
-if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev/null 2>&1; then
-  echo "$PROG: tracked .agents/mcp_config.json exists; refusing to overwrite it" >&2
-  exit 1
+if [[ "$USE_WORKTREE" == true ]]; then
+  if git -C "$WORKTREE_DIR" ls-files --error-unmatch .agents/mcp_config.json >/dev/null 2>&1; then
+    echo "$PROG: tracked .agents/mcp_config.json exists; refusing to overwrite it" >&2
+    exit 1
+  fi
+  mkdir -p "$WORKTREE_DIR/.agents"
 fi
-mkdir -p "$WORKTREE_DIR/.agents"
 if [[ "$INTERACTIVE" == 0 ]]; then
 "$PYTHON_BIN" "$INTERACTIVE_HELPER" tool-refusal-rule "$WORKTREE_DIR"
 MCP_CONFIG="$WORKTREE_DIR/.agents/mcp_config.json"
@@ -477,14 +493,19 @@ PY
 fi
 fi
 
-"$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKSPACE_DIR" "$INTERACTIVE" <<'PY'
+"$PYTHON_BIN" - "$TASK_FILE" "$TASK_EVENT_FILE" "$CHILD_NAME" "$PARENT_AGENT" "$RESOURCES" "$WORKSPACE_DIR" "$INTERACTIVE" "$USE_WORKTREE" <<'PY'
 import json, os, sys
 from pathlib import Path
-raw_path, event_path, child, parent, resources, worktree, interactive = sys.argv[1:8]
-workspace_root = Path(worktree).resolve(strict=False)
+raw_path, event_path, child, parent, resources, workspace, interactive, worktree = sys.argv[1:9]
+workspace_root = Path(workspace).resolve(strict=False)
+location = "worktree" if worktree == "true" else "workspace"
+boundary = ("Work only in this isolated worktree. " if worktree == "true"
+            else "Work only in the selected shared workspace. ")
+search_boundary = ("Do not search the source checkout, $HOME, or parent directories for them. "
+                   if worktree == "true" else "Do not search outside the workspace for them. ")
 task = open(raw_path, encoding="utf-8").read()
 # validate_resources already produced canonical repository-relative entries,
-# so each one anchors lexically inside the worktree.
+# so each one anchors lexically inside the workspace.
 anchored_resources = [
     os.fspath(workspace_root / item) for item in resources.split(",") if item
 ]
@@ -492,11 +513,11 @@ resource_text = "\n".join(f"- {item}" for item in anchored_resources) or "- (exp
 prefix = (
     f"You are {child}, a delegated Antigravity child of {parent}. "
     f"Your active workspace root is {workspace_root}. "
-    "Work only in this isolated worktree. The launcher already reserved the declared resources. "
+    f"{boundary}The launcher already reserved the declared resources. "
     "Resolve every relative path in the task and every declared resource strictly against this workspace root. "
-    "Use the worktree-anchored resource paths below. Do not search the source checkout, $HOME, or parent directories for them. "
-    "If a declared resource is absent from this worktree, report that exact failure instead of searching elsewhere. "
-    "Any matching path mentioned in the canonical task refers to the worktree-anchored path below. "
+    f"Use the {location}-anchored resource paths below. {search_boundary}"
+    f"If a declared resource is absent from this {location}, report that exact failure instead of searching elsewhere. "
+    f"Any matching path mentioned in the canonical task refers to the {location}-anchored path below. "
     "Do not register another ORRERY identity. "
     + (f"Report to {parent} using the ORRERY Mail MCP send_message tool. "
        "After sending your completion report or a question that blocks your work, end your turn and keep the session open. "
@@ -505,7 +526,7 @@ prefix = (
        "After a resume, obtain any needed reservations again.\n"
        if interactive == "1" else "The launcher will report your final result to the parent automatically.\n")
     +
-    f"Declared resources (worktree-anchored):\n{resource_text}\n\nCanonical task:\n"
+    f"Declared resources ({location}-anchored):\n{resource_text}\n\nCanonical task:\n"
 ) if parent else (
     f"You are {child}, an independent Antigravity agent. Your working directory is {workspace_root}. "
     "Use the existing bound ORRERY Mail identity. Take a reservation before editing any file. "
@@ -522,6 +543,8 @@ if [[ "$INTERACTIVE" == 1 ]]; then
   interactive_args=(${GEMINI_TOOLS[@]+"${GEMINI_TOOLS[@]}"})
   if [[ "$STANDALONE" == true ]]; then
     interactive_args+=(--standalone)
+  elif [[ "$USE_WORKTREE" == false ]]; then
+    interactive_args+=(--no-worktree)
   fi
   AGENT_NAME="$CHILD_NAME" AGENTSTACK_PROJECT_KEY="$PROJECT_KEY" AGENTSTACK_RUNTIME_DIR="$RUNTIME_DIR" \
     "$PYTHON_BIN" "$INTERACTIVE_HELPER" prepare "$CHILD_TOKEN_FILE" "$WORKSPACE_DIR" "$GEMINI_BIN" "$MODEL" "$EFFORT" ${interactive_args[@]+"${interactive_args[@]}"}

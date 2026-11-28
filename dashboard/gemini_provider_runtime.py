@@ -42,7 +42,6 @@ CAPABILITIES = {
     "resume": False,
     "runtime": True,
     "transcript": False,
-    "worktree_required": True,
     "resources_required": True,
 }
 _ADAPTER_NAME = "spawn_gemini_preregistered.sh"
@@ -230,7 +229,8 @@ def _catalog_item(models: list[str]) -> dict:
         "model_efforts": model_efforts,
         "effort_default": "" if CAPABILITIES["effort_required"] else "high",
         "provider_key": "google",
-        "capabilities": {**CAPABILITIES, "standalone": sys.platform in {"darwin", "linux"}},
+        "capabilities": {**CAPABILITIES, "standalone": sys.platform in {"darwin", "linux"},
+                         "worktree_required": sys.platform not in {"darwin", "linux"}},
     }
 
 
@@ -640,7 +640,8 @@ def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
     work_dir = request["work_dir"]
     if not os.path.isdir(work_dir):
         return {}, f"dir does not exist: {work_dir}"
-    if not request["standalone"] or request["worktree"]:
+    resource_root = os.path.realpath(work_dir)
+    if request["worktree"]:
         git = _which("git", _launch_path())
         if not git:
             return {}, "git not found for provider gemini"
@@ -653,10 +654,11 @@ def _preflight(base: Any, request: dict, resources: str) -> tuple[dict, str]:
         if not _git(git, "-C", source_repo, "rev-parse", "--verify", "--quiet",
                     f"{base_rev}^{{commit}}"):
             return {}, f"could not resolve worktree base for provider gemini: {base_rev}"
-        if resources:
-            boundary = resource_boundary_error(source_repo, resources)
-            if boundary:
-                return {}, boundary
+        resource_root = source_repo
+    if resources:
+        boundary = resource_boundary_error(resource_root, resources)
+        if boundary:
+            return {}, boundary
     if not base._project_key():
         return {}, "AGENTSTACK_PROJECT_KEY or AGENTSTACK_VAULT is not configured"
     if not (request["standalone"] or request["dry_run"]) and not base._runtime_agent_token(request["parent"]):
@@ -775,12 +777,21 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
         unavailable = base._spawn_unavailable_error()
         if unavailable:
             return unavailable
+        if "worktree" in payload and not isinstance(payload["worktree"], bool):
+            return {"ok": False, "error": "worktree must be boolean"}
+        if "worktree" not in payload and not payload.get("standalone"):
+            payload = {**payload, "worktree": True}
         request, error = base._spawn_request(payload)
         if error:
             return error
         standalone_supported = sys.platform in {"darwin", "linux"}
         if request["standalone"] and not standalone_supported:
             return {"ok": False, "error": "standalone not supported for provider gemini"}
+        if not request["worktree"] and request["worktree_base"]:
+            return {"ok": False, "error": "worktree_base requires worktree for provider gemini"}
+        shared_workspace = not request["standalone"] and not request["worktree"]
+        if shared_workspace and not standalone_supported:
+            return {"ok": False, "error": "Antigravity without a worktree requires macOS or Linux"}
         tools_args, tools_error = base._spawn_tools_args(payload, PROVIDER_ID, False, "")
         if tools_error:
             return {"ok": False, "error": tools_error}
@@ -831,11 +842,11 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
         context, error = _preflight(base, request, resources)
         if error:
             return {"ok": False, "error": error}
-        if tools_args:
+        if tools_args or shared_workspace:
             tools = base._child_tools_module()
             try:
                 selection = tools.normalize(tools=payload.get("tools"))
-                cwd = request["work_dir"] if request["standalone"] and not request["worktree"] else None
+                cwd = request["work_dir"] if not request["worktree"] else None
                 tools.agy_validate_selection(selection, cwd=cwd)
                 mode = selection["tools"].get("browser_mode")
                 if mode in ("temporary", "personal"):
@@ -851,10 +862,9 @@ def _install_spawn(base: Any, integration: _Integration) -> None:
                 program="antigravity",
                 model=model,
                 script=context["adapter"],
-                provider_args=tools_args,
+                provider_args=(*tools_args, "--no-worktree") if shared_workspace else tools_args,
                 effort=effort,
                 standalone_supported=standalone_supported,
-                worktree_required=not request["standalone"],
                 # The adapter hands the full task to Antigravity and reports the
                 # result itself; a task mail would be a second, conflicting copy.
                 task_mail=False,

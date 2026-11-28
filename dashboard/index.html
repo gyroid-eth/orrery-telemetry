@@ -39436,7 +39436,7 @@ function buildSpawnPayload(){
     payload.worktree=true;
     const base=SPM('spm-worktree-base').value.trim();
     if(base)payload.worktree_base=base;
-  }
+  }else if(parent&&spawnProviderAcceptsResources(spawnSelectedProviderCapabilities()))payload.worktree=false;
   return payload;
 }
 
