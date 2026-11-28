@@ -17,7 +17,12 @@ CODEX = ROOT / "integrations/codex_app/plugin/scripts/run-key-read-guard.sh"
 
 
 def invoke(command, payload, cwd, tmux=True):
-    env = {**os.environ, "AGENTSTACK_HOME": str(ROOT), "AGENTSTACK_PYTHON": sys.executable}
+    env = {
+        **os.environ,
+        "AGENTSTACK_HOME": str(ROOT),
+        "AGENTSTACK_LABEL_PREFIX": "org.agentstack.test-macos-consent",
+        "AGENTSTACK_PYTHON": sys.executable,
+    }
     if tmux:
         env["TMUX"] = "consent-fixture,1,0"
     else:
