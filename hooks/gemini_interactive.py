@@ -36,8 +36,16 @@ MCP_PREPARING = "@orrery-agy-mcp-preparing"
 STARTUP_TIMEOUT = 22
 TOOL_REFUSAL_RULE = Path(".agents/rules/orrery-tool-refusals.md")
 RULE_HEADER = b"---\ntrigger: always_on\n---\n\n<!-- ORRERY: tool refusal rule -->\n\n"
-WRITE_TOOLS = {"write_to_file": "Write", "replace_file_content": "Edit",
-               "multi_replace_file_content": "Edit"}
+WRITE_TOOLS = {
+    "write_to_file": ("Write", "TargetFile"),
+    "replace_file_content": ("Edit", "TargetFile"),
+    "multi_replace_file_content": ("Edit", "TargetFile"),
+    "write_file": ("Write", "Path"),
+    "edit_file": ("Edit", "Path"),
+}
+READ_TOOLS = {"view_file": "AbsolutePath", "read_file": "Path"}
+PREVIOUS_GUARD_MATCHER = "view_file|write_to_file|replace_file_content|multi_replace_file_content|run_command"
+GUARD_MATCHER = "|".join((*READ_TOOLS, *WRITE_TOOLS, "run_command"))
 ACTIVITY = {"idle": "wait", "working": "work", "tool_use": "work",
             "reviewing": "ask"}
 # Keep in step with the session-bound proxy exposed to Codex children.
@@ -95,7 +103,7 @@ def read_status(runtime, name, identity):
     return record if record.get("tmux") == identity else {}
 
 
-def _configured_hooks(python, *, suffix=""):
+def _configured_hooks(python, *, suffix="", matcher=GUARD_MATCHER):
     command = shlex.join([python, str(Path(__file__).resolve()), "guard"])
     history = _history()
     reader = {"type": "command", "command": shlex.join([python, str(history_helper()), "hook"]),
@@ -103,7 +111,7 @@ def _configured_hooks(python, *, suffix=""):
     return {
         history["GROUP"] + suffix: {event: [reader] for event in history["HOOKS"]},
         "orrery-child" + suffix: {"PreToolUse": [{
-            "matcher": "view_file|write_to_file|replace_file_content|multi_replace_file_content|run_command",
+            "matcher": matcher,
             "hooks": [{"type": "command", "command": command, "timeout": 12}],
         }]},
     }
@@ -145,7 +153,7 @@ def uses_launch_config(plan):
     return plan.get("standalone") is True or plan.get("worktree") is False
 
 
-def validate_plan(plan):
+def validate_plan(plan, *, refresh_hooks=False):
     if not isinstance(plan, dict):
         raise ValueError("Antigravity child launch settings are missing")
     cwd = Path(plan["cwd"])
@@ -153,13 +161,21 @@ def validate_plan(plan):
     if (not cwd.is_absolute() or cwd.resolve() != cwd or not cwd.is_dir()
             or [info.st_dev, info.st_ino] != plan["workspace_file_id"]):
         raise ValueError("Antigravity child workspace was replaced or moved")
-    if not uses_launch_config(plan):
-        path = _guard_config(cwd)
-        if (path.is_symlink() or child_resume._load_state(path) != _configured_hooks(plan["python"])):
-            raise ValueError("Antigravity child reservation hook is unavailable")
     if not all(os.path.isfile(plan[field]) and os.access(plan[field], os.X_OK)
                for field in ("binary", "python")):
         raise ValueError("The saved Antigravity CLI is unavailable")
+    if not uses_launch_config(plan):
+        path = _guard_config(cwd)
+        if path.is_symlink():
+            raise ValueError("Antigravity child reservation hook is unavailable")
+        saved = child_resume._load_state(path)
+        current = _configured_hooks(plan["python"])
+        if saved != current:
+            # Only upgrade the exact declaration written by the previous launcher.
+            if saved != _configured_hooks(plan["python"], matcher=PREVIOUS_GUARD_MATCHER):
+                raise ValueError("Antigravity child reservation hook is unavailable")
+            if refresh_hooks:
+                child_resume._atomic_json(path, current)
     return cwd
 
 
@@ -599,7 +615,7 @@ def run(runtime, name, task_file=None, conversation=None):
     if canonical.decode().strip() != state["registration_token"]:
         raise ValueError("Antigravity child identity changed")
     plan = state["gemini_launch"]
-    cwd = validate_plan(plan)
+    cwd = validate_plan(plan, refresh_hooks=True)
     identity = subprocess.check_output(
         ["tmux", "display-message", "-p", "-t", os.environ["TMUX_PANE"], TMUX_FORMAT],
         text=True, timeout=5).strip()
@@ -773,8 +789,8 @@ def guard(event, cwd, *, runtime):
     overwrite = None
     protected = _workspace_protected_roots(cwd, runtime)
     if name in WRITE_TOOLS:
-        target = Path(args["TargetFile"])
-        target = (cwd / target).resolve()
+        mode, path_key = WRITE_TOOLS[name]
+        target = (cwd / Path(args[path_key])).resolve()
         if (args.get("IsArtifact") or not target.is_relative_to(cwd)
                 or any(target.is_relative_to(root) for root in protected)
                 or any(part.casefold() == ".git" for part in target.relative_to(cwd).parts)
@@ -783,7 +799,6 @@ def guard(event, cwd, *, runtime):
                               for filename in ("hooks.json", "mcp_config.json")}):
             return {"decision": "deny", "reason": "Edit files only in the child worktree"}
         inputs["file_path"] = str(target)
-        mode = WRITE_TOOLS[name]
     elif name == "run_command":
         workdir = (cwd / Path(args.get("Cwd") or cwd)).resolve()
         if not workdir.is_relative_to(cwd) or any(workdir.is_relative_to(root) for root in protected):
@@ -794,9 +809,11 @@ def guard(event, cwd, *, runtime):
         cwd = workdir
         overwrite = {"Cwd": str(cwd)}
         mode = "Bash"
-    else:
+    elif name in READ_TOOLS:
         mode = "Read"
-        inputs["file_path"] = str((cwd / Path(args["AbsolutePath"])).resolve())
+        inputs["file_path"] = str((cwd / Path(args[READ_TOOLS[name]])).resolve())
+    else:
+        return {"decision": "deny", "reason": "ORRERY could not identify the tool"}
     payload = json.dumps({"tool_name": mode, "tool_input": inputs,
                           "cwd": str(cwd), "session_id": event.get("conversationId", "")})
     checks = ["deny-llm-key-read.py"]
